@@ -35,6 +35,7 @@ const btnLoop          = document.getElementById('btn-loop')
 const tempoSliderEl    = document.getElementById('tempo-slider')
 const tempoValueEl     = document.getElementById('tempo-value')
 const tempoBadgeEl     = document.getElementById('tempo-badge')
+const tempoPresets     = Array.from(document.querySelectorAll('.tempo-preset'))
 
 const wavesurfers  = []
 const trackStates  = []   // { volume, muted, soloed }
@@ -99,7 +100,7 @@ function applyTempo(pct) {
   } else {
     tempoBadgeEl.setAttribute('hidden', '')
   }
-  document.querySelectorAll('.tempo-preset').forEach(btn => {
+  tempoPresets.forEach(btn => {
     btn.classList.toggle('active', Number(btn.dataset.value) === pct)
   })
 }
@@ -446,6 +447,10 @@ async function init() {
       buildTrackRow(track, track.index)
     }
 
+    // Reconcile tempo UI with the slider's actual value (covers browser form
+    // restoration where slider.value may differ from the HTML default of 100).
+    applyTempo(Number(tempoSliderEl.value))
+
     // ── Transport controls ─────────────────────
     btnPlay.addEventListener('click', () => isPlaying ? pauseAll() : playAll())
     btnStop.addEventListener('click', stopAll)
@@ -464,7 +469,7 @@ async function init() {
     // ── Tempo control ──────────────────────────
     tempoSliderEl.addEventListener('input', () => applyTempo(Number(tempoSliderEl.value)))
     tempoSliderEl.addEventListener('dblclick', () => applyTempo(100))
-    document.querySelectorAll('.tempo-preset').forEach(btn => {
+    tempoPresets.forEach(btn => {
       btn.addEventListener('click', () => applyTempo(Number(btn.dataset.value)))
     })
 

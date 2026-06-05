@@ -535,11 +535,7 @@ body {
   .track-volume {
     display: none;
   }
-}
 
-/* ── Responsive — tablet (tempo) ────────── */
-
-@media (max-width: 1023px) {
   .tempo-slider {
     width: 80px;
   }
@@ -576,9 +572,5 @@ body {
 
   .tempo-presets {
     display: none;
-  }
-
-  .tempo-slider {
-    width: 80px;
   }
 }
