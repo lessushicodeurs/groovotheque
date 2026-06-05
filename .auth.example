@@ -1,0 +1,7 @@
+# Générer avec htpasswd (apache2-utils) :
+#   Créer le fichier : htpasswd -B -c .auth <username>
+#   Ajouter un user  : htpasswd -B .auth <username>
+#
+# Format : user:$2y$10$<hash bcrypt>
+musicien:$2y$10$XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+admin:$2y$10$XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
