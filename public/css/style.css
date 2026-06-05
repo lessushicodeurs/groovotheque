@@ -295,6 +295,9 @@ body {
   padding: 0.75rem 1.25rem;
   background: #131313;
   border-top: 1px solid #1a1a1a;
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
 }
 
 .transport-btn {
@@ -319,12 +322,113 @@ body {
   color: #eee;
 }
 
+.transport-btn--loop.active {
+  background: #1a2a1a;
+  border-color: #338833;
+  color: #77cc77;
+}
+
+/* ── Timecode ────────────────────────────── */
+
+.transport-time {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-shrink: 0;
+}
+
 .timecode {
   font-family: monospace;
   font-size: 0.82rem;
-  color: #555;
-  letter-spacing: 0.06em;
+  color: #888;
+  letter-spacing: 0.04em;
   font-variant-numeric: tabular-nums;
+}
+
+.timecode-sep {
+  font-family: monospace;
+  font-size: 0.82rem;
+  color: #333;
+}
+
+.timecode--dim {
+  color: #3a3a3a;
+}
+
+/* ── Seek bar ────────────────────────────── */
+
+.seek-bar {
+  flex: 1;
+  min-width: 60px;
+  height: 4px;
+  background: #252525;
+  border-radius: 2px;
+  cursor: pointer;
+  position: relative;
+  transition: height 0.1s;
+}
+
+.seek-bar:hover {
+  height: 6px;
+}
+
+.seek-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 0%;
+  background: #555;
+  border-radius: 2px;
+  pointer-events: none;
+  transition: background 0.1s;
+}
+
+.seek-bar:hover .seek-fill {
+  background: #888;
+}
+
+/* ── Loop controls ───────────────────────── */
+
+.transport-loop {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding-left: 0.625rem;
+  border-left: 1px solid #222;
+  flex-shrink: 0;
+}
+
+.loop-label {
+  font-size: 0.62rem;
+  font-weight: 700;
+  color: #3a3a3a;
+  letter-spacing: 0.05em;
+}
+
+.loop-input {
+  background: #191919;
+  border: 1px solid #252525;
+  color: #666;
+  font-family: monospace;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  padding: 0.2rem 0.4rem;
+  border-radius: 3px;
+  width: 5.5rem;
+  text-align: center;
+  transition: border-color 0.1s, color 0.1s;
+}
+
+.loop-input:not(:disabled):focus {
+  outline: none;
+  border-color: #3a3a3a;
+  color: #ccc;
+}
+
+.loop-input:disabled {
+  color: #2a2a2a;
+  cursor: default;
 }
 
 /* ── Responsive — tablet ─────────────────── */

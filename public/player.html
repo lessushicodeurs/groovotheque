@@ -18,7 +18,21 @@
     <div id="transport" class="transport" hidden>
       <button id="btn-play" class="transport-btn" aria-label="Lecture / Pause">▶</button>
       <button id="btn-stop" class="transport-btn transport-btn--stop" aria-label="Stop">■</button>
-      <span id="timecode" class="timecode">0:00</span>
+      <div class="transport-time">
+        <span id="timecode" class="timecode">0:00.000</span>
+        <span class="timecode-sep">/</span>
+        <span id="duration" class="timecode timecode--dim">—</span>
+      </div>
+      <div id="seek-bar" class="seek-bar" role="slider" aria-label="Position" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div id="seek-fill" class="seek-fill"></div>
+      </div>
+      <div class="transport-loop">
+        <span class="loop-label">IN</span>
+        <input id="loop-in" class="loop-input" type="text" value="—" aria-label="Point IN" disabled>
+        <span class="loop-label">OUT</span>
+        <input id="loop-out" class="loop-input" type="text" value="—" aria-label="Point OUT" disabled>
+        <button id="btn-loop" class="transport-btn transport-btn--loop" aria-label="Boucle" aria-pressed="false">⟳</button>
+      </div>
     </div>
   </main>
   <script type="module" src="/js/player.js"></script>
