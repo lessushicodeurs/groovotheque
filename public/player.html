@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Player — Groovotheque</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <header class="site-header player-header">
+    <a href="/" class="back-link" aria-label="Retour à la liste">←</a>
+    <h1 id="groove-title">…</h1>
+  </header>
+  <main id="player-main">
+    <p class="state-msg" id="player-state">Chargement des pistes…</p>
+    <div id="tracks-container" class="tracks-container" hidden></div>
+    <div id="minimap-container" class="minimap-container" hidden></div>
+    <div id="transport" class="transport" hidden>
+      <button id="btn-play" class="transport-btn" aria-label="Lecture / Pause">▶</button>
+      <button id="btn-stop" class="transport-btn transport-btn--stop" aria-label="Stop">■</button>
+      <span id="timecode" class="timecode">0:00</span>
+    </div>
+  </main>
+  <script type="module" src="/js/player.js"></script>
+</body>
+</html>
