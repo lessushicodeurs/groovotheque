@@ -290,14 +290,26 @@ body {
 
 .transport {
   display: flex;
-  align-items: center;
-  gap: 0.625rem;
+  flex-direction: column;
+  gap: 0.5rem;
   padding: 0.75rem 1.25rem;
   background: #131313;
   border-top: 1px solid #1a1a1a;
   position: sticky;
   bottom: 0;
   z-index: 10;
+}
+
+.transport-row {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+.transport-row--tempo {
+  border-top: 1px solid #1c1c1c;
+  padding-top: 0.5rem;
+  gap: 0.5rem;
 }
 
 .transport-btn {
@@ -431,6 +443,87 @@ body {
   cursor: default;
 }
 
+/* ── Tempo control ───────────────────────── */
+
+.tempo-label {
+  font-size: 0.62rem;
+  font-weight: 700;
+  color: #3a3a3a;
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
+}
+
+.tempo-badge {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #ff8c00;
+  background: #1e1000;
+  border: 1px solid #5c3000;
+  border-radius: 3px;
+  padding: 0.1em 0.45em;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.tempo-badge[hidden] {
+  display: none;
+}
+
+.tempo-slider {
+  width: 110px;
+  accent-color: #ff8c00;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.tempo-value {
+  font-family: monospace;
+  font-size: 0.78rem;
+  color: #555;
+  font-variant-numeric: tabular-nums;
+  min-width: 2.8em;
+  text-align: right;
+  flex-shrink: 0;
+  transition: color 0.15s;
+}
+
+.tempo-value--active {
+  color: #ff8c00;
+}
+
+.tempo-presets {
+  display: flex;
+  gap: 0.2rem;
+  flex-shrink: 0;
+  padding-left: 0.4rem;
+  border-left: 1px solid #222;
+}
+
+.tempo-preset {
+  background: #181818;
+  border: 1px solid #252525;
+  color: #3a3a3a;
+  font-size: 0.63rem;
+  font-weight: 600;
+  padding: 0.18rem 0.38rem;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+  flex-shrink: 0;
+}
+
+.tempo-preset:hover {
+  background: #222;
+  color: #888;
+  border-color: #333;
+}
+
+.tempo-preset.active {
+  background: #1e1000;
+  border-color: #ff8c00;
+  color: #ff8c00;
+}
+
 /* ── Responsive — tablet ─────────────────── */
 
 @media (max-width: 1023px) {
@@ -441,6 +534,14 @@ body {
 
   .track-volume {
     display: none;
+  }
+}
+
+/* ── Responsive — tablet (tempo) ────────── */
+
+@media (max-width: 1023px) {
+  .tempo-slider {
+    width: 80px;
   }
 }
 
@@ -471,5 +572,13 @@ body {
 
   .track-row {
     min-height: 60px;
+  }
+
+  .tempo-presets {
+    display: none;
+  }
+
+  .tempo-slider {
+    width: 80px;
   }
 }

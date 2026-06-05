@@ -32,6 +32,9 @@ const seekFillEl       = document.getElementById('seek-fill')
 const loopInEl         = document.getElementById('loop-in')
 const loopOutEl        = document.getElementById('loop-out')
 const btnLoop          = document.getElementById('btn-loop')
+const tempoSliderEl    = document.getElementById('tempo-slider')
+const tempoValueEl     = document.getElementById('tempo-value')
+const tempoBadgeEl     = document.getElementById('tempo-badge')
 
 const wavesurfers  = []
 const trackStates  = []   // { volume, muted, soloed }
@@ -45,6 +48,7 @@ let loopEnabled     = false
 let isSyncingRegion = false
 let loopJumping     = false  // prevents double-trigger of loop rebound
 let loopFieldCommitting = false  // prevents blur re-running commit after Enter
+let currentTempo    = 100  // percent (50–120)
 
 function slugToName(slug) {
   return slug.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
@@ -80,6 +84,24 @@ function parseLoopTime(str) {
   const s = parseInt(match[2], 10)
   const cs = parseInt(match[3].padEnd(2, '0'), 10)
   return m * 60 + s + cs / 100
+}
+
+function applyTempo(pct) {
+  currentTempo = pct
+  const ratio = pct / 100
+  wavesurfers.forEach(ws => ws.setPlaybackRate(ratio, true))
+  tempoSliderEl.value = String(pct)
+  tempoValueEl.textContent = `${pct}%`
+  tempoValueEl.classList.toggle('tempo-value--active', pct !== 100)
+  if (pct !== 100) {
+    tempoBadgeEl.textContent = `×${ratio.toFixed(2)}`
+    tempoBadgeEl.removeAttribute('hidden')
+  } else {
+    tempoBadgeEl.setAttribute('hidden', '')
+  }
+  document.querySelectorAll('.tempo-preset').forEach(btn => {
+    btn.classList.toggle('active', Number(btn.dataset.value) === pct)
+  })
 }
 
 function applyVolumes() {
@@ -321,6 +343,7 @@ function buildTrackRow(track, idx) {
   const state = { volume: 1, muted: false, soloed: false }
   trackStates.push(state)
   wavesurfers.push(ws)
+  ws.setPlaybackRate(currentTempo / 100, true)
 
   // ── Drag-to-create loop regions ───────────────
   // Creating a region on any track syncs to all other tracks.
@@ -437,6 +460,13 @@ async function init() {
 
     // ── Loop button ────────────────────────────
     btnLoop.addEventListener('click', () => setLoopEnabled(!loopEnabled))
+
+    // ── Tempo control ──────────────────────────
+    tempoSliderEl.addEventListener('input', () => applyTempo(Number(tempoSliderEl.value)))
+    tempoSliderEl.addEventListener('dblclick', () => applyTempo(100))
+    document.querySelectorAll('.tempo-preset').forEach(btn => {
+      btn.addEventListener('click', () => applyTempo(Number(btn.dataset.value)))
+    })
 
     // ── IN/OUT editable fields ─────────────────
     // loopFieldCommitting prevents the blur event (which fires synchronously
