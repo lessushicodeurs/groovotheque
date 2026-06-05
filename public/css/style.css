@@ -7,4 +7,124 @@ body {
   background: #111;
   color: #eee;
   font-family: system-ui, sans-serif;
+  min-height: 100vh;
+}
+
+/* ── Header ─────────────────────────────── */
+
+.site-header {
+  padding: 1.25rem 2rem;
+  border-bottom: 1px solid #1e1e1e;
+}
+
+.site-header h1 {
+  margin: 0;
+  font-size: 1.4rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #fff;
+}
+
+/* ── States ──────────────────────────────── */
+
+.state-msg {
+  color: #555;
+  padding: 2rem;
+  margin: 0;
+}
+
+.state-msg.error {
+  color: #c44;
+}
+
+/* ── Groove listing ──────────────────────── */
+
+.groove-list {
+  padding: 2rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 0.875rem;
+}
+
+.groove-card {
+  display: block;
+  background: #191919;
+  border: 1px solid #252525;
+  border-radius: 8px;
+  padding: 1.125rem 1.25rem;
+  cursor: pointer;
+  text-decoration: none;
+  color: inherit;
+  transition: background 0.1s, border-color 0.1s, transform 0.1s;
+}
+
+.groove-card:hover {
+  background: #212121;
+  border-color: #3a3a3a;
+  transform: translateY(-2px);
+}
+
+.groove-card-name {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #f0f0f0;
+}
+
+.groove-card-note {
+  margin: 0.35rem 0 0;
+  font-size: 0.75rem;
+  color: #555;
+}
+
+/* ── Tooltip ─────────────────────────────── */
+
+.tooltip {
+  position: fixed;
+  max-width: 400px;
+  background: rgba(16, 16, 16, 0.96);
+  border: 1px solid #2e2e2e;
+  border-radius: 8px;
+  padding: 0.875rem 1rem;
+  color: #ccc;
+  font-size: 0.83rem;
+  line-height: 1.65;
+  pointer-events: none;
+  z-index: 50;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.6);
+}
+
+.tooltip[hidden] {
+  display: none;
+}
+
+.tooltip h1,
+.tooltip h2,
+.tooltip h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #fff;
+}
+
+.tooltip p {
+  margin: 0.3rem 0;
+}
+
+.tooltip ul,
+.tooltip ol {
+  margin: 0.3rem 0;
+  padding-left: 1.2rem;
+}
+
+.tooltip li {
+  margin: 0.1rem 0;
+}
+
+.tooltip code {
+  background: #222;
+  border-radius: 3px;
+  padding: 0.1em 0.35em;
+  font-size: 0.9em;
 }
