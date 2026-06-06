@@ -1,0 +1,27 @@
+audio:
+  mp3_bitrate: "320k"
+  normalize_peak_db: -1
+  compression:
+    threshold_db: -20
+    ratio: 3
+    attack_ms: 20
+    release_ms: 200
+    knee_db: 6
+
+tracks:
+  mixes:
+    - output: "04 KEYS MIX"
+      sources:
+        - file: "04 KEYS L"
+          pan: -100
+        - file: "05 KEYS R"
+          pan: 100
+    - output: "11 DRUMS MIX"
+      sources:
+        - file: "11 DR KICK"
+          pan: 20
+        - file: "12 DR HH SD"
+          pan: -20
+
+  exclude:
+    - "20 AMBIANCE"
