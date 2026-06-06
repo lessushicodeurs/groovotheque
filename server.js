@@ -7,6 +7,7 @@ const { ZipArchive } = require('archiver');
 
 const app = express();
 const PORT = process.env.PORT || 3099;
+const CACHE_DIR = path.resolve(__dirname, 'cache');
 
 function loadUsers() {
   const authFile = path.join(__dirname, '.auth');
@@ -47,7 +48,7 @@ app.use(basicAuth({
   realm: 'Groovotheque',
 }));
 
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: false }));
 
 // 11.1 — Injection du CURRENT_USER avant le static middleware
@@ -243,6 +244,50 @@ app.get('/audio/:groove/:file', (req, res) => {
       res.status(err.code === 'ENOENT' ? 404 : 500).json({ error: 'Fichier introuvable' });
     }
   });
+});
+
+// 6.0 — Validation du chemin peaks (anti path traversal)
+function resolvePeaksPath(groove, file, res) {
+  const peaksPath = path.resolve(CACHE_DIR, groove, file + '.peaks.json');
+  if (!peaksPath.startsWith(CACHE_DIR + path.sep)) {
+    res.status(400).json({ error: 'Chemin invalide' });
+    return null;
+  }
+  return peaksPath;
+}
+
+// 6.1 — GET peaks cachés
+app.get('/api/peaks/:groove/:file', async (req, res) => {
+  const peaksPath = resolvePeaksPath(req.params.groove, req.params.file, res);
+  if (!peaksPath) return;
+  try {
+    const data = await fs.promises.readFile(peaksPath, 'utf8');
+    res.json(JSON.parse(data));
+  } catch (err) {
+    if (err.code === 'ENOENT') return res.status(404).json({ error: 'Cache introuvable' });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 6.2 — POST sauvegarde des peaks
+app.post('/api/peaks/:groove/:file', async (req, res) => {
+  const peaksPath = resolvePeaksPath(req.params.groove, req.params.file, res);
+  if (!peaksPath) return;
+  const { peaks } = req.body;
+  if (!peaks || !Array.isArray(peaks)) {
+    return res.status(400).json({ error: 'peaks doit être un tableau' });
+  }
+  const bodyStr = JSON.stringify({ peaks });
+  if (bodyStr.length > 10 * 1024 * 1024) {
+    return res.status(400).json({ error: 'Peaks trop volumineux (max 10MB)' });
+  }
+  try {
+    await fs.promises.mkdir(path.dirname(peaksPath), { recursive: true });
+    await fs.promises.writeFile(peaksPath, bodyStr, 'utf8');
+    res.status(201).json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.listen(PORT, () => {

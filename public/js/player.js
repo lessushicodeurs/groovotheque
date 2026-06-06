@@ -102,6 +102,26 @@ let loopJumping     = false  // prevents double-trigger of loop rebound
 let loopFieldCommitting = false  // prevents blur re-running commit after Enter
 let currentTempo    = 100  // percent (50–120)
 
+// 6.3 — Peaks cache helpers
+async function fetchPeaks(groove, filename) {
+  try {
+    const res = await fetch(`/api/peaks/${encodeURIComponent(groove)}/${encodeURIComponent(filename)}`)
+    if (!res.ok) return null
+    const data = await res.json()
+    return Array.isArray(data.peaks) ? data.peaks : null
+  } catch {
+    return null
+  }
+}
+
+function postPeaks(groove, filename, peaks) {
+  fetch(`/api/peaks/${encodeURIComponent(groove)}/${encodeURIComponent(filename)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ peaks }),
+  }).catch(() => { /* best effort */ })
+}
+
 function slugToName(slug) {
   return slug.replace(/_/g, ' ')
 }
@@ -298,7 +318,7 @@ function setLoopEnabled(val) {
   btnLoop.setAttribute('aria-pressed', String(loopEnabled))
 }
 
-function buildTrackRow(track, idx) {
+function buildTrackRow(track, idx, cachedPeaks = null) {
   const color         = TRACK_COLORS[idx % TRACK_COLORS.length]
   const waveColor     = color + '55'  // dim = unplayed
   const progressColor = color         // bright = played
@@ -400,7 +420,7 @@ function buildTrackRow(track, idx) {
   }
 
   // ── WaveSurfer instance ───────────────────────
-  const ws = WaveSurfer.create({
+  const wsOpts = {
     container: waveEl,
     waveColor,
     progressColor,
@@ -412,7 +432,9 @@ function buildTrackRow(track, idx) {
     normalize: true,
     interact: true,
     plugins,
-  })
+  }
+  if (cachedPeaks) wsOpts.peaks = cachedPeaks
+  const ws = WaveSurfer.create(wsOpts)
 
   const state = { volume: 1, muted: false, soloed: false }
   trackStates.push(state)
@@ -444,9 +466,21 @@ function buildTrackRow(track, idx) {
     }
   })
 
-  // ── Load bar segment ──────────────────────
+  // ── Load bar + peaks save + timecode (track 0) ─
   ws.on('ready', () => {
     markSegmentLoaded(idx, TRACK_COLORS[idx % TRACK_COLORS.length])
+    if (!cachedPeaks) {
+      // Peaks were just computed from audio — persist them for future loads
+      postPeaks(grooveSlug, track.filename, ws.exportPeaks())
+    }
+    if (idx === 0) {
+      totalDuration = ws.getDuration()
+      durationEl.textContent = formatTimecode(totalDuration)
+      if (pendingLoop) {
+        syncRegionToAll(pendingLoop.in, pendingLoop.out)
+        pendingLoop = null
+      }
+    }
   })
 
   ws.on('error', () => {
@@ -455,14 +489,6 @@ function buildTrackRow(track, idx) {
 
   // ── Timecode + seek bar + duration + loop from first track ─
   if (idx === 0) {
-    ws.on('ready', () => {
-      totalDuration = ws.getDuration()
-      durationEl.textContent = formatTimecode(totalDuration)
-      if (pendingLoop) {
-        syncRegionToAll(pendingLoop.in, pendingLoop.out)
-        pendingLoop = null
-      }
-    })
 
     ws.on('timeupdate', (t) => {
       timecodeEl.textContent = formatTimecode(t)
@@ -588,9 +614,14 @@ async function init() {
       }, 2000)
     })
 
+    // 6.3 — Fetch all cached peaks in parallel before building tracks
+    const cachedPeaksArr = await Promise.all(
+      groove.tracks.map(track => fetchPeaks(grooveSlug, track.filename))
+    )
+
     currentTracks = groove.tracks
     for (const track of groove.tracks) {
-      buildTrackRow(track, track.index)
+      buildTrackRow(track, track.index, cachedPeaksArr[track.index])
     }
 
     await loadMix(groove.tracks)
