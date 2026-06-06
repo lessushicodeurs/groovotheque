@@ -117,15 +117,15 @@ let currentTempo    = 100  // percent (50–120)
 class PanKnob {
   constructor(container, color) {
     this.value = 0
-    this.cx    = 18
-    this.cy    = 18
-    this.r     = 13
+    this.cx    = 12
+    this.cy    = 12
+    this.r     = 8
     this.color = color || '#888'
     this._build(container)
     this._setupInteraction()
   }
 
-  // Pan (-1..+1) → SVG point on the 13px-radius arc
+  // Pan (-1..+1) → SVG point on the 8px-radius arc
   _panToPoint(pan) {
     // degrees clockwise from top: 7h=210°, 12h=360°(=0°), 5h=510°(=150°)
     const fromTop = ((pan + 1) / 2) * 300 + 210
@@ -141,9 +141,9 @@ class PanKnob {
     this.wrap.className = 'pan-knob-wrap'
 
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
-    svg.setAttribute('width', '36')
-    svg.setAttribute('height', '36')
-    svg.setAttribute('viewBox', '0 0 36 36')
+    svg.setAttribute('width', '24')
+    svg.setAttribute('height', '24')
+    svg.setAttribute('viewBox', '0 0 24 24')
     svg.setAttribute('aria-label', 'Pan')
     svg.setAttribute('role', 'slider')
     svg.setAttribute('aria-valuemin', '-100')
@@ -152,35 +152,36 @@ class PanKnob {
     svg.style.cursor = 'ns-resize'
     this.svg = svg
 
-    // Background track arc: 7h (11.5,29.26) → 5h (24.5,29.26), 300°, clockwise
+    // Background track arc: 7h (8,18.93) → 5h (16,18.93), 300°, clockwise
     this.trackPath = document.createElementNS('http://www.w3.org/2000/svg', 'path')
-    this.trackPath.setAttribute('d', 'M 11.5,29.26 A 13,13 0 1,1 24.5,29.26')
-    this.trackPath.setAttribute('stroke', '#2a2a2a')
-    this.trackPath.setAttribute('stroke-width', '2.5')
+    this.trackPath.setAttribute('d', 'M 8,18.93 A 8,8 0 1,1 16,18.93')
+    this.trackPath.setAttribute('stroke', '#555')
+    this.trackPath.setAttribute('stroke-width', '2')
     this.trackPath.setAttribute('fill', 'none')
     this.trackPath.setAttribute('stroke-linecap', 'round')
 
     // Value arc: 12h → current position (dynamic)
     this.valuePath = document.createElementNS('http://www.w3.org/2000/svg', 'path')
     this.valuePath.setAttribute('stroke', this.color)
-    this.valuePath.setAttribute('stroke-width', '2.5')
+    this.valuePath.setAttribute('stroke-width', '2')
     this.valuePath.setAttribute('fill', 'none')
     this.valuePath.setAttribute('stroke-linecap', 'round')
 
-    // Small reference dot at 12 o'clock (center)
-    this.centerDot = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
-    this.centerDot.setAttribute('cx', '18')
-    this.centerDot.setAttribute('cy', '5')
-    this.centerDot.setAttribute('r', '1.5')
-    this.centerDot.setAttribute('fill', '#3a3a3a')
+    // L/C/R label centered inside the SVG
+    this.labelEl = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+    this.labelEl.setAttribute('x', '12')
+    this.labelEl.setAttribute('y', '13')
+    this.labelEl.setAttribute('text-anchor', 'middle')
+    this.labelEl.setAttribute('dominant-baseline', 'middle')
+    this.labelEl.setAttribute('font-size', '7')
+    this.labelEl.setAttribute('font-weight', '700')
+    this.labelEl.setAttribute('fill', '#444')
+    this.labelEl.setAttribute('pointer-events', 'none')
+    this.labelEl.textContent = 'C'
 
-    svg.append(this.trackPath, this.valuePath, this.centerDot)
+    svg.append(this.trackPath, this.valuePath, this.labelEl)
 
-    this.label = document.createElement('span')
-    this.label.className = 'pan-knob-label'
-    this.label.textContent = 'C'
-
-    this.wrap.append(svg, this.label)
+    this.wrap.append(svg)
     container.appendChild(this.wrap)
     this._updateVisual()
   }
@@ -189,24 +190,22 @@ class PanKnob {
     const pan = this.value
     if (Math.abs(pan) < 0.005) {
       this.valuePath.removeAttribute('d')
-      this.centerDot.setAttribute('fill', '#3a3a3a')
     } else {
-      const p0   = this._panToPoint(0)    // 12 o'clock
-      const p1   = this._panToPoint(pan)
-      const sweep = pan > 0 ? 1 : 0  // clockwise for R
+      const p0    = this._panToPoint(0)  // 12 o'clock
+      const p1    = this._panToPoint(pan)
+      const sweep = pan > 0 ? 1 : 0     // clockwise for R
       // Arc spans |pan|*150° — always < 180°, so large-arc = 0
       this.valuePath.setAttribute('d',
         `M ${p0.x.toFixed(2)},${p0.y.toFixed(2)}` +
         ` A ${this.r},${this.r} 0 0,${sweep}` +
         ` ${p1.x.toFixed(2)},${p1.y.toFixed(2)}`
       )
-      this.centerDot.setAttribute('fill', this.color + '99')
     }
 
     this.svg.setAttribute('aria-valuenow', String(Math.round(pan * 100)))
-    if      (pan < -0.05) this.label.textContent = 'L'
-    else if (pan >  0.05) this.label.textContent = 'R'
-    else                  this.label.textContent = 'C'
+    if      (pan < -0.05) this.labelEl.textContent = 'L'
+    else if (pan >  0.05) this.labelEl.textContent = 'R'
+    else                  this.labelEl.textContent = 'C'
   }
 
   _setupInteraction() {

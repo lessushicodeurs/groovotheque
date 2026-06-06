@@ -339,28 +339,9 @@ body {
 
 .pan-knob-wrap {
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 1px;
   flex-shrink: 0;
+  align-items: center;
   user-select: none;
-}
-
-.pan-knob-wrap svg {
-  display: block;
-}
-
-.pan-knob-wrap svg:hover path:first-child {
-  stroke: #3a3a3a;
-}
-
-.pan-knob-label {
-  font-size: 0.55rem;
-  font-weight: 700;
-  color: #444;
-  letter-spacing: 0.05em;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
 }
 
 /* ── Waveform ────────────────────────────── */
