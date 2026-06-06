@@ -421,9 +421,41 @@ function buildTrackRow(track, idx) {
   ws.setPlaybackRate(currentTempo / 100, true)
 
   // ── Drag-to-create loop regions ───────────────
-  // Creating a region on any track syncs to all other tracks.
+  // region-initialized : mousedown  → créer les miroirs sur les autres pistes
+  // region-update      : mousemove  → setOptions() met à jour left+right via renderPosition()
+  // region-created     : mouseup    → sync final propre sur toutes les pistes
   regionsPlugin.enableDragSelection({ color: 'rgba(255,255,255,0.2)' })
+
+  let initializingRegion = null
+  const mirrorMap = new Map()  // trackIndex → Region miroir
+
+  regionsPlugin.on('region-initialized', (region) => {
+    if (isSyncingRegion) return
+    initializingRegion = region
+    mirrorMap.clear()
+    isSyncingRegion = true
+    trackRegions.forEach((rp, i) => {
+      if (i === idx) return
+      rp.clearRegions()
+      const m = rp.addRegion({
+        start: region.start, end: region.end,
+        color: 'rgba(255,255,255,0.2)', drag: false, resize: false,
+      })
+      mirrorMap.set(i, m)
+    })
+    isSyncingRegion = false
+  })
+
+  regionsPlugin.on('region-update', (updatedRegion) => {
+    if (isSyncingRegion || updatedRegion !== initializingRegion) return
+    mirrorMap.forEach((m) => {
+      m.setOptions({ start: updatedRegion.start, end: updatedRegion.end })
+    })
+  })
+
   regionsPlugin.on('region-created', (region) => {
+    initializingRegion = null
+    mirrorMap.clear()
     syncRegionToAll(region.start, region.end)
   })
 
