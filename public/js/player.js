@@ -324,6 +324,38 @@ async function fetchPeaks(groove, filename) {
   }
 }
 
+// ── Title marquee ──────────────────────────────────────────────────────────
+// Scrolls the groove title horizontally when it overflows, then resets.
+// Uses a CSS variable --title-overflow for the exact pixel amount so the
+// animation never scrolls too far or not far enough.
+
+function setupTitleMarquee() {
+  const span = document.createElement('span')
+  span.className = 'title-scroll'
+  span.textContent = titleEl.textContent
+  titleEl.textContent = ''
+  titleEl.appendChild(span)
+
+  function update() {
+    const overflow = span.scrollWidth - titleEl.clientWidth
+    if (overflow > 4) {
+      titleEl.style.setProperty('--title-overflow', `${-overflow}px`)
+      span.classList.add('title-scroll--active')
+    } else {
+      titleEl.style.removeProperty('--title-overflow')
+      span.classList.remove('title-scroll--active')
+    }
+  }
+
+  requestAnimationFrame(() => requestAnimationFrame(update))
+
+  let resizeTimer
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer)
+    resizeTimer = setTimeout(update, 150)
+  }, { passive: true })
+}
+
 function postPeaks(groove, filename, peaks) {
   fetch(`/api/peaks/${encodeURIComponent(groove)}/${encodeURIComponent(filename)}`, {
     method: 'POST',
@@ -879,6 +911,7 @@ async function init() {
     const name = slugToName(groove.slug)
     titleEl.textContent = name
     document.title = `${name} — Groovotheque`
+    setupTitleMarquee()
 
     if (!groove.tracks?.length) {
       showFatalError('Aucune piste audio dans ce groove.', false)

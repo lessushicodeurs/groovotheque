@@ -232,8 +232,21 @@ body {
   color: #f0f0f0;
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
   min-width: 0;
+}
+
+.title-scroll {
+  display: inline-block;
+}
+
+.title-scroll--active {
+  animation: title-marquee 10s ease-in-out infinite;
+}
+
+@keyframes title-marquee {
+  0%,  28%  { transform: translateX(0); }
+  52%,  72% { transform: translateX(var(--title-overflow, 0px)); }
+  96%, 100% { transform: translateX(0); }
 }
 
 /* ── Tracks ──────────────────────────────── */
