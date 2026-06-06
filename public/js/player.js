@@ -15,6 +15,10 @@ const TRACK_COLORS = [
   '#ef9a9a',
 ]
 
+// Shared Web Audio context for pan/gain routing across all tracks.
+// Created eagerly; browsers suspend it until first user gesture.
+const sharedAudioCtx = new AudioContext()
+
 const params = new URLSearchParams(location.search)
 const grooveSlug = params.get('groove')
 
@@ -101,6 +105,10 @@ const wavesurfers  = []
 const trackStates  = []   // { volume, muted, soloed }
 const trackRegions = []   // RegionsPlugin instance per track
 const volSliders   = []   // input[type=range] per track, for mix restore
+const gainNodes    = []   // GainNode per track (volume in Web Audio graph)
+const panNodes     = []   // StereoPannerNode per track
+const panKnobs       = []   // PanKnob UI per track
+const webAudioRouted = []   // true if MediaElementSource successfully connected
 let currentTracks  = []   // groove.tracks list, set at init time
 let pendingLoop    = null // loop à restaurer dès que la waveform est prête
 let isPlaying       = false
@@ -113,6 +121,163 @@ let isSyncingRegion = false
 let loopJumping     = false  // prevents double-trigger of loop rebound
 let loopFieldCommitting = false  // prevents blur re-running commit after Enter
 let currentTempo    = 100  // percent (50–120)
+
+// ── PanKnob ────────────────────────────────────────────────────────────────
+// Custom SVG knob for stereo pan (-1 to +1).
+// Arc from 7 o'clock (L, pan=-1) to 5 o'clock (R, pan=+1), center at 12h.
+// Drag up → right (+), drag down → left (-). 200px drag = full range.
+// Double-click resets to 0. Fires CustomEvent('change', {detail: value}) on wrap.
+class PanKnob {
+  constructor(container, color) {
+    this.value = 0
+    this.cx    = 12
+    this.cy    = 12
+    this.r     = 8
+    this._p12  = { x: 12, y: 4 }  // pre-computed 12 o'clock (cx=12, cy-r=4)
+    this.color = color || '#888'
+    this._build(container)
+    this._setupInteraction()
+  }
+
+  // Pan (-1..+1) → SVG point on the 8px-radius arc
+  _panToPoint(pan) {
+    // degrees clockwise from top: 7h=210°, 12h=360°(=0°), 5h=510°(=150°)
+    const fromTop = ((pan + 1) / 2) * 300 + 210
+    const rad = (fromTop - 90) * Math.PI / 180  // SVG: 0° = east, clockwise
+    return {
+      x: this.cx + this.r * Math.cos(rad),
+      y: this.cy + this.r * Math.sin(rad),
+    }
+  }
+
+  _build(container) {
+    this.wrap = document.createElement('div')
+    this.wrap.className = 'pan-knob-wrap'
+
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+    svg.setAttribute('width', '24')
+    svg.setAttribute('height', '24')
+    svg.setAttribute('viewBox', '0 0 24 24')
+    svg.setAttribute('aria-label', 'Pan')
+    svg.setAttribute('role', 'slider')
+    svg.setAttribute('aria-valuemin', '-100')
+    svg.setAttribute('aria-valuemax', '100')
+    svg.setAttribute('aria-valuenow', '0')
+    svg.style.cursor = 'ns-resize'
+    this.svg = svg
+
+    // Background track arc: 7h (8,18.93) → 5h (16,18.93), 300°, clockwise
+    this.trackPath = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+    this.trackPath.setAttribute('d', 'M 8,18.93 A 8,8 0 1,1 16,18.93')
+    this.trackPath.setAttribute('stroke', '#555')
+    this.trackPath.setAttribute('stroke-width', '2')
+    this.trackPath.setAttribute('fill', 'none')
+    this.trackPath.setAttribute('stroke-linecap', 'round')
+
+    // Value arc: 12h → current position (dynamic)
+    this.valuePath = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+    this.valuePath.setAttribute('stroke', this.color)
+    this.valuePath.setAttribute('stroke-width', '2')
+    this.valuePath.setAttribute('fill', 'none')
+    this.valuePath.setAttribute('stroke-linecap', 'round')
+
+    // L/C/R label centered inside the SVG
+    this.labelEl = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+    this.labelEl.setAttribute('x', '12')
+    this.labelEl.setAttribute('y', '13')
+    this.labelEl.setAttribute('text-anchor', 'middle')
+    this.labelEl.setAttribute('dominant-baseline', 'middle')
+    this.labelEl.setAttribute('font-size', '7')
+    this.labelEl.setAttribute('font-weight', '700')
+    this.labelEl.setAttribute('fill', '#444')
+    this.labelEl.setAttribute('pointer-events', 'none')
+    this.labelEl.textContent = 'C'
+
+    svg.append(this.trackPath, this.valuePath, this.labelEl)
+
+    this.wrap.append(svg)
+    container.appendChild(this.wrap)
+    this._updateVisual()
+  }
+
+  _updateVisual() {
+    const pan = this.value
+    if (Math.abs(pan) < 0.005) {
+      this.valuePath.removeAttribute('d')
+    } else {
+      const p0    = this._p12             // 12 o'clock (pre-computed)
+      const p1    = this._panToPoint(pan)
+      const sweep = pan > 0 ? 1 : 0     // clockwise for R
+      // Arc spans |pan|*150° — always < 180°, so large-arc = 0
+      this.valuePath.setAttribute('d',
+        `M ${p0.x.toFixed(2)},${p0.y.toFixed(2)}` +
+        ` A ${this.r},${this.r} 0 0,${sweep}` +
+        ` ${p1.x.toFixed(2)},${p1.y.toFixed(2)}`
+      )
+    }
+
+    this.svg.setAttribute('aria-valuenow', String(Math.round(pan * 100)))
+    if      (pan < -0.05) this.labelEl.textContent = 'L'
+    else if (pan >  0.05) this.labelEl.textContent = 'R'
+    else                  this.labelEl.textContent = 'C'
+  }
+
+  _setupInteraction() {
+    let startY = 0, startValue = 0
+
+    const emit = () =>
+      this.wrap.dispatchEvent(new CustomEvent('change', { detail: this.value, bubbles: true }))
+
+    const onMove = (clientY) => {
+      const delta = (startY - clientY) / 200  // 200px = full range
+      this.setValue(Math.max(-1, Math.min(1, startValue + delta)))
+      emit()
+    }
+
+    const onMouseUp = () => {
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+    }
+    const onMouseMove = (e) => onMove(e.clientY)
+
+    this.svg.addEventListener('mousedown', (e) => {
+      e.preventDefault()
+      startY = e.clientY; startValue = this.value
+      window.addEventListener('mousemove', onMouseMove)
+      window.addEventListener('mouseup', onMouseUp)
+    })
+
+    this.svg.addEventListener('dblclick', (e) => {
+      e.preventDefault()
+      this.setValue(0)
+      emit()
+    })
+
+    this.svg.addEventListener('touchstart', (e) => {
+      e.preventDefault()
+      startY = e.touches[0].clientY; startValue = this.value
+    }, { passive: false })
+
+    this.svg.addEventListener('touchmove', (e) => {
+      e.preventDefault()
+      onMove(e.touches[0].clientY)
+    }, { passive: false })
+  }
+
+  setValue(v) {
+    this.value = Math.max(-1, Math.min(1, v))
+    this._updateVisual()
+  }
+
+  getValue() { return this.value }
+}
+
+// ── Audio helpers ──────────────────────────────────────────────────────────
+
+function setPan(idx, value) {
+  if (panNodes[idx]) panNodes[idx].pan.value = value
+  panKnobs[idx]?.setValue(value)
+}
 
 // 6.3 — Peaks cache helpers
 async function fetchPeaks(groove, filename) {
@@ -188,16 +353,25 @@ function applyTempo(pct) {
   })
 }
 
+// Volume is controlled via GainNodes when Web Audio routing succeeded, or via
+// ws.setVolume() as fallback. Chain: MediaElementSource → GainNode → StereoPannerNode → dest.
 function applyVolumes() {
   const anySolo = trackStates.some(s => s.soloed)
-  wavesurfers.forEach((ws, i) => {
+  gainNodes.forEach((gainNode, i) => {
     const s = trackStates[i]
-    ws.setVolume(anySolo ? (s.soloed ? s.volume : 0) : (s.muted ? 0 : s.volume))
+    const vol = anySolo ? (s.soloed ? s.volume : 0) : (s.muted ? 0 : s.volume)
+    if (webAudioRouted[i]) {
+      gainNode.gain.value = vol
+    } else {
+      wavesurfers[i]?.setVolume(vol)
+    }
   })
 }
 
 async function playAll() {
   if (isPlaying) return
+  // Resume Web Audio graph if suspended (requires prior user gesture — satisfied by this click)
+  if (sharedAudioCtx.state === 'suspended') await sharedAudioCtx.resume()
   if (loopEnabled && activeLoopIn !== null && activeLoopOut !== null) {
     const cur = wavesurfers[0]?.getCurrentTime() ?? 0
     if (cur < activeLoopIn || cur >= activeLoopOut) seekAllTo(activeLoopIn)
@@ -384,7 +558,13 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
 
   const sidebarCtrl = document.createElement('div')
   sidebarCtrl.className = 'track-sidebar-ctrl'
-  sidebarCtrl.append(btnMute, btnSolo, volSlider)
+  sidebarCtrl.append(btnMute, btnSolo)
+
+  // Pan knob between Solo and volume fader
+  const panKnob = new PanKnob(sidebarCtrl, color)
+  panKnobs.push(panKnob)
+
+  sidebarCtrl.append(volSlider)
 
   sidebar.append(sidebarTop, sidebarCtrl)
 
@@ -447,6 +627,31 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
   }
   if (cachedPeaks?.length > 0) wsOpts.peaks = cachedPeaks
   const ws = WaveSurfer.create(wsOpts)
+
+  // ── Web Audio routing ─────────────────────────
+  // WaveSurfer v7 plays through an HTML5 audio element. Routing it through the
+  // Web Audio graph gives us StereoPanner support without touching WaveSurfer
+  // internals. Once createMediaElementSource() is called, audio flows exclusively
+  // through our graph: MediaElementSource → GainNode → StereoPannerNode → dest.
+  const gainNode = sharedAudioCtx.createGain()
+  const panNode  = sharedAudioCtx.createStereoPanner()
+  gainNode.connect(panNode)
+  panNode.connect(sharedAudioCtx.destination)
+  gainNodes.push(gainNode)
+  panNodes.push(panNode)
+
+  let routed = false
+  try {
+    const mediaEl = ws.getMediaElement()
+    if (!(mediaEl instanceof HTMLMediaElement))
+      throw new Error(`getMediaElement() returned unexpected type: ${typeof mediaEl}`)
+    sharedAudioCtx.createMediaElementSource(mediaEl).connect(gainNode)
+    routed = true
+  } catch (err) {
+    // applyVolumes() will fall back to ws.setVolume() for this track.
+    console.warn('[pan] MediaElement routing unavailable, using WaveSurfer volume:', err)
+  }
+  webAudioRouted.push(routed)
 
   const state = { volume: 1, muted: false, soloed: false }
   trackStates.push(state)
@@ -540,9 +745,14 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
     state.volume = Number(volSlider.value) / 100
     applyVolumes()
   })
+
+  // Pan knob → StereoPannerNode
+  panKnob.wrap.addEventListener('change', (e) => {
+    setPan(idx, e.detail)
+  })
 }
 
-// 11.3 — Chargement silencieux du mix sauvegardé
+// 11.3 / 15.5 — Chargement silencieux du mix sauvegardé
 async function loadMix(tracks) {
   try {
     const res = await fetch(`/api/mix/${encodeURIComponent(grooveSlug)}`)
@@ -550,10 +760,22 @@ async function loadMix(tracks) {
     const mix = await res.json()
     if (mix.tracks && typeof mix.tracks === 'object') {
       tracks.forEach((track, i) => {
-        const vol = mix.tracks[track.filename]
-        if (typeof vol === 'number') {
+        const entry = mix.tracks[track.filename]
+        let vol = null, pan = null
+        if (entry && typeof entry === 'object') {
+          // New format: { volume: 80, pan: -0.4 }
+          if (typeof entry.volume === 'number') vol = entry.volume
+          if (typeof entry.pan    === 'number') pan = entry.pan
+        } else if (typeof entry === 'number') {
+          // Legacy format: plain volume number
+          vol = entry
+        }
+        if (vol !== null) {
           trackStates[i].volume = vol / 100
           volSliders[i].value = String(vol)
+        }
+        if (pan !== null) {
+          setPan(i, pan)
         }
       })
       applyVolumes()
@@ -565,11 +787,14 @@ async function loadMix(tracks) {
   } catch { /* chargement silencieux */ }
 }
 
-// 11.4 — Sauvegarde du mix courant (admin uniquement)
+// 11.4 / 15.5 — Sauvegarde du mix courant (admin uniquement)
 async function saveMix() {
   const mixData = { tracks: {} }
   currentTracks.forEach((track, i) => {
-    mixData.tracks[track.filename] = Math.round(trackStates[i].volume * 100)
+    mixData.tracks[track.filename] = {
+      volume: Math.round(trackStates[i].volume * 100),
+      pan:    Math.round((panKnobs[i]?.getValue() ?? 0) * 100) / 100,
+    }
   })
   if (activeLoopIn !== null && activeLoopOut !== null) {
     mixData.loop = { in: activeLoopIn, out: activeLoopOut }

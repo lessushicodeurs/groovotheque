@@ -260,7 +260,7 @@ body {
   flex-direction: column;
   gap: 0.4rem;
   padding: 0.625rem 0.75rem;
-  width: 156px;
+  width: 176px;
   flex-shrink: 0;
   background: #141414;
   border-right: 1px solid #1a1a1a;
@@ -334,6 +334,15 @@ body {
   accent-color: #555;
   cursor: pointer;
   height: 3px;
+}
+
+/* ── Pan knob ────────────────────────────── */
+
+.pan-knob-wrap {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  user-select: none;
 }
 
 /* ── Waveform ────────────────────────────── */
@@ -731,6 +740,10 @@ body {
   }
 
   .track-volume {
+    display: none;
+  }
+
+  .pan-knob-wrap {
     display: none;
   }
 
