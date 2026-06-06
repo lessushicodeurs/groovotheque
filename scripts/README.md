@@ -62,11 +62,11 @@ Les dossiers de sortie sont des **siblings** du dossier source. Relancer le scri
 ## Pipeline de traitement
 
 ```
-Entrées FLAC  →  Mix stéréo  →  Compression  →  Normalisation  →  Découpe  →  MP3
+Entrées FLAC  →  Mix stéréo  →  [Compression]  →  Normalisation  →  Découpe  →  MP3
 ```
 
 1. **Mix stéréo** — fusionne les pistes composites définies dans `tracks.mixes` (ex : KEYS L + KEYS R → KEYS MIX)
-2. **Compression** — `acompressor` ffmpeg, paramètres dans `audio.compression`
+2. **Compression** *(opt-in)* — appliquée uniquement si un bloc `compression` est défini pour la piste dans `tracks.per_track`
 3. **Normalisation** — par peak ou par RMS selon les réglages par piste, avec limiteur safety à -1 dBFS
 4. **Découpe** — chaque piste est découpée en segments selon les timecodes du fichier `.txt`
 5. **Conversion MP3** — encodage CBR à la bitrate configurée, métadonnées supprimées
@@ -81,12 +81,6 @@ Entrées FLAC  →  Mix stéréo  →  Compression  →  Normalisation  →  Dé
 audio:
   mp3_bitrate: "320k"       # bitrate MP3 CBR (ex: "128k", "192k", "320k")
   normalize_peak_db: -1     # cible de peak par défaut pour toutes les pistes
-  compression:
-    threshold_db: -20       # seuil en dBFS au-dessus duquel le compresseur s'active
-    ratio: 3                # ratio de compression (1 = aucune, 10 = forte)
-    attack_ms: 20           # temps d'attaque en millisecondes
-    release_ms: 200         # temps de relâchement en millisecondes
-    knee_db: 6              # douceur de la transition (knee) en dB
 ```
 
 ### Section `tracks.mixes`
@@ -180,7 +174,7 @@ Trim additionnel appliqué **après** la normalisation. Permet d'ajuster finemen
 
 #### `compression` *(bloc optionnel)*
 
-Surcharge les paramètres de compression globaux (`audio.compression`) pour cette piste uniquement. Toutes les clés sont optionnelles : seules les valeurs présentes remplacent le global.
+Active la compression dynamique pour cette piste. Par défaut aucune compression n'est appliquée — la normalisation seule donne un résultat plus naturel pour la plupart des instruments. La compression est utile pour les instruments qui bénéficient d'un son plus dense (guitare lead, voix). Toutes les clés sont optionnelles et ont des valeurs par défaut raisonnables.
 
 ```yaml
 tracks:

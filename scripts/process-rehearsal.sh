@@ -391,26 +391,26 @@ compress_normalize() {
   for ((ti=0; ti<${#ALL_TRACK_PATHS[@]}; ti++)); do
     local src="${ALL_TRACK_PATHS[$ti]}"
     local name="${ALL_TRACK_NAMES[$ti]}"
-    # Paramètres de compression : per-track en priorité, sinon global
-    local c_thr="${TRACK_COMP_THRESHOLD[$name]:-$COMP_THRESHOLD}"
-    local c_rat="${TRACK_COMP_RATIO[$name]:-$COMP_RATIO}"
-    local c_atk="${TRACK_COMP_ATTACK[$name]:-$COMP_ATTACK}"
-    local c_rel="${TRACK_COMP_RELEASE[$name]:-$COMP_RELEASE}"
-    local c_kne="${TRACK_COMP_KNEE[$name]:-$COMP_KNEE}"
 
-    local comp_label=""
-    [[ -n "${TRACK_COMP_THRESHOLD[$name]:-}" ]] && comp_label=" (config piste)"
-    log "  Compression${comp_label} : ${name} [thr=${c_thr}dB ratio=${c_rat} atk=${c_atk}ms rel=${c_rel}ms]"
-
-    local compressed="${WORK_DIR}/compressed/${name}.flac"
-    ffmpeg -y -hide_banner -loglevel warning \
-      -i "$src" \
-      -af "acompressor=threshold=${c_thr}dB:ratio=${c_rat}:attack=${c_atk}:release=${c_rel}:knee=${c_kne}dB:makeup=1" \
-      "$compressed"
+    # Compression : opt-in, seulement si un bloc compression est défini pour la piste
+    local comp_src="$src"
+    if [[ -n "${TRACK_COMP_THRESHOLD[$name]:-}" ]]; then
+      local c_thr="${TRACK_COMP_THRESHOLD[$name]}"
+      local c_rat="${TRACK_COMP_RATIO[$name]:-3}"
+      local c_atk="${TRACK_COMP_ATTACK[$name]:-20}"
+      local c_rel="${TRACK_COMP_RELEASE[$name]:-200}"
+      local c_kne="${TRACK_COMP_KNEE[$name]:-6}"
+      log "  Compression : ${name} [thr=${c_thr}dB ratio=${c_rat} atk=${c_atk}ms rel=${c_rel}ms]"
+      comp_src="${WORK_DIR}/compressed/${name}.flac"
+      ffmpeg -y -hide_banner -loglevel warning \
+        -i "$src" \
+        -af "acompressor=threshold=${c_thr}dB:ratio=${c_rat}:attack=${c_atk}:release=${c_rel}:knee=${c_kne}dB:makeup=1" \
+        "$comp_src"
+    fi
 
     # Détection des niveaux (peak + mean en une passe)
     local vol_out
-    vol_out="$(ffmpeg -i "$compressed" -af volumedetect -f null /dev/null 2>&1)"
+    vol_out="$(ffmpeg -i "$comp_src" -af volumedetect -f null /dev/null 2>&1)"
     local max_vol mean_vol
     max_vol="$(echo "$vol_out" | grep max_volume  | awk '{print $5}')"
     mean_vol="$(echo "$vol_out" | grep mean_volume | awk '{print $5}')"
@@ -450,7 +450,7 @@ compress_normalize() {
     log "  gain total appliqué : ${total_gain}dB"
     local normalized="${WORK_DIR}/normalized/${name}.flac"
     ffmpeg -y -hide_banner -loglevel warning \
-      -i "$compressed" \
+      -i "$comp_src" \
       -af "volume=${total_gain}dB" \
       "$normalized"
 

@@ -1,12 +1,6 @@
 audio:
   mp3_bitrate: "320k"
   normalize_peak_db: -1
-  compression:
-    threshold_db: -20
-    ratio: 3
-    attack_ms: 20
-    release_ms: 200
-    knee_db: 6
 
 tracks:
   per_track:
@@ -14,23 +8,19 @@ tracks:
     "01 BASS":
       normalize_mode: rms
       normalize_db: -18
-      compression:
-        threshold_db: -30   # seuil plus bas → compresse plus tôt, booste les passages doux
-        ratio: 5            # plus de tenue, moins de dynamique
-        attack_ms: 30       # laisse passer l'attaque de plectre avant de comprimer
-        release_ms: 150
-        knee_db: 4
 
     "11 DRUMS MIX":
       normalize_mode: rms
       normalize_db: -12
       gain_db: 2
+
+    "03 LEAD":
       compression:
-        threshold_db: -24   # seuil plus bas que global
-        ratio: 6            # ratio assez fort pour niveler les coups
-        attack_ms: 8        # attaque rapide pour attraper les transitoires de kick
-        release_ms: 80      # relâchement court pour le punch
-        knee_db: 3
+        threshold_db: -20
+        ratio: 3
+        attack_ms: 20
+        release_ms: 200
+        knee_db: 6
 
   mixes:
     - output: "04 KEYS MIX"
