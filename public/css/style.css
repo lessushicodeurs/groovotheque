@@ -25,6 +25,63 @@ body {
   color: #fff;
 }
 
+/* ── Load bar ────────────────────────────── */
+
+#load-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 3px;
+  z-index: 1000;
+  overflow: hidden;
+  background: #1e1e1e;
+  transition: opacity 300ms;
+}
+
+#load-bar.done {
+  opacity: 0;
+  pointer-events: none;
+}
+
+#load-bar::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent 0%, #666 50%, transparent 100%);
+  animation: bar-shimmer 1.4s ease-in-out infinite;
+  transition: opacity 300ms;
+}
+
+#load-bar.segmented::before {
+  opacity: 0;
+}
+
+@keyframes bar-shimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(200%); }
+}
+
+.load-bar-segment {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  background: #2a2a2a;
+  transition: background-color 400ms ease;
+}
+
+/* ── Main overlay ────────────────────────── */
+
+#player-main {
+  transition: opacity 300ms, filter 300ms;
+}
+
+#player-main.loading {
+  filter: blur(3px);
+  opacity: 0.4;
+  pointer-events: none;
+}
+
 /* ── States ──────────────────────────────── */
 
 .state-msg {

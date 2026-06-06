@@ -7,13 +7,13 @@
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
+  <div id="load-bar" role="progressbar" aria-label="Chargement des pistes" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div>
   <header class="site-header player-header">
     <a href="/" class="back-link" aria-label="Retour à la liste">←</a>
     <h1 id="groove-title">…</h1>
     <button id="btn-download-all" class="btn-download-all" hidden>↓ Tout télécharger</button>
   </header>
-  <main id="player-main">
-    <p class="state-msg" id="player-state">Chargement des pistes…</p>
+  <main id="player-main" class="loading">
     <div id="tracks-container" class="tracks-container" hidden></div>
     <div id="minimap-container" class="minimap-container" hidden></div>
     <div id="transport" class="transport" hidden>

@@ -19,7 +19,8 @@ const params = new URLSearchParams(location.search)
 const grooveSlug = params.get('groove')
 
 const titleEl          = document.getElementById('groove-title')
-const stateEl          = document.getElementById('player-state')
+const loadBarEl        = document.getElementById('load-bar')
+const mainEl           = document.getElementById('player-main')
 const tracksContainer  = document.getElementById('tracks-container')
 const minimapContainer = document.getElementById('minimap-container')
 const transportEl      = document.getElementById('transport')
@@ -37,6 +38,48 @@ const tempoSliderEl    = document.getElementById('tempo-slider')
 const tempoValueEl     = document.getElementById('tempo-value')
 const tempoBadgeEl     = document.getElementById('tempo-badge')
 const tempoPresets     = Array.from(document.querySelectorAll('.tempo-preset'))
+
+let loadedCount = 0
+let totalTracks = 0
+
+function initLoadBar(n) {
+  totalTracks = n
+  loadBarEl.classList.add('segmented')
+  loadBarEl.setAttribute('aria-valuenow', '0')
+  const segWidth = 100 / n
+  for (let i = 0; i < n; i++) {
+    const seg = document.createElement('div')
+    seg.className = 'load-bar-segment'
+    seg.style.left = `${i * segWidth}%`
+    seg.style.width = `${segWidth}%`
+    seg.dataset.idx = String(i)
+    loadBarEl.appendChild(seg)
+  }
+}
+
+function markSegmentLoaded(idx, color) {
+  const seg = loadBarEl.querySelector(`[data-idx="${idx}"]`)
+  if (!seg || seg.dataset.loaded) return
+  seg.dataset.loaded = '1'
+  seg.style.backgroundColor = color
+  loadedCount++
+  loadBarEl.setAttribute('aria-valuenow', String(Math.round((loadedCount / totalTracks) * 100)))
+  if (loadedCount >= totalTracks) finishLoading()
+}
+
+function finishLoading() {
+  mainEl.classList.remove('loading')
+  loadBarEl.classList.add('done')
+}
+
+function showFatalError(msg, isError = true) {
+  mainEl.classList.remove('loading')
+  loadBarEl.classList.add('done')
+  const p = document.createElement('p')
+  p.className = isError ? 'state-msg error' : 'state-msg'
+  p.textContent = msg
+  mainEl.prepend(p)
+}
 
 const wavesurfers  = []
 const trackStates  = []   // { volume, muted, soloed }
@@ -378,6 +421,15 @@ function buildTrackRow(track, idx) {
     }
   })
 
+  // ── Load bar segment ──────────────────────
+  ws.on('ready', () => {
+    markSegmentLoaded(idx, TRACK_COLORS[idx % TRACK_COLORS.length])
+  })
+
+  ws.on('error', () => {
+    markSegmentLoaded(idx, '#c44')
+  })
+
   // ── Timecode + seek bar + duration + loop from first track ─
   if (idx === 0) {
     ws.on('ready', () => {
@@ -427,8 +479,7 @@ function buildTrackRow(track, idx) {
 
 async function init() {
   if (!grooveSlug) {
-    stateEl.textContent = 'Aucun groove spécifié.'
-    stateEl.classList.add('error')
+    showFatalError('Aucun groove spécifié.')
     return
   }
 
@@ -442,11 +493,11 @@ async function init() {
     document.title = `${name} — Groovotheque`
 
     if (!groove.tracks?.length) {
-      stateEl.textContent = 'Aucune piste audio dans ce groove.'
+      showFatalError('Aucune piste audio dans ce groove.', false)
       return
     }
 
-    stateEl.remove()
+    initLoadBar(groove.tracks.length)
     tracksContainer.removeAttribute('hidden')
     minimapContainer.removeAttribute('hidden')
     transportEl.removeAttribute('hidden')
@@ -562,8 +613,7 @@ async function init() {
     })
 
   } catch (err) {
-    stateEl.textContent = `Erreur de chargement : ${err.message}`
-    stateEl.classList.add('error')
+    showFatalError(`Erreur de chargement : ${err.message}`)
   }
 }
 
