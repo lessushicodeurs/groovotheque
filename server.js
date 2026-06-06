@@ -3,6 +3,7 @@ const basicAuth = require('express-basic-auth');
 const bcrypt = require('bcrypt');
 const fs = require('fs');
 const path = require('path');
+const { ZipArchive } = require('archiver');
 
 const app = express();
 const PORT = process.env.PORT || 3099;
@@ -149,6 +150,43 @@ app.get('/api/grooves/:name', async (req, res) => {
     if (err.code === 'ENOENT') return res.status(404).json({ error: 'Groove introuvable' });
     res.status(500).json({ error: err.message });
   }
+});
+
+// 9.2 — Téléchargement zip de toutes les pistes d'un groove
+app.get('/api/grooves/:name/download', async (req, res) => {
+  const grooveDir = resolveGrooveDir(req.params.name, res);
+  if (!grooveDir) return;
+  try {
+    await fs.promises.access(grooveDir);
+  } catch {
+    return res.status(404).json({ error: 'Groove introuvable' });
+  }
+
+  const slug = req.params.name;
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', `attachment; filename="${slug}.zip"`);
+
+  const archive = new ZipArchive({ zlib: { level: 6 } });
+  archive.on('error', (err) => {
+    if (!res.headersSent) res.status(500).json({ error: err.message });
+  });
+  archive.pipe(res);
+
+  try {
+    const entries = await fs.promises.readdir(grooveDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      const ext = path.extname(entry.name).toLowerCase();
+      if (AUDIO_EXTENSIONS.has(ext) || ext === '.md') {
+        archive.file(path.join(grooveDir, entry.name), { name: entry.name });
+      }
+    }
+  } catch (err) {
+    archive.abort();
+    return;
+  }
+
+  await archive.finalize();
 });
 
 // 2.3 — Stream audio avec support range requests

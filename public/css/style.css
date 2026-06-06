@@ -524,6 +524,56 @@ body {
   color: #ff8c00;
 }
 
+/* ── Download ────────────────────────────── */
+
+.btn-download-all {
+  margin-left: auto;
+  flex-shrink: 0;
+  background: #1c1c1c;
+  border: 1px solid #2a2a2a;
+  color: #666;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.3rem 0.7rem;
+  border-radius: 4px;
+  cursor: pointer;
+  letter-spacing: 0.03em;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+
+.btn-download-all:hover:not(:disabled) {
+  background: #242424;
+  border-color: #3a3a3a;
+  color: #ccc;
+}
+
+.btn-download-all:disabled {
+  color: #3a3a3a;
+  cursor: default;
+}
+
+.btn-track-download {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  background: none;
+  border: 1px solid #252525;
+  border-radius: 3px;
+  color: #3a3a3a;
+  font-size: 0.75rem;
+  text-decoration: none;
+  flex-shrink: 0;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+
+.btn-track-download:hover {
+  background: #1c1c1c;
+  border-color: #3a3a3a;
+  color: #999;
+}
+
 /* ── Responsive — tablet ─────────────────── */
 
 @media (max-width: 1023px) {

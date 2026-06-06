@@ -32,6 +32,7 @@ const seekFillEl       = document.getElementById('seek-fill')
 const loopInEl         = document.getElementById('loop-in')
 const loopOutEl        = document.getElementById('loop-out')
 const btnLoop          = document.getElementById('btn-loop')
+const btnDownloadAll   = document.getElementById('btn-download-all')
 const tempoSliderEl    = document.getElementById('tempo-slider')
 const tempoValueEl     = document.getElementById('tempo-value')
 const tempoBadgeEl     = document.getElementById('tempo-badge')
@@ -253,9 +254,16 @@ function buildTrackRow(track, idx) {
   nameEl.textContent = track.displayName
   nameEl.title = track.displayName
 
+  const dlLink = document.createElement('a')
+  dlLink.href = track.url
+  dlLink.download = track.filename
+  dlLink.className = 'btn-track-download'
+  dlLink.title = `Télécharger ${track.filename}`
+  dlLink.textContent = '↓'
+
   const sidebarTop = document.createElement('div')
   sidebarTop.className = 'track-sidebar-top'
-  sidebarTop.append(dot, nameEl)
+  sidebarTop.append(dot, nameEl, dlLink)
 
   const btnMute = document.createElement('button')
   btnMute.className = 'track-btn btn-mute'
@@ -442,6 +450,21 @@ async function init() {
     tracksContainer.removeAttribute('hidden')
     minimapContainer.removeAttribute('hidden')
     transportEl.removeAttribute('hidden')
+    btnDownloadAll.removeAttribute('hidden')
+    btnDownloadAll.addEventListener('click', () => {
+      btnDownloadAll.disabled = true
+      btnDownloadAll.textContent = 'Préparation…'
+      const a = document.createElement('a')
+      a.href = `/api/grooves/${encodeURIComponent(grooveSlug)}/download`
+      a.download = `${grooveSlug}.zip`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      setTimeout(() => {
+        btnDownloadAll.disabled = false
+        btnDownloadAll.textContent = '↓ Tout télécharger'
+      }, 2000)
+    })
 
     for (const track of groove.tracks) {
       buildTrackRow(track, track.index)
