@@ -33,6 +33,10 @@ const seekFillEl       = document.getElementById('seek-fill')
 const loopInEl         = document.getElementById('loop-in')
 const loopOutEl        = document.getElementById('loop-out')
 const btnLoop          = document.getElementById('btn-loop')
+const btnLoopGoIn      = document.getElementById('btn-loop-go-in')
+const btnLoopGoOut     = document.getElementById('btn-loop-go-out')
+const btnLoopClear     = document.getElementById('btn-loop-clear')
+const btnSaveMix       = document.getElementById('btn-save-mix')
 const btnDownloadAll   = document.getElementById('btn-download-all')
 const tempoSliderEl    = document.getElementById('tempo-slider')
 const tempoValueEl     = document.getElementById('tempo-value')
@@ -84,6 +88,9 @@ function showFatalError(msg, isError = true) {
 const wavesurfers  = []
 const trackStates  = []   // { volume, muted, soloed }
 const trackRegions = []   // RegionsPlugin instance per track
+const volSliders   = []   // input[type=range] per track, for mix restore
+let currentTracks  = []   // groove.tracks list, set at init time
+let pendingLoop    = null // loop à restaurer dès que la waveform est prête
 let isPlaying       = false
 let seekGen         = 0    // increments on every seek; prevents stale async play() callbacks
 let totalDuration   = 0
@@ -159,6 +166,10 @@ function applyVolumes() {
 
 async function playAll() {
   if (isPlaying) return
+  if (loopEnabled && activeLoopIn !== null && activeLoopOut !== null) {
+    const cur = wavesurfers[0]?.getCurrentTime() ?? 0
+    if (cur < activeLoopIn || cur >= activeLoopOut) seekAllTo(activeLoopIn)
+  }
   isPlaying = true
   btnPlay.textContent = '⏸'
   try {
@@ -241,6 +252,17 @@ function updateLoopFields() {
   loopOutEl.value = hasRegion ? formatLoopTime(activeLoopOut) : '—'
   loopInEl.disabled = !hasRegion
   loopOutEl.disabled = !hasRegion
+  btnLoopGoIn.disabled = !hasRegion
+  btnLoopGoOut.disabled = !hasRegion
+  btnLoopClear.disabled = !hasRegion
+}
+
+function clearLoop() {
+  trackRegions.forEach(rp => rp.clearRegions())
+  activeLoopIn = null
+  activeLoopOut = null
+  updateLoopFields()
+  if (loopEnabled) setLoopEnabled(false)
 }
 
 // Creates/replaces regions on ALL tracks with the same IN/OUT.
@@ -394,6 +416,7 @@ function buildTrackRow(track, idx) {
 
   const state = { volume: 1, muted: false, soloed: false }
   trackStates.push(state)
+  volSliders.push(volSlider)
   wavesurfers.push(ws)
   ws.setPlaybackRate(currentTempo / 100, true)
 
@@ -435,6 +458,10 @@ function buildTrackRow(track, idx) {
     ws.on('ready', () => {
       totalDuration = ws.getDuration()
       durationEl.textContent = formatTimecode(totalDuration)
+      if (pendingLoop) {
+        syncRegionToAll(pendingLoop.in, pendingLoop.out)
+        pendingLoop = null
+      }
     })
 
     ws.on('timeupdate', (t) => {
@@ -446,7 +473,7 @@ function buildTrackRow(track, idx) {
       // Loop rebounding: when playhead reaches loop out, jump to loop in.
       // loopJumping flag prevents double-trigger when timeupdate fires again
       // before setTime() has advanced the playhead past activeLoopOut.
-      if (loopEnabled && activeLoopOut !== null && t >= activeLoopOut && !loopJumping) {
+      if (loopEnabled && activeLoopOut !== null && t >= activeLoopOut && !loopJumping && isPlaying) {
         loopJumping = true
         seekAllTo(activeLoopIn ?? 0)
         setTimeout(() => { loopJumping = false }, 50)
@@ -475,6 +502,50 @@ function buildTrackRow(track, idx) {
     state.volume = Number(volSlider.value) / 100
     applyVolumes()
   })
+}
+
+// 11.3 — Chargement silencieux du mix sauvegardé
+async function loadMix(tracks) {
+  try {
+    const res = await fetch(`/api/mix/${encodeURIComponent(grooveSlug)}`)
+    if (!res.ok) return
+    const mix = await res.json()
+    if (mix.tracks && typeof mix.tracks === 'object') {
+      tracks.forEach((track, i) => {
+        const vol = mix.tracks[track.filename]
+        if (typeof vol === 'number') {
+          trackStates[i].volume = vol / 100
+          volSliders[i].value = String(vol)
+        }
+      })
+      applyVolumes()
+    }
+    if (mix.loop && typeof mix.loop.in === 'number' && typeof mix.loop.out === 'number') {
+      // La waveform n'est pas encore rendue ici — on diffère à l'événement ready
+      pendingLoop = { in: mix.loop.in, out: mix.loop.out }
+    }
+  } catch { /* chargement silencieux */ }
+}
+
+// 11.4 — Sauvegarde du mix courant (admin uniquement)
+async function saveMix() {
+  const mixData = { tracks: {} }
+  currentTracks.forEach((track, i) => {
+    mixData.tracks[track.filename] = Math.round(trackStates[i].volume * 100)
+  })
+  if (activeLoopIn !== null && activeLoopOut !== null) {
+    mixData.loop = { in: activeLoopIn, out: activeLoopOut }
+  }
+  try {
+    const res = await fetch(`/api/mix/${encodeURIComponent(grooveSlug)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(mixData),
+    })
+    return res.ok
+  } catch {
+    return false
+  }
 }
 
 async function init() {
@@ -517,8 +588,25 @@ async function init() {
       }, 2000)
     })
 
+    currentTracks = groove.tracks
     for (const track of groove.tracks) {
       buildTrackRow(track, track.index)
+    }
+
+    await loadMix(groove.tracks)
+
+    // 11.4 — Bouton Save Mix visible uniquement pour l'admin
+    if (window.CURRENT_USER === 'admin') {
+      btnSaveMix.removeAttribute('hidden')
+      btnSaveMix.addEventListener('click', async () => {
+        btnSaveMix.disabled = true
+        const ok = await saveMix()
+        btnSaveMix.textContent = ok ? 'Sauvegardé ✓' : 'Erreur ✗'
+        setTimeout(() => {
+          btnSaveMix.textContent = 'Sauvegarder le mix'
+          btnSaveMix.disabled = false
+        }, 2000)
+      })
     }
 
     // Reconcile tempo UI with the slider's actual value (covers browser form
@@ -537,8 +625,11 @@ async function init() {
       performSeek(ratio * totalDuration)
     })
 
-    // ── Loop button ────────────────────────────
+    // ── Loop button + navigation ───────────────
     btnLoop.addEventListener('click', () => setLoopEnabled(!loopEnabled))
+    btnLoopGoIn.addEventListener('click', () => { if (activeLoopIn !== null) performSeek(activeLoopIn) })
+    btnLoopGoOut.addEventListener('click', () => { if (activeLoopOut !== null) performSeek(activeLoopOut) })
+    btnLoopClear.addEventListener('click', clearLoop)
 
     // ── Tempo control ──────────────────────────
     tempoSliderEl.addEventListener('input', () => applyTempo(Number(tempoSliderEl.value)))

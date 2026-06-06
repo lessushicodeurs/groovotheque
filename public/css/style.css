@@ -397,6 +397,26 @@ body {
   color: #77cc77;
 }
 
+.transport-btn--loop-nav,
+.transport-btn--loop-clear {
+  font-size: 0.65rem;
+  width: 1.6rem;
+  height: 1.6rem;
+}
+
+.transport-btn--loop-nav:disabled,
+.transport-btn--loop-clear:disabled {
+  opacity: 0.25;
+  cursor: default;
+  pointer-events: none;
+}
+
+.transport-btn--loop-clear:not(:disabled):hover {
+  background: #2a1a1a;
+  border-color: #5c2a2a;
+  color: #cc5555;
+}
+
 /* ── Timecode ────────────────────────────── */
 
 .transport-time {
@@ -579,6 +599,33 @@ body {
   background: #1e1000;
   border-color: #ff8c00;
   color: #ff8c00;
+}
+
+/* ── Save Mix ────────────────────────────── */
+
+.btn-save-mix {
+  flex-shrink: 0;
+  background: #1a2a1a;
+  border: 1px solid #2e4a2e;
+  color: #5a9a5a;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.3rem 0.7rem;
+  border-radius: 4px;
+  cursor: pointer;
+  letter-spacing: 0.03em;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+
+.btn-save-mix:hover:not(:disabled) {
+  background: #1e361e;
+  border-color: #3a5e3a;
+  color: #7acc7a;
+}
+
+.btn-save-mix:disabled {
+  color: #3a5a3a;
+  cursor: default;
 }
 
 /* ── Download ────────────────────────────── */
