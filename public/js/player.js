@@ -15,6 +15,8 @@ const TRACK_COLORS = [
   '#ef9a9a',
 ]
 
+const isMobile = window.innerWidth < 768
+
 // Shared Web Audio context for pan/gain routing across all tracks.
 // Created eagerly; browsers suspend it until first user gesture.
 const sharedAudioCtx = new AudioContext()
@@ -27,6 +29,8 @@ const loadBarEl        = document.getElementById('load-bar')
 const mainEl           = document.getElementById('player-main')
 const tracksContainer  = document.getElementById('tracks-container')
 const minimapContainer = document.getElementById('minimap-container')
+const drawerEl         = document.getElementById('transport-drawer')
+const handleEl         = document.getElementById('transport-handle')
 const transportEl      = document.getElementById('transport')
 const btnPlay          = document.getElementById('btn-play')
 const btnStop          = document.getElementById('btn-stop')
@@ -121,6 +125,35 @@ let isSyncingRegion = false
 let loopJumping     = false  // prevents double-trigger of loop rebound
 let loopFieldCommitting = false  // prevents blur re-running commit after Enter
 let currentTempo    = 100  // percent (50–120)
+let drawerOpen      = true
+
+// ── Drawer (mobile bottom sheet) ──────────────────────────────────────────
+
+function setDrawerOpen(open) {
+  drawerOpen = open
+  drawerEl.classList.toggle('drawer-closed', !open)
+  handleEl.setAttribute('aria-expanded', String(open))
+}
+
+function initDrawer() {
+  if (!isMobile) return
+  let touchStartY = 0
+
+  handleEl.addEventListener('touchstart', (e) => {
+    touchStartY = e.touches[0].clientY
+  }, { passive: true })
+
+  handleEl.addEventListener('touchend', (e) => {
+    e.preventDefault()
+    const dy = e.changedTouches[0].clientY - touchStartY
+    if      (dy >  40) setDrawerOpen(false)
+    else if (dy < -40) setDrawerOpen(true)
+    else               setDrawerOpen(!drawerOpen)
+  }, { passive: false })
+
+  // Keyboard/desktop fallback (handle visible only on mobile via CSS)
+  handleEl.addEventListener('click', () => setDrawerOpen(!drawerOpen))
+}
 
 // ── PanKnob ────────────────────────────────────────────────────────────────
 // Custom SVG knob for stereo pan (-1 to +1).
@@ -289,6 +322,38 @@ async function fetchPeaks(groove, filename) {
   } catch {
     return null
   }
+}
+
+// ── Title marquee ──────────────────────────────────────────────────────────
+// Scrolls the groove title horizontally when it overflows, then resets.
+// Uses a CSS variable --title-overflow for the exact pixel amount so the
+// animation never scrolls too far or not far enough.
+
+function setupTitleMarquee() {
+  const span = document.createElement('span')
+  span.className = 'title-scroll'
+  span.textContent = titleEl.textContent
+  titleEl.textContent = ''
+  titleEl.appendChild(span)
+
+  function update() {
+    const overflow = span.scrollWidth - titleEl.clientWidth
+    if (overflow > 4) {
+      titleEl.style.setProperty('--title-overflow', `${-overflow}px`)
+      span.classList.add('title-scroll--active')
+    } else {
+      titleEl.style.removeProperty('--title-overflow')
+      span.classList.remove('title-scroll--active')
+    }
+  }
+
+  requestAnimationFrame(() => requestAnimationFrame(update))
+
+  let resizeTimer
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer)
+    resizeTimer = setTimeout(update, 150)
+  }, { passive: true })
 }
 
 function postPeaks(groove, filename, peaks) {
@@ -593,13 +658,16 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
       labelColor: '#999',
       labelSize: '10px',
     }),
-    MinimapPlugin.create({
+  ]
+
+  if (!isMobile) {
+    plugins.push(MinimapPlugin.create({
       height: 22,
       waveColor,
       progressColor,
       container: minimapRow,
-    }),
-  ]
+    }))
+  }
 
   if (idx === 0) {
     plugins.push(TimelinePlugin.create({
@@ -617,8 +685,8 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
     waveColor,
     progressColor,
     url: track.url,
-    height: 64,
-    barWidth: 2,
+    height: isMobile ? 48 : 64,
+    barWidth: isMobile ? 1 : 2,
     barGap: 1,
     barRadius: 2,
     normalize: true,
@@ -843,6 +911,7 @@ async function init() {
     const name = slugToName(groove.slug)
     titleEl.textContent = name
     document.title = `${name} — Groovotheque`
+    setupTitleMarquee()
 
     if (!groove.tracks?.length) {
       showFatalError('Aucune piste audio dans ce groove.', false)
@@ -852,7 +921,8 @@ async function init() {
     initLoadBar(groove.tracks.length)
     tracksContainer.removeAttribute('hidden')
     minimapContainer.removeAttribute('hidden')
-    transportEl.removeAttribute('hidden')
+    drawerEl.removeAttribute('hidden')
+    initDrawer()
     btnDownloadAll.removeAttribute('hidden')
     btnDownloadAll.addEventListener('click', () => {
       btnDownloadAll.disabled = true
@@ -910,6 +980,15 @@ async function init() {
       const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
       performSeek(ratio * totalDuration)
     })
+
+    seekBarEl.addEventListener('touchstart', (e) => {
+      if (!totalDuration) return
+      e.preventDefault()
+      const touch = e.touches[0]
+      const rect = seekBarEl.getBoundingClientRect()
+      const ratio = Math.max(0, Math.min(1, (touch.clientX - rect.left) / rect.width))
+      performSeek(ratio * totalDuration)
+    }, { passive: false })
 
     // ── Loop button + navigation ───────────────
     btnLoop.addEventListener('click', () => setLoopEnabled(!loopEnabled))
