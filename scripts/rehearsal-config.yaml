@@ -8,11 +8,10 @@ tracks:
     "01 BASS":
       normalize_mode: rms
       normalize_db: -18
-
-    "11 DRUMS MIX":
-      normalize_mode: rms
-      normalize_db: -12
       gain_db: 2
+
+    "02 GUIT":
+      gain_db: -8
 
     "03 LEAD":
       compression:
@@ -21,6 +20,15 @@ tracks:
         attack_ms: 20
         release_ms: 200
         knee_db: 6
+      gain_db: 2
+
+    "04 KEYS MIX":
+      gain_db: -14
+
+    "11 DRUMS MIX":
+      normalize_mode: rms
+      normalize_db: -12
+      gain_db: 2
 
   mixes:
     - output: "04 KEYS MIX"
