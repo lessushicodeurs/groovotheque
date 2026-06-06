@@ -894,11 +894,12 @@ function setTabState(newState) {
       const mod = window.__alphaTabModule
       if (mod) {
         const usePageLayout = newState === 'fullscreen'
-        alphaTabApi.settings.display.layoutMode = usePageLayout
-          ? mod.LayoutMode.Page
-          : mod.LayoutMode.Horizontal
-        alphaTabApi.updateSettings()
-        alphaTabApi.render()
+        const newMode = usePageLayout ? mod.LayoutMode.Page : mod.LayoutMode.Horizontal
+        if (alphaTabApi.settings.display.layoutMode !== newMode) {
+          alphaTabApi.settings.display.layoutMode = newMode
+          alphaTabApi.updateSettings()
+          alphaTabApi.render()
+        }
       }
     }
   }
@@ -1120,6 +1121,7 @@ async function initTabDrawer(tabFile) {
       enableUserInteraction: true,
       soundFont:            `${AT_BASE}/soundfont/sonivox.sf2`,
       scrollElement:        '#tab-content',
+      scrollMode: "Continuous",
     },
     display: {
       layoutMode:   alphaTabMod.LayoutMode.Horizontal,
@@ -1131,21 +1133,21 @@ async function initTabDrawer(tabFile) {
   window.__alphaTabApi = alphaTabApi
   alphaTabApi.error.on(err => console.error('[AlphaTab]', err))
 
-  // Auto-fit strip height to rendered SVG
-  alphaTabApi.renderFinished.on(() => {
-    // Ajuster la hauteur strip au SVG rendu
-    if (tabState === 'strip') {
-      const svg = tabContentEl.querySelector('svg')
-      if (svg) {
-        const svgH = parseInt(svg.getAttribute('height') || '0', 10)
-        if (svgH > 0) {
-          const handleH = tabHandleEl?.getBoundingClientRect().height || 50
-          TAB_HEIGHTS.strip = svgH + handleH + 8
-          document.documentElement.style.setProperty('--tab-strip-height', TAB_HEIGHTS.strip + 'px')
-          setTabState('strip')
-        }
-      }
-    }
+  // Auto-fit strip height once rendering is complete (postRenderFinished = once, not per partial)
+  alphaTabApi.postRenderFinished.on(() => {
+    if (tabState !== 'strip') return
+    const atSurface = tabContentEl.querySelector('.at-surface')
+    if (!atSurface) return
+    const surfaceH = parseInt(atSurface.style.height || '0', 10)
+    if (surfaceH <= 0) return
+    const handleH = tabHandleEl?.getBoundingClientRect().height || 50
+    const newH = surfaceH + handleH + 8
+    if (newH === TAB_HEIGHTS.strip) return   // no change → no action
+    TAB_HEIGHTS.strip = newH
+    document.documentElement.style.setProperty('--tab-strip-height', newH + 'px')
+    tabDrawerEl.style.height = newH + 'px'
+    setDrawerCssHeight(newH)
+    // DO NOT call render() here — it would trigger postRenderFinished → infinite loop
   })
 
   // Track selector + sync points after score load
