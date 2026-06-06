@@ -378,24 +378,44 @@ split_segments() {
     local name="${ALL_TRACK_NAMES[$ti]}"
     local normalized="${WORK_DIR}/normalized/${name}.flac"
 
+    # Durée réelle de ce fichier normalisé (peut différer des autres pistes)
+    local track_dur
+    track_dur="$(ffprobe -v error -show_entries format=duration \
+      -of default=noprint_wrappers=1:nokey=1 "$normalized")"
+
+    local produced=0
     for ((si=0; si<SEG_COUNT; si++)); do
       local seg_num
       seg_num="$(printf '%02d' $((si+1)))"
       local start="${SEGMENT_STARTS[$si]}"
       local end
+
       if [[ $((si+1)) -lt $SEG_COUNT ]]; then
         end="${SEGMENT_STARTS[$((si+1))]}"
       else
-        end="$TOTAL_DURATION"
+        end="$track_dur"
       fi
 
+      # Ignorer les segments dont le début dépasse la durée de la piste
+      if [ "$(echo "$start >= $track_dur" | bc -l)" -eq 1 ]; then
+        warn "  ${name}, seg ${seg_num} ignoré : début ${start}s ≥ durée ${track_dur}s"
+        continue
+      fi
+
+      # Ramener la fin à la durée réelle si nécessaire
+      if [ "$(echo "$end > $track_dur" | bc -l)" -eq 1 ]; then
+        end="$track_dur"
+      fi
+
+      # -ss -to en INPUT pour un seek efficace sur les grands fichiers
       ffmpeg -y -hide_banner -loglevel warning \
-        -i "$normalized" \
         -ss "$start" -to "$end" \
+        -i "$normalized" \
         -c copy \
         "${WORK_DIR}/segments/${seg_num}/${name}.flac"
+      produced=$((produced + 1))
     done
-    ok "  ${name} → ${SEG_COUNT} segment(s)"
+    ok "  ${name} → ${produced} segment(s) produit(s)"
   done
 }
 
@@ -427,9 +447,14 @@ convert_output() {
     mkdir -p "$out_dir"
     OUTPUT_DIRS+=("$out_dir")
 
+    local mp3_count=0
     for ((ti=0; ti<${#ALL_TRACK_NAMES[@]}; ti++)); do
       local name="${ALL_TRACK_NAMES[$ti]}"
       local seg_flac="${WORK_DIR}/segments/${seg_num}/${name}.flac"
+
+      # Le FLAC peut être absent si la piste a été ignorée (début > durée)
+      [[ -f "$seg_flac" ]] || continue
+
       local out_name="${name/ MIX/}"
       local out_mp3="${out_dir}/${out_name}.mp3"
 
@@ -438,8 +463,16 @@ convert_output() {
         -b:a "$MP3_BITRATE" \
         -map_metadata -1 \
         "$out_mp3"
+      mp3_count=$((mp3_count + 1))
     done
-    ok "→ ${out_dir_name}/"
+
+    if [[ $mp3_count -eq 0 ]]; then
+      warn "Segment ${seg_num} ignoré : aucune piste dans ce segment"
+      rm -rf "$out_dir"
+      OUTPUT_DIRS=("${OUTPUT_DIRS[@]::${#OUTPUT_DIRS[@]}-1}")
+    else
+      ok "→ ${out_dir_name}/ (${mp3_count} piste(s))"
+    fi
   done
 }
 
