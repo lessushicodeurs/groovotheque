@@ -103,7 +103,7 @@ let loopFieldCommitting = false  // prevents blur re-running commit after Enter
 let currentTempo    = 100  // percent (50–120)
 
 function slugToName(slug) {
-  return slug.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+  return slug.replace(/_/g, ' ')
 }
 
 // mm:ss.ms with 3 decimal digits — robust against floating-point rounding

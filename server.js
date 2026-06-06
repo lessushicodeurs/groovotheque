@@ -68,7 +68,7 @@ const GROOVES_DIR = path.resolve(__dirname, 'grooves');
 
 function getTrackDisplayName(filename) {
   const withoutExt = filename.replace(/\.[^.]+$/, '');
-  return withoutExt.replace(/^\d+[-_]/, '').replace(/[-_]/g, ' ');
+  return withoutExt.replace(/^\d+_/, '').replace(/_/g, ' ');
 }
 
 function trackSortKey(filename) {
@@ -94,10 +94,10 @@ app.get('/vendor/marked.esm.js', (req, res) => {
 app.get('/api/grooves', async (req, res) => {
   try {
     const entries = await fs.promises.readdir(GROOVES_DIR, { withFileTypes: true });
-    const dirs = entries.filter(e => e.isDirectory());
+    const dirs = entries.filter(e => e.isDirectory() && !e.name.endsWith('~'));
     const grooves = (await Promise.all(dirs.map(async entry => {
       const slug = entry.name;
-      const name = slug.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      const name = slug.replace(/_/g, ' ');
       try {
         const files = await fs.promises.readdir(path.join(GROOVES_DIR, slug));
         const hasMd = files.some(f => f.endsWith('.md'));
@@ -136,7 +136,7 @@ app.get('/api/grooves/:name', async (req, res) => {
   try {
     const entries = await fs.promises.readdir(grooveDir, { withFileTypes: true });
     const audioEntries = entries.filter(
-      e => e.isFile() && AUDIO_EXTENSIONS.has(path.extname(e.name).toLowerCase())
+      e => e.isFile() && !e.name.endsWith('~') && AUDIO_EXTENSIONS.has(path.extname(e.name).toLowerCase())
     );
     audioEntries.sort((a, b) => {
       const ka = trackSortKey(a.name);
@@ -187,7 +187,7 @@ app.get('/api/grooves/:name/download', async (req, res) => {
   try {
     const entries = await fs.promises.readdir(grooveDir, { withFileTypes: true });
     for (const entry of entries) {
-      if (!entry.isFile()) continue;
+      if (!entry.isFile() || entry.name.endsWith('~')) continue;
       const ext = path.extname(entry.name).toLowerCase();
       if (AUDIO_EXTENSIONS.has(ext) || ext === '.md') {
         archive.file(path.join(grooveDir, entry.name), { name: entry.name });
