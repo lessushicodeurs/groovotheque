@@ -87,6 +87,7 @@ const trackStates  = []   // { volume, muted, soloed }
 const trackRegions = []   // RegionsPlugin instance per track
 const volSliders   = []   // input[type=range] per track, for mix restore
 let currentTracks  = []   // groove.tracks list, set at init time
+let pendingLoop    = null // loop à restaurer dès que la waveform est prête
 let isPlaying       = false
 let seekGen         = 0    // increments on every seek; prevents stale async play() callbacks
 let totalDuration   = 0
@@ -439,6 +440,10 @@ function buildTrackRow(track, idx) {
     ws.on('ready', () => {
       totalDuration = ws.getDuration()
       durationEl.textContent = formatTimecode(totalDuration)
+      if (pendingLoop) {
+        syncRegionToAll(pendingLoop.in, pendingLoop.out)
+        pendingLoop = null
+      }
     })
 
     ws.on('timeupdate', (t) => {
@@ -498,7 +503,8 @@ async function loadMix(tracks) {
       applyVolumes()
     }
     if (mix.loop && typeof mix.loop.in === 'number' && typeof mix.loop.out === 'number') {
-      syncRegionToAll(mix.loop.in, mix.loop.out)
+      // La waveform n'est pas encore rendue ici — on diffère à l'événement ready
+      pendingLoop = { in: mix.loop.in, out: mix.loop.out }
     }
   } catch { /* chargement silencieux */ }
 }
