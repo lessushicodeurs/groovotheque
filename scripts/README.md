@@ -178,6 +178,54 @@ Trim additionnel appliqué **après** la normalisation. Permet d'ajuster finemen
 - Valeur négative → atténue la piste
 - Un **limiteur safety automatique** à -1 dBFS est appliqué : si `gain_db` pousserait le pic au-delà de -1 dBFS, le gain est réduit en conséquence (avec un avertissement dans la console)
 
+#### `compression` *(bloc optionnel)*
+
+Surcharge les paramètres de compression globaux (`audio.compression`) pour cette piste uniquement. Toutes les clés sont optionnelles : seules les valeurs présentes remplacent le global.
+
+```yaml
+tracks:
+  per_track:
+    "01 BASS":
+      compression:
+        threshold_db: -30   # seuil en dBFS
+        ratio: 5            # ratio de compression
+        attack_ms: 30       # temps d'attaque en ms
+        release_ms: 150     # temps de relâchement en ms
+        knee_db: 4          # douceur de la transition
+```
+
+**Effets pratiques selon les paramètres :**
+
+| Paramètre | Diminuer | Augmenter |
+|-----------|---------|----------|
+| `threshold_db` | Compresse plus tôt (plus de signal affecté) | Compresse seulement les pics |
+| `ratio` | Compression plus douce | Compression plus agressive / effet limiteur |
+| `attack_ms` | Attrape les transitoires dès le début | Laisse passer l'attaque avant de comprimer (son plus naturel) |
+| `release_ms` | Son plus "pompant", réaction rapide | Compression plus lisse, moins audible |
+| `knee_db` | Transition abrupte au seuil | Transition progressive (son plus naturel) |
+
+**Recettes par type d'instrument :**
+
+*Basse (DI ou micro ampli)* — apporter de la tenue et réduire les variations de jeu :
+```yaml
+compression:
+  threshold_db: -30   # seuil bas : toute la dynamique est contrôlée
+  ratio: 5
+  attack_ms: 30       # laisse l'attaque de plectre passer
+  release_ms: 150
+  knee_db: 4
+```
+
+*Batterie (mix kick + caisse)* — punch et nivellement des coups :
+```yaml
+compression:
+  threshold_db: -24
+  ratio: 6
+  attack_ms: 8        # attaque rapide pour attraper le transitoire
+  release_ms: 80      # relâchement court = son plus percutant
+  knee_db: 3
+```
+
 #### Exemple complet et commenté
 
 ```yaml
@@ -203,6 +251,10 @@ tracks:
 
     # Claviers : peak standard, aucun réglage nécessaire (valeurs globales utilisées)
     # "04 KEYS MIX": absente → utilise audio.normalize_peak_db = -1
+
+    # Guitare lead : compression globale, juste un trim pour équilibrer
+    "03 LEAD":
+      gain_db: -2
 ```
 
 #### Guide de tuning rapide

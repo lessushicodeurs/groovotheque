@@ -55,6 +55,11 @@ MIX_ALL_SOURCES=()
 declare -A TRACK_NORMALIZE_MODE=()   # peak | rms
 declare -A TRACK_NORMALIZE_DB=()     # cible dBFS (peak ou rms selon mode)
 declare -A TRACK_GAIN_DB=()          # gain additionnel après normalisation
+declare -A TRACK_COMP_THRESHOLD=()   # seuil compresseur en dBFS (override global)
+declare -A TRACK_COMP_RATIO=()       # ratio
+declare -A TRACK_COMP_ATTACK=()      # attaque ms
+declare -A TRACK_COMP_RELEASE=()     # relâchement ms
+declare -A TRACK_COMP_KNEE=()        # knee dB
 
 load_config_python() {
   local cfg="$1"
@@ -101,10 +106,16 @@ per_track = tracks.get('per_track') or {}
 print(f"PER_TRACK_COUNT='{len(per_track)}'")
 for i, (name, settings) in enumerate(per_track.items()):
     s = settings or {}
+    c = s.get('compression') or {}
     print(f"PER_TRACK_{i}_NAME='{sh(name)}'")
     print(f"PER_TRACK_{i}_MODE='{sh(s.get('normalize_mode','peak'))}'")
     print(f"PER_TRACK_{i}_DB='{sh(s.get('normalize_db',''))}'")
     print(f"PER_TRACK_{i}_GAIN='{sh(s.get('gain_db',0))}'")
+    print(f"PER_TRACK_{i}_COMP_THRESHOLD='{sh(c.get('threshold_db',''))}'")
+    print(f"PER_TRACK_{i}_COMP_RATIO='{sh(c.get('ratio',''))}'")
+    print(f"PER_TRACK_{i}_COMP_ATTACK='{sh(c.get('attack_ms',''))}'")
+    print(f"PER_TRACK_{i}_COMP_RELEASE='{sh(c.get('release_ms',''))}'")
+    print(f"PER_TRACK_{i}_COMP_KNEE='{sh(c.get('knee_db',''))}'")
 PYEOF
   )"
 }
@@ -160,13 +171,22 @@ load_config() {
   TRACK_GAIN_DB=()
   local ptc="${PER_TRACK_COUNT:-0}"
   for ((i=0; i<ptc; i++)); do
-    local n_var="PER_TRACK_${i}_NAME"
-    local m_var="PER_TRACK_${i}_MODE"
-    local d_var="PER_TRACK_${i}_DB"
-    local g_var="PER_TRACK_${i}_GAIN"
-    TRACK_NORMALIZE_MODE["${!n_var}"]="${!m_var}"
-    TRACK_NORMALIZE_DB["${!n_var}"]="${!d_var}"
-    TRACK_GAIN_DB["${!n_var}"]="${!g_var}"
+    local n_var="PER_TRACK_${i}_NAME"   m_var="PER_TRACK_${i}_MODE"
+    local d_var="PER_TRACK_${i}_DB"     g_var="PER_TRACK_${i}_GAIN"
+    local ct_var="PER_TRACK_${i}_COMP_THRESHOLD"
+    local cr_var="PER_TRACK_${i}_COMP_RATIO"
+    local ca_var="PER_TRACK_${i}_COMP_ATTACK"
+    local crl_var="PER_TRACK_${i}_COMP_RELEASE"
+    local ck_var="PER_TRACK_${i}_COMP_KNEE"
+    local name="${!n_var}"
+    TRACK_NORMALIZE_MODE["$name"]="${!m_var}"
+    TRACK_NORMALIZE_DB["$name"]="${!d_var}"
+    TRACK_GAIN_DB["$name"]="${!g_var}"
+    TRACK_COMP_THRESHOLD["$name"]="${!ct_var}"
+    TRACK_COMP_RATIO["$name"]="${!cr_var}"
+    TRACK_COMP_ATTACK["$name"]="${!ca_var}"
+    TRACK_COMP_RELEASE["$name"]="${!crl_var}"
+    TRACK_COMP_KNEE["$name"]="${!ck_var}"
   done
 }
 
@@ -371,12 +391,21 @@ compress_normalize() {
   for ((ti=0; ti<${#ALL_TRACK_PATHS[@]}; ti++)); do
     local src="${ALL_TRACK_PATHS[$ti]}"
     local name="${ALL_TRACK_NAMES[$ti]}"
-    log "  Compression : ${name}"
+    # Paramètres de compression : per-track en priorité, sinon global
+    local c_thr="${TRACK_COMP_THRESHOLD[$name]:-$COMP_THRESHOLD}"
+    local c_rat="${TRACK_COMP_RATIO[$name]:-$COMP_RATIO}"
+    local c_atk="${TRACK_COMP_ATTACK[$name]:-$COMP_ATTACK}"
+    local c_rel="${TRACK_COMP_RELEASE[$name]:-$COMP_RELEASE}"
+    local c_kne="${TRACK_COMP_KNEE[$name]:-$COMP_KNEE}"
+
+    local comp_label=""
+    [[ -n "${TRACK_COMP_THRESHOLD[$name]:-}" ]] && comp_label=" (config piste)"
+    log "  Compression${comp_label} : ${name} [thr=${c_thr}dB ratio=${c_rat} atk=${c_atk}ms rel=${c_rel}ms]"
 
     local compressed="${WORK_DIR}/compressed/${name}.flac"
     ffmpeg -y -hide_banner -loglevel warning \
       -i "$src" \
-      -af "acompressor=threshold=${COMP_THRESHOLD}dB:ratio=${COMP_RATIO}:attack=${COMP_ATTACK}:release=${COMP_RELEASE}:knee=${COMP_KNEE}dB:makeup=1" \
+      -af "acompressor=threshold=${c_thr}dB:ratio=${c_rat}:attack=${c_atk}:release=${c_rel}:knee=${c_kne}dB:makeup=1" \
       "$compressed"
 
     # Détection des niveaux (peak + mean en une passe)

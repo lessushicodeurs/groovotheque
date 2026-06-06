@@ -1,6 +1,6 @@
 audio:
   mp3_bitrate: "320k"
-  normalize_peak_db: -1   # cible de peak par défaut pour toutes les pistes
+  normalize_peak_db: -1
   compression:
     threshold_db: -20
     ratio: 3
@@ -9,21 +9,28 @@ audio:
     knee_db: 6
 
 tracks:
-  # Réglages par piste (optionnel — remplace les valeurs globales)
-  # normalize_mode: peak (défaut) | rms
-  #   peak → cible le pic maximum (normalize_peak_db global par défaut)
-  #   rms  → cible le niveau moyen perçu (meilleur pour basse et batterie)
-  # normalize_db: cible en dBFS (peak ou rms selon le mode)
-  # gain_db: gain additionnel après normalisation (trim de mix, peut dépasser 0 dBFS
-  #          — le script applique un limiteur safety à -1 dBFS automatiquement)
   per_track:
+
     "01 BASS":
       normalize_mode: rms
       normalize_db: -18
+      compression:
+        threshold_db: -30   # seuil plus bas → compresse plus tôt, booste les passages doux
+        ratio: 5            # plus de tenue, moins de dynamique
+        attack_ms: 30       # laisse passer l'attaque de plectre avant de comprimer
+        release_ms: 150
+        knee_db: 4
+
     "11 DRUMS MIX":
       normalize_mode: rms
       normalize_db: -12
       gain_db: 2
+      compression:
+        threshold_db: -24   # seuil plus bas que global
+        ratio: 6            # ratio assez fort pour niveler les coups
+        attack_ms: 8        # attaque rapide pour attraper les transitoires de kick
+        release_ms: 80      # relâchement court pour le punch
+        knee_db: 3
 
   mixes:
     - output: "04 KEYS MIX"
