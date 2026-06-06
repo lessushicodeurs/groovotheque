@@ -1,0 +1,48 @@
+audio:
+  mp3_bitrate: "320k"
+  normalize_peak_db: -1
+
+tracks:
+  per_track:
+
+    "01 BASS":
+      normalize_mode: rms
+      normalize_db: -18
+      gain_db: 2
+
+    "02 GUIT":
+      gain_db: -8
+
+    "03 LEAD":
+      compression:
+        threshold_db: -20
+        ratio: 3
+        attack_ms: 20
+        release_ms: 200
+        knee_db: 6
+      gain_db: 2
+
+    "04 KEYS MIX":
+      gain_db: -14
+
+    "11 DRUMS MIX":
+      normalize_mode: rms
+      normalize_db: -12
+      gain_db: 2
+
+  mixes:
+    - output: "04 KEYS MIX"
+      sources:
+        - file: "04 KEYS L"
+          pan: -100
+        - file: "05 KEYS R"
+          pan: 100
+    - output: "11 DRUMS MIX"
+      sources:
+        - file: "11 DR KICK"
+          pan: 20
+        - file: "12 DR HH SD"
+          pan: -20
+
+  exclude:
+    - "20 AMBIANCE"
