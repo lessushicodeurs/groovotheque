@@ -36,12 +36,17 @@ const btnLoop          = document.getElementById('btn-loop')
 const btnLoopGoIn      = document.getElementById('btn-loop-go-in')
 const btnLoopGoOut     = document.getElementById('btn-loop-go-out')
 const btnLoopClear     = document.getElementById('btn-loop-clear')
+const btnPrev          = document.getElementById('btn-prev')
+const btnNext          = document.getElementById('btn-next')
 const btnSaveMix       = document.getElementById('btn-save-mix')
 const btnDownloadAll   = document.getElementById('btn-download-all')
 const tempoSliderEl    = document.getElementById('tempo-slider')
 const tempoValueEl     = document.getElementById('tempo-value')
 const tempoBadgeEl     = document.getElementById('tempo-badge')
 const tempoPresets     = Array.from(document.querySelectorAll('.tempo-preset'))
+
+let prevSlug = null
+let nextSlug = null
 
 let loadedCount = 0
 let totalTracks = 0
@@ -574,11 +579,35 @@ async function saveMix() {
   }
 }
 
+async function fetchNeighbours() {
+  try {
+    const res = await fetch('/api/grooves')
+    if (!res.ok) return
+    const grooves = await res.json()
+    const idx = grooves.findIndex(g => g.slug === grooveSlug)
+    if (idx === -1) return
+    prevSlug = idx > 0 ? grooves[idx - 1].slug : null
+    nextSlug = idx < grooves.length - 1 ? grooves[idx + 1].slug : null
+  } catch {
+    // fetch échoue silencieusement — boutons restent disabled
+  }
+  btnPrev.disabled = prevSlug === null
+  btnNext.disabled = nextSlug === null
+  btnPrev.addEventListener('click', () => {
+    if (prevSlug) location.href = '/player.html?groove=' + encodeURIComponent(prevSlug)
+  })
+  btnNext.addEventListener('click', () => {
+    if (nextSlug) location.href = '/player.html?groove=' + encodeURIComponent(nextSlug)
+  })
+}
+
 async function init() {
   if (!grooveSlug) {
     showFatalError('Aucun groove spécifié.')
     return
   }
+
+  fetchNeighbours()
 
   try {
     const res = await fetch(`/api/grooves/${encodeURIComponent(grooveSlug)}`)
