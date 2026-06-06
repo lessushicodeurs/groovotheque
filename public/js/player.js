@@ -540,11 +540,13 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
 
   const sidebarCtrl = document.createElement('div')
   sidebarCtrl.className = 'track-sidebar-ctrl'
-  sidebarCtrl.append(btnMute, btnSolo, volSlider)
+  sidebarCtrl.append(btnMute, btnSolo)
 
-  // Pan knob appended right after the volume slider
+  // Pan knob between Solo and volume fader
   const panKnob = new PanKnob(sidebarCtrl, color)
   panKnobs.push(panKnob)
+
+  sidebarCtrl.append(volSlider)
 
   sidebar.append(sidebarTop, sidebarCtrl)
 
