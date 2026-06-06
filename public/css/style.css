@@ -893,7 +893,14 @@ body.tab-no-scroll { overflow: hidden; }
   overflow: hidden;
   position: relative;
   background: #fff; /* AlphaTab renders on white background */
+  scrollbar-width: none;       /* Firefox */
+  -ms-overflow-style: none;    /* IE/Edge */
 }
+.tab-content::-webkit-scrollbar { display: none; } /* Chrome/Safari */
+
+/* Strip → scroll horizontal ; Fullscreen → scroll vertical */
+.tab-drawer--strip      .tab-content { overflow-x: auto; overflow-y: hidden; }
+.tab-drawer--fullscreen .tab-content { overflow-y: auto; overflow-x: hidden; }
 
 /* AlphaTab cursor highlight */
 .tab-content .at-cursor-bar {

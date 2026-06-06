@@ -1119,6 +1119,7 @@ async function initTabDrawer(tabFile) {
       enableCursor:         true,
       enableUserInteraction: true,
       soundFont:            `${AT_BASE}/soundfont/sonivox.sf2`,
+      scrollElement:        '#tab-content',
     },
     display: {
       layoutMode:   alphaTabMod.LayoutMode.Horizontal,
@@ -1130,13 +1131,8 @@ async function initTabDrawer(tabFile) {
   window.__alphaTabApi = alphaTabApi
   alphaTabApi.error.on(err => console.error('[AlphaTab]', err))
 
-  // Auto-fit strip height + annuler tout scroll parasite déclenché par le re-render
+  // Auto-fit strip height to rendered SVG
   alphaTabApi.renderFinished.on(() => {
-    // En mode élargi, le re-render peut déclencher un scroll : annuler
-    if (tabState === 'fullscreen') {
-      window.scrollTo({ top: 0 })
-    }
-
     // Ajuster la hauteur strip au SVG rendu
     if (tabState === 'strip') {
       const svg = tabContentEl.querySelector('svg')
