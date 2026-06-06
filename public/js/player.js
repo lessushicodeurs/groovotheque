@@ -1121,7 +1121,7 @@ async function initTabDrawer(tabFile) {
       enableUserInteraction: true,
       soundFont:            `${AT_BASE}/soundfont/sonivox.sf2`,
       scrollElement:        '#tab-content',
-      scrollMode: "Continuous",
+      scrollMode:           1,
     },
     display: {
       layoutMode:   alphaTabMod.LayoutMode.Horizontal,
