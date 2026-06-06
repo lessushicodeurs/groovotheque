@@ -433,7 +433,7 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
     interact: true,
     plugins,
   }
-  if (cachedPeaks) wsOpts.peaks = cachedPeaks
+  if (cachedPeaks?.length > 0) wsOpts.peaks = cachedPeaks
   const ws = WaveSurfer.create(wsOpts)
 
   const state = { volume: 1, muted: false, soloed: false }
@@ -469,7 +469,7 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
   // ── Load bar + peaks save + timecode (track 0) ─
   ws.on('ready', () => {
     markSegmentLoaded(idx, TRACK_COLORS[idx % TRACK_COLORS.length])
-    if (!cachedPeaks) {
+    if (!cachedPeaks || cachedPeaks.length === 0) {
       // Peaks were just computed from audio — persist them for future loads
       postPeaks(grooveSlug, track.filename, ws.exportPeaks())
     }
@@ -620,9 +620,9 @@ async function init() {
     )
 
     currentTracks = groove.tracks
-    for (const track of groove.tracks) {
-      buildTrackRow(track, track.index, cachedPeaksArr[track.index])
-    }
+    groove.tracks.forEach((track, i) => {
+      buildTrackRow(track, track.index, cachedPeaksArr[i])
+    })
 
     await loadMix(groove.tracks)
 

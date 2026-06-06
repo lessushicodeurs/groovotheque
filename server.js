@@ -7,6 +7,9 @@ const { ZipArchive } = require('archiver');
 
 const app = express();
 const PORT = process.env.PORT || 3099;
+// Répertoire des peaks pré-calculés. Chaque fichier : cache/<groove>/<audio>.peaks.json
+// Invalidation manuelle : si un fichier audio est remplacé via FTP, supprimer le .peaks.json
+// correspondant dans cache/ pour forcer le recalcul au prochain chargement.
 const CACHE_DIR = path.resolve(__dirname, 'cache');
 
 function loadUsers() {
@@ -277,11 +280,11 @@ app.post('/api/peaks/:groove/:file', async (req, res) => {
   if (!peaks || !Array.isArray(peaks)) {
     return res.status(400).json({ error: 'peaks doit être un tableau' });
   }
-  const bodyStr = JSON.stringify({ peaks });
-  if (bodyStr.length > 10 * 1024 * 1024) {
-    return res.status(400).json({ error: 'Peaks trop volumineux (max 10MB)' });
-  }
   try {
+    const bodyStr = JSON.stringify({ peaks });
+    if (bodyStr.length > 10 * 1024 * 1024) {
+      return res.status(400).json({ error: 'Peaks trop volumineux (max 10MB)' });
+    }
     await fs.promises.mkdir(path.dirname(peaksPath), { recursive: true });
     await fs.promises.writeFile(peaksPath, bodyStr, 'utf8');
     res.status(201).json({ ok: true });

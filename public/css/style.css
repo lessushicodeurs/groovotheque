@@ -67,7 +67,22 @@ body {
   top: 0;
   height: 100%;
   background: #2a2a2a;
+  overflow: hidden;
   transition: background-color 400ms ease;
+}
+
+/* Shimmer animé sur chaque segment en cours de décodage */
+.load-bar-segment:not([data-loaded])::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent 0%, #4a4a4a 50%, transparent 100%);
+  animation: bar-shimmer 1.4s ease-in-out infinite;
+}
+
+/* Shimmer retiré dès que le segment est chargé */
+.load-bar-segment[data-loaded]::after {
+  display: none;
 }
 
 /* ── Main overlay ────────────────────────── */
