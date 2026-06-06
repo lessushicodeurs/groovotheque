@@ -95,7 +95,8 @@ const trackRegions = []   // RegionsPlugin instance per track
 const volSliders   = []   // input[type=range] per track, for mix restore
 const gainNodes    = []   // GainNode per track (volume in Web Audio graph)
 const panNodes     = []   // StereoPannerNode per track
-const panKnobs     = []   // PanKnob UI per track
+const panKnobs       = []   // PanKnob UI per track
+const webAudioRouted = []   // true if MediaElementSource successfully connected
 let currentTracks  = []   // groove.tracks list, set at init time
 let pendingLoop    = null // loop à restaurer dès que la waveform est prête
 let isPlaying       = false
@@ -120,6 +121,7 @@ class PanKnob {
     this.cx    = 12
     this.cy    = 12
     this.r     = 8
+    this._p12  = { x: 12, y: 4 }  // pre-computed 12 o'clock (cx=12, cy-r=4)
     this.color = color || '#888'
     this._build(container)
     this._setupInteraction()
@@ -191,7 +193,7 @@ class PanKnob {
     if (Math.abs(pan) < 0.005) {
       this.valuePath.removeAttribute('d')
     } else {
-      const p0    = this._panToPoint(0)  // 12 o'clock
+      const p0    = this._p12             // 12 o'clock (pre-computed)
       const p1    = this._panToPoint(pan)
       const sweep = pan > 0 ? 1 : 0     // clockwise for R
       // Arc spans |pan|*150° — always < 180°, so large-arc = 0
@@ -262,6 +264,7 @@ class PanKnob {
 
 function setPan(idx, value) {
   if (panNodes[idx]) panNodes[idx].pan.value = value
+  panKnobs[idx]?.setValue(value)
 }
 
 // 6.3 — Peaks cache helpers
@@ -338,15 +341,18 @@ function applyTempo(pct) {
   })
 }
 
-// Volume is controlled via GainNodes in the Web Audio graph (not ws.setVolume).
-// Chain per track: MediaElementSource → GainNode → StereoPannerNode → destination.
+// Volume is controlled via GainNodes when Web Audio routing succeeded, or via
+// ws.setVolume() as fallback. Chain: MediaElementSource → GainNode → StereoPannerNode → dest.
 function applyVolumes() {
   const anySolo = trackStates.some(s => s.soloed)
   gainNodes.forEach((gainNode, i) => {
     const s = trackStates[i]
-    gainNode.gain.value = anySolo
-      ? (s.soloed ? s.volume : 0)
-      : (s.muted  ? 0 : s.volume)
+    const vol = anySolo ? (s.soloed ? s.volume : 0) : (s.muted ? 0 : s.volume)
+    if (webAudioRouted[i]) {
+      gainNode.gain.value = vol
+    } else {
+      wavesurfers[i]?.setVolume(vol)
+    }
   })
 }
 
@@ -622,14 +628,18 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
   gainNodes.push(gainNode)
   panNodes.push(panNode)
 
+  let routed = false
   try {
     const mediaEl = ws.getMediaElement()
+    if (!(mediaEl instanceof HTMLMediaElement))
+      throw new Error(`getMediaElement() returned unexpected type: ${typeof mediaEl}`)
     sharedAudioCtx.createMediaElementSource(mediaEl).connect(gainNode)
+    routed = true
   } catch (err) {
-    // getMediaElement() may not be available if WaveSurfer uses WebAudio backend.
-    // Fall back silently — volume knob still controls through WaveSurfer.
+    // applyVolumes() will fall back to ws.setVolume() for this track.
     console.warn('[pan] MediaElement routing unavailable, using WaveSurfer volume:', err)
   }
+  webAudioRouted.push(routed)
 
   const state = { volume: 1, muted: false, soloed: false }
   trackStates.push(state)
@@ -754,7 +764,6 @@ async function loadMix(tracks) {
         }
         if (pan !== null) {
           setPan(i, pan)
-          panKnobs[i]?.setValue(pan)
         }
       })
       applyVolumes()
@@ -772,7 +781,7 @@ async function saveMix() {
   currentTracks.forEach((track, i) => {
     mixData.tracks[track.filename] = {
       volume: Math.round(trackStates[i].volume * 100),
-      pan:    Math.round((panNodes[i]?.pan.value ?? 0) * 100) / 100,
+      pan:    Math.round((panKnobs[i]?.getValue() ?? 0) * 100) / 100,
     }
   })
   if (activeLoopIn !== null && activeLoopOut !== null) {
