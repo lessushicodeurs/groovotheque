@@ -464,11 +464,16 @@ function buildTrackRow(track, idx) {
       const curTime = Math.max(0, Math.min(1, (me.clientX - rect2.left) / rect2.width)) * totalDuration
       const s   = Math.min(dragPreview.startTime, curTime)
       const end = Math.max(dragPreview.startTime, curTime)
-      // Mise à jour CSS directe : pas de recreate, pas de flickering
+      // setOptions() appelle renderPosition() interne (left+right, pas width)
       dragPreview.mirrors.forEach((m) => {
-        if (!m.element) return
-        m.element.style.left  = `${(s / totalDuration) * 100}%`
-        m.element.style.width = `${((end - s) / totalDuration) * 100}%`
+        if (!m) return
+        if (typeof m.setOptions === 'function') {
+          m.setOptions({ start: s, end })
+        } else if (m.element) {
+          m.element.style.left  = `${(s / totalDuration) * 100}%`
+          m.element.style.right = `${Math.max(0, 100 - (end / totalDuration) * 100)}%`
+          m.element.style.width = ''
+        }
       })
     }
 
