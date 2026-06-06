@@ -421,71 +421,11 @@ function buildTrackRow(track, idx) {
   ws.setPlaybackRate(currentTempo / 100, true)
 
   // ── Drag-to-create loop regions ───────────────
-  // region-created ne fire qu'au pointerup (fin de drag). Pour afficher la
-  // zone sur toutes les pistes dès le début, on intercepte le pointermove
-  // et on met à jour les éléments DOM des régions miroir directement.
+  // Creating a region on any track syncs to all other tracks.
   regionsPlugin.enableDragSelection({ color: 'rgba(255,255,255,0.2)' })
   regionsPlugin.on('region-created', (region) => {
     syncRegionToAll(region.start, region.end)
   })
-
-  let dragPreview = null  // état du drag en cours sur cette piste
-
-  waveEl.addEventListener('pointerdown', (e) => {
-    if (e.button !== 0 || !totalDuration) return
-    const rect = waveEl.getBoundingClientRect()
-    dragPreview = {
-      startTime: Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)) * totalDuration,
-      startX: e.clientX,
-      mirrors: new Map(),  // trackIndex → Region
-      active: false,
-    }
-
-    function onMove(me) {
-      if (!dragPreview) return
-      if (!dragPreview.active) {
-        if (Math.abs(me.clientX - dragPreview.startX) < 3) return
-        dragPreview.active = true
-        // Créer les régions miroir sur toutes les autres pistes
-        isSyncingRegion = true
-        trackRegions.forEach((rp, i) => {
-          if (i === idx) return
-          rp.clearRegions()
-          const m = rp.addRegion({
-            start: dragPreview.startTime, end: dragPreview.startTime,
-            color: 'rgba(255,255,255,0.2)', drag: false, resize: false,
-          })
-          dragPreview.mirrors.set(i, m)
-        })
-        isSyncingRegion = false
-      }
-      if (!dragPreview.mirrors.size) return
-      const rect2 = waveEl.getBoundingClientRect()
-      const curTime = Math.max(0, Math.min(1, (me.clientX - rect2.left) / rect2.width)) * totalDuration
-      const s   = Math.min(dragPreview.startTime, curTime)
-      const end = Math.max(dragPreview.startTime, curTime)
-      // setOptions() appelle renderPosition() interne (left+right, pas width)
-      dragPreview.mirrors.forEach((m) => {
-        if (!m) return
-        if (typeof m.setOptions === 'function') {
-          m.setOptions({ start: s, end })
-        } else if (m.element) {
-          m.element.style.left  = `${(s / totalDuration) * 100}%`
-          m.element.style.right = `${Math.max(0, 100 - (end / totalDuration) * 100)}%`
-          m.element.style.width = ''
-        }
-      })
-    }
-
-    function onUp() {
-      dragPreview = null
-      document.removeEventListener('pointermove', onMove)
-      document.removeEventListener('pointerup', onUp)
-    }
-
-    document.addEventListener('pointermove', onMove)
-    document.addEventListener('pointerup', onUp)
-  }, { passive: true })
 
   // ── Seek sync ─────────────────────────────────
   // The 'interaction' event is handled separately from performSeek() because
