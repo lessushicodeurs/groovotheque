@@ -15,6 +15,8 @@ const TRACK_COLORS = [
   '#ef9a9a',
 ]
 
+const isMobile = window.innerWidth < 768
+
 // Shared Web Audio context for pan/gain routing across all tracks.
 // Created eagerly; browsers suspend it until first user gesture.
 const sharedAudioCtx = new AudioContext()
@@ -593,13 +595,16 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
       labelColor: '#999',
       labelSize: '10px',
     }),
-    MinimapPlugin.create({
+  ]
+
+  if (!isMobile) {
+    plugins.push(MinimapPlugin.create({
       height: 22,
       waveColor,
       progressColor,
       container: minimapRow,
-    }),
-  ]
+    }))
+  }
 
   if (idx === 0) {
     plugins.push(TimelinePlugin.create({
@@ -617,8 +622,8 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
     waveColor,
     progressColor,
     url: track.url,
-    height: 64,
-    barWidth: 2,
+    height: isMobile ? 48 : 64,
+    barWidth: isMobile ? 1 : 2,
     barGap: 1,
     barRadius: 2,
     normalize: true,
@@ -910,6 +915,15 @@ async function init() {
       const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
       performSeek(ratio * totalDuration)
     })
+
+    seekBarEl.addEventListener('touchstart', (e) => {
+      if (!totalDuration) return
+      e.preventDefault()
+      const touch = e.touches[0]
+      const rect = seekBarEl.getBoundingClientRect()
+      const ratio = Math.max(0, Math.min(1, (touch.clientX - rect.left) / rect.width))
+      performSeek(ratio * totalDuration)
+    }, { passive: false })
 
     // ── Loop button + navigation ───────────────
     btnLoop.addEventListener('click', () => setLoopEnabled(!loopEnabled))

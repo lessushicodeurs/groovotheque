@@ -39,6 +39,17 @@ function positionTooltip(card) {
   const vh = window.innerHeight;
   const gap = 12;
 
+  if (vw < 768) {
+    tooltipEl.style.width = `${vw - 2 * gap}px`;
+    tooltipEl.style.left = `${gap}px`;
+    const below = rect.bottom + gap;
+    tooltipEl.style.top = `${below + tooltipEl.offsetHeight <= vh - gap
+      ? below
+      : Math.max(gap, rect.top - tooltipEl.offsetHeight - gap)}px`;
+    return;
+  }
+
+  tooltipEl.style.width = '';
   let left = rect.right + gap;
   let top = rect.top;
 
@@ -99,10 +110,29 @@ function createCard(groove) {
     card.addEventListener('mouseleave', () => {
       if (activeCard === card) hideTooltip();
     });
+
+    // Touch: premier tap = tooltip, deuxième tap = navigation
+    card.addEventListener('touchend', (e) => {
+      const tooltipVisible = !tooltipEl.hasAttribute('hidden') && activeCard === card;
+      if (!tooltipVisible) {
+        e.preventDefault();
+        activeCard = card;
+        showTooltip(card, groove.slug);
+      }
+      // sinon: laisser le comportement par défaut → navigation
+    }, { passive: false });
   }
 
   return card;
 }
+
+// Ferme le tooltip si le tap est en dehors de la carte active
+document.addEventListener('touchstart', (e) => {
+  if (activeCard && !activeCard.contains(e.target)) hideTooltip();
+}, { passive: true });
+
+// Ferme le tooltip au scroll (évite qu'il reste fixé à l'écran)
+document.addEventListener('scroll', hideTooltip, { passive: true });
 
 async function init() {
   try {
