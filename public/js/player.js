@@ -473,7 +473,7 @@ function buildTrackRow(track, idx) {
       // Loop rebounding: when playhead reaches loop out, jump to loop in.
       // loopJumping flag prevents double-trigger when timeupdate fires again
       // before setTime() has advanced the playhead past activeLoopOut.
-      if (loopEnabled && activeLoopOut !== null && t >= activeLoopOut && !loopJumping) {
+      if (loopEnabled && activeLoopOut !== null && t >= activeLoopOut && !loopJumping && isPlaying) {
         loopJumping = true
         seekAllTo(activeLoopIn ?? 0)
         setTimeout(() => { loopJumping = false }, 50)
