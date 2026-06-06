@@ -19,7 +19,12 @@
   <main id="player-main" class="loading">
     <div id="tracks-container" class="tracks-container" hidden></div>
     <div id="minimap-container" class="minimap-container" hidden></div>
-    <div id="transport" class="transport" hidden>
+  </main>
+  <div id="transport-drawer" class="transport-drawer" hidden>
+    <button id="transport-handle" class="transport-handle" aria-expanded="true" aria-label="Ouvrir/fermer le transport">
+      <span class="transport-handle-pill"></span>
+    </button>
+    <div id="transport" class="transport">
       <div class="transport-row">
         <button id="btn-play" class="transport-btn" aria-label="Lecture / Pause">▶</button>
         <button id="btn-stop" class="transport-btn transport-btn--stop" aria-label="Stop">■</button>
@@ -58,7 +63,7 @@
         </div>
       </div>
     </div>
-  </main>
+  </div>
   <script type="module" src="/js/player.js"></script>
 </body>
 </html>

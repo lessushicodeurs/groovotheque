@@ -29,6 +29,8 @@ const loadBarEl        = document.getElementById('load-bar')
 const mainEl           = document.getElementById('player-main')
 const tracksContainer  = document.getElementById('tracks-container')
 const minimapContainer = document.getElementById('minimap-container')
+const drawerEl         = document.getElementById('transport-drawer')
+const handleEl         = document.getElementById('transport-handle')
 const transportEl      = document.getElementById('transport')
 const btnPlay          = document.getElementById('btn-play')
 const btnStop          = document.getElementById('btn-stop')
@@ -123,6 +125,35 @@ let isSyncingRegion = false
 let loopJumping     = false  // prevents double-trigger of loop rebound
 let loopFieldCommitting = false  // prevents blur re-running commit after Enter
 let currentTempo    = 100  // percent (50–120)
+let drawerOpen      = true
+
+// ── Drawer (mobile bottom sheet) ──────────────────────────────────────────
+
+function setDrawerOpen(open) {
+  drawerOpen = open
+  drawerEl.classList.toggle('drawer-closed', !open)
+  handleEl.setAttribute('aria-expanded', String(open))
+}
+
+function initDrawer() {
+  if (!isMobile) return
+  let touchStartY = 0
+
+  handleEl.addEventListener('touchstart', (e) => {
+    touchStartY = e.touches[0].clientY
+  }, { passive: true })
+
+  handleEl.addEventListener('touchend', (e) => {
+    e.preventDefault()
+    const dy = e.changedTouches[0].clientY - touchStartY
+    if      (dy >  40) setDrawerOpen(false)
+    else if (dy < -40) setDrawerOpen(true)
+    else               setDrawerOpen(!drawerOpen)
+  }, { passive: false })
+
+  // Keyboard/desktop fallback (handle visible only on mobile via CSS)
+  handleEl.addEventListener('click', () => setDrawerOpen(!drawerOpen))
+}
 
 // ── PanKnob ────────────────────────────────────────────────────────────────
 // Custom SVG knob for stereo pan (-1 to +1).
@@ -857,7 +888,8 @@ async function init() {
     initLoadBar(groove.tracks.length)
     tracksContainer.removeAttribute('hidden')
     minimapContainer.removeAttribute('hidden')
-    transportEl.removeAttribute('hidden')
+    drawerEl.removeAttribute('hidden')
+    initDrawer()
     btnDownloadAll.removeAttribute('hidden')
     btnDownloadAll.addEventListener('click', () => {
       btnDownloadAll.disabled = true
