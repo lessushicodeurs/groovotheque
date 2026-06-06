@@ -33,6 +33,7 @@ const seekFillEl       = document.getElementById('seek-fill')
 const loopInEl         = document.getElementById('loop-in')
 const loopOutEl        = document.getElementById('loop-out')
 const btnLoop          = document.getElementById('btn-loop')
+const btnSaveMix       = document.getElementById('btn-save-mix')
 const btnDownloadAll   = document.getElementById('btn-download-all')
 const tempoSliderEl    = document.getElementById('tempo-slider')
 const tempoValueEl     = document.getElementById('tempo-value')
@@ -84,6 +85,8 @@ function showFatalError(msg, isError = true) {
 const wavesurfers  = []
 const trackStates  = []   // { volume, muted, soloed }
 const trackRegions = []   // RegionsPlugin instance per track
+const volSliders   = []   // input[type=range] per track, for mix restore
+let currentTracks  = []   // groove.tracks list, set at init time
 let isPlaying       = false
 let seekGen         = 0    // increments on every seek; prevents stale async play() callbacks
 let totalDuration   = 0
@@ -394,6 +397,7 @@ function buildTrackRow(track, idx) {
 
   const state = { volume: 1, muted: false, soloed: false }
   trackStates.push(state)
+  volSliders.push(volSlider)
   wavesurfers.push(ws)
   ws.setPlaybackRate(currentTempo / 100, true)
 
@@ -477,6 +481,49 @@ function buildTrackRow(track, idx) {
   })
 }
 
+// 11.3 — Chargement silencieux du mix sauvegardé
+async function loadMix(tracks) {
+  try {
+    const res = await fetch(`/api/mix/${encodeURIComponent(grooveSlug)}`)
+    if (!res.ok) return
+    const mix = await res.json()
+    if (mix.tracks && typeof mix.tracks === 'object') {
+      tracks.forEach((track, i) => {
+        const vol = mix.tracks[track.filename]
+        if (typeof vol === 'number') {
+          trackStates[i].volume = vol / 100
+          volSliders[i].value = String(vol)
+        }
+      })
+      applyVolumes()
+    }
+    if (mix.loop && typeof mix.loop.in === 'number' && typeof mix.loop.out === 'number') {
+      syncRegionToAll(mix.loop.in, mix.loop.out)
+    }
+  } catch { /* chargement silencieux */ }
+}
+
+// 11.4 — Sauvegarde du mix courant (admin uniquement)
+async function saveMix() {
+  const mixData = { tracks: {} }
+  currentTracks.forEach((track, i) => {
+    mixData.tracks[track.filename] = Math.round(trackStates[i].volume * 100)
+  })
+  if (activeLoopIn !== null && activeLoopOut !== null) {
+    mixData.loop = { in: activeLoopIn, out: activeLoopOut }
+  }
+  try {
+    const res = await fetch(`/api/mix/${encodeURIComponent(grooveSlug)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(mixData),
+    })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
 async function init() {
   if (!grooveSlug) {
     showFatalError('Aucun groove spécifié.')
@@ -517,8 +564,25 @@ async function init() {
       }, 2000)
     })
 
+    currentTracks = groove.tracks
     for (const track of groove.tracks) {
       buildTrackRow(track, track.index)
+    }
+
+    await loadMix(groove.tracks)
+
+    // 11.4 — Bouton Save Mix visible uniquement pour l'admin
+    if (window.CURRENT_USER === 'admin') {
+      btnSaveMix.removeAttribute('hidden')
+      btnSaveMix.addEventListener('click', async () => {
+        btnSaveMix.disabled = true
+        const ok = await saveMix()
+        btnSaveMix.textContent = ok ? 'Sauvegardé ✓' : 'Erreur ✗'
+        setTimeout(() => {
+          btnSaveMix.textContent = 'Sauvegarder le mix'
+          btnSaveMix.disabled = false
+        }, 2000)
+      })
     }
 
     // Reconcile tempo UI with the slider's actual value (covers browser form

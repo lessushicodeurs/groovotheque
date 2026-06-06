@@ -49,6 +49,18 @@ app.use(basicAuth({
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
+
+// 11.1 — Injection du CURRENT_USER avant le static middleware
+app.get('/player.html', (req, res) => {
+  const template = fs.readFileSync(path.join(__dirname, 'public', 'player.html'), 'utf8');
+  const user = req.auth?.user ?? 'anonymous';
+  const injected = template.replace(
+    '</head>',
+    `  <script>window.CURRENT_USER = ${JSON.stringify(user)};</script>\n</head>`
+  );
+  res.type('html').send(injected);
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 const AUDIO_EXTENSIONS = new Set(['.mp3', '.wav', '.flac']);
@@ -187,6 +199,34 @@ app.get('/api/grooves/:name/download', async (req, res) => {
   }
 
   await archive.finalize();
+});
+
+// 11.2 — Lecture du mix
+app.get('/api/mix/:groove', async (req, res) => {
+  const grooveDir = resolveGrooveDir(req.params.groove, res);
+  if (!grooveDir) return;
+  const mixPath = path.join(grooveDir, 'mix.json');
+  try {
+    const data = await fs.promises.readFile(mixPath, 'utf8');
+    res.json(JSON.parse(data));
+  } catch (err) {
+    if (err.code === 'ENOENT') return res.json({});
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 11.2 — Écriture du mix (admin uniquement)
+app.post('/api/mix/:groove', async (req, res) => {
+  if (req.auth?.user !== 'admin') return res.status(403).json({ error: 'Réservé à l\'admin' });
+  const grooveDir = resolveGrooveDir(req.params.groove, res);
+  if (!grooveDir) return;
+  const mixPath = path.join(grooveDir, 'mix.json');
+  try {
+    await fs.promises.writeFile(mixPath, JSON.stringify(req.body, null, 2), 'utf8');
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // 2.3 — Stream audio avec support range requests
