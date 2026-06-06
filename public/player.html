@@ -30,11 +30,14 @@
           <div id="seek-fill" class="seek-fill"></div>
         </div>
         <div class="transport-loop">
+          <button id="btn-loop-go-in" class="transport-btn transport-btn--loop-nav" aria-label="Aller au point IN" disabled>⏮</button>
           <span class="loop-label">IN</span>
           <input id="loop-in" class="loop-input" type="text" value="—" aria-label="Point IN" disabled>
           <span class="loop-label">OUT</span>
           <input id="loop-out" class="loop-input" type="text" value="—" aria-label="Point OUT" disabled>
+          <button id="btn-loop-go-out" class="transport-btn transport-btn--loop-nav" aria-label="Aller au point OUT" disabled>⏭</button>
           <button id="btn-loop" class="transport-btn transport-btn--loop" aria-label="Boucle" aria-pressed="false">⟳</button>
+          <button id="btn-loop-clear" class="transport-btn transport-btn--loop-clear" aria-label="Supprimer la boucle" disabled>✕</button>
         </div>
       </div>
       <div class="transport-row transport-row--tempo">

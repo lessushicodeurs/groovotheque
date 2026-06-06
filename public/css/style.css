@@ -397,6 +397,26 @@ body {
   color: #77cc77;
 }
 
+.transport-btn--loop-nav,
+.transport-btn--loop-clear {
+  font-size: 0.65rem;
+  width: 1.6rem;
+  height: 1.6rem;
+}
+
+.transport-btn--loop-nav:disabled,
+.transport-btn--loop-clear:disabled {
+  opacity: 0.25;
+  cursor: default;
+  pointer-events: none;
+}
+
+.transport-btn--loop-clear:not(:disabled):hover {
+  background: #2a1a1a;
+  border-color: #5c2a2a;
+  color: #cc5555;
+}
+
 /* ── Timecode ────────────────────────────── */
 
 .transport-time {

@@ -33,6 +33,9 @@ const seekFillEl       = document.getElementById('seek-fill')
 const loopInEl         = document.getElementById('loop-in')
 const loopOutEl        = document.getElementById('loop-out')
 const btnLoop          = document.getElementById('btn-loop')
+const btnLoopGoIn      = document.getElementById('btn-loop-go-in')
+const btnLoopGoOut     = document.getElementById('btn-loop-go-out')
+const btnLoopClear     = document.getElementById('btn-loop-clear')
 const btnSaveMix       = document.getElementById('btn-save-mix')
 const btnDownloadAll   = document.getElementById('btn-download-all')
 const tempoSliderEl    = document.getElementById('tempo-slider')
@@ -163,6 +166,10 @@ function applyVolumes() {
 
 async function playAll() {
   if (isPlaying) return
+  if (loopEnabled && activeLoopIn !== null && activeLoopOut !== null) {
+    const cur = wavesurfers[0]?.getCurrentTime() ?? 0
+    if (cur < activeLoopIn || cur >= activeLoopOut) seekAllTo(activeLoopIn)
+  }
   isPlaying = true
   btnPlay.textContent = '⏸'
   try {
@@ -245,6 +252,17 @@ function updateLoopFields() {
   loopOutEl.value = hasRegion ? formatLoopTime(activeLoopOut) : '—'
   loopInEl.disabled = !hasRegion
   loopOutEl.disabled = !hasRegion
+  btnLoopGoIn.disabled = !hasRegion
+  btnLoopGoOut.disabled = !hasRegion
+  btnLoopClear.disabled = !hasRegion
+}
+
+function clearLoop() {
+  trackRegions.forEach(rp => rp.clearRegions())
+  activeLoopIn = null
+  activeLoopOut = null
+  updateLoopFields()
+  if (loopEnabled) setLoopEnabled(false)
 }
 
 // Creates/replaces regions on ALL tracks with the same IN/OUT.
@@ -607,8 +625,11 @@ async function init() {
       performSeek(ratio * totalDuration)
     })
 
-    // ── Loop button ────────────────────────────
+    // ── Loop button + navigation ───────────────
     btnLoop.addEventListener('click', () => setLoopEnabled(!loopEnabled))
+    btnLoopGoIn.addEventListener('click', () => { if (activeLoopIn !== null) performSeek(activeLoopIn) })
+    btnLoopGoOut.addEventListener('click', () => { if (activeLoopOut !== null) performSeek(activeLoopOut) })
+    btnLoopClear.addEventListener('click', clearLoop)
 
     // ── Tempo control ──────────────────────────
     tempoSliderEl.addEventListener('input', () => applyTempo(Number(tempoSliderEl.value)))
