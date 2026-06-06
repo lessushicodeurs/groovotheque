@@ -48,6 +48,13 @@ const tempoPresets     = Array.from(document.querySelectorAll('.tempo-preset'))
 let prevSlug = null
 let nextSlug = null
 
+btnPrev.addEventListener('click', () => {
+  if (prevSlug) location.href = '/player.html?groove=' + encodeURIComponent(prevSlug)
+})
+btnNext.addEventListener('click', () => {
+  if (nextSlug) location.href = '/player.html?groove=' + encodeURIComponent(nextSlug)
+})
+
 let loadedCount = 0
 let totalTracks = 0
 
@@ -593,12 +600,6 @@ async function fetchNeighbours() {
   }
   btnPrev.disabled = prevSlug === null
   btnNext.disabled = nextSlug === null
-  btnPrev.addEventListener('click', () => {
-    if (prevSlug) location.href = '/player.html?groove=' + encodeURIComponent(prevSlug)
-  })
-  btnNext.addEventListener('click', () => {
-    if (nextSlug) location.href = '/player.html?groove=' + encodeURIComponent(nextSlug)
-  })
 }
 
 async function init() {
