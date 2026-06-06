@@ -259,7 +259,7 @@ body {
   flex-direction: column;
   gap: 0.4rem;
   padding: 0.625rem 0.75rem;
-  width: 156px;
+  width: 176px;
   flex-shrink: 0;
   background: #141414;
   border-right: 1px solid #1a1a1a;
@@ -333,6 +333,34 @@ body {
   accent-color: #555;
   cursor: pointer;
   height: 3px;
+}
+
+/* ── Pan knob ────────────────────────────── */
+
+.pan-knob-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.pan-knob-wrap svg {
+  display: block;
+}
+
+.pan-knob-wrap svg:hover path:first-child {
+  stroke: #3a3a3a;
+}
+
+.pan-knob-label {
+  font-size: 0.55rem;
+  font-weight: 700;
+  color: #444;
+  letter-spacing: 0.05em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ── Waveform ────────────────────────────── */
@@ -702,6 +730,10 @@ body {
   }
 
   .track-volume {
+    display: none;
+  }
+
+  .pan-knob-wrap {
     display: none;
   }
 
