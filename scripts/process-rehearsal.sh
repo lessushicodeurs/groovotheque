@@ -243,14 +243,16 @@ validate_input() {
   local -a txt_files
   mapfile -t txt_files < <(find "$SOURCE_DIR" -maxdepth 1 -name "*.txt" | sort)
   if [[ ${#txt_files[@]} -eq 0 ]]; then
-    die "Aucun fichier .txt d'étiquettes trouvé dans $SOURCE_DIR"
+    warn "Aucun fichier .txt d'étiquettes — traitement en segment unique"
+    LABELS_FILE=""
   elif [[ ${#txt_files[@]} -gt 1 ]]; then
     warn "Plusieurs fichiers .txt trouvés — utilisation du plus récent"
     LABELS_FILE="$(ls -t "${txt_files[@]}" | head -1)"
+    ok "Fichier étiquettes : $(basename "$LABELS_FILE")"
   else
     LABELS_FILE="${txt_files[0]}"
+    ok "Fichier étiquettes : $(basename "$LABELS_FILE")"
   fi
-  ok "Fichier étiquettes : $(basename "$LABELS_FILE")"
 }
 
 # ────────────────────────── Parsing étiquettes ───────────────
@@ -263,6 +265,18 @@ TOTAL_DURATION=""
 parse_labels() {
   next_step "Parsing des étiquettes Audacity"
 
+  TOTAL_DURATION="$(ffprobe -v error -show_entries format=duration \
+    -of default=noprint_wrappers=1:nokey=1 "${FLAC_FILES[0]}")"
+  ok "Durée totale : ${TOTAL_DURATION}s"
+
+  if [[ -z "$LABELS_FILE" ]]; then
+    SEGMENT_STARTS=(0)
+    SEGMENT_LABELS=("")
+    SEG_COUNT=1
+    ok "1 segment (durée totale)"
+    return
+  fi
+
   mapfile -t raw_lines < <(grep -v '^[[:space:]]*$' "$LABELS_FILE")
   [[ ${#raw_lines[@]} -gt 0 ]] || die "Fichier d'étiquettes vide."
 
@@ -274,10 +288,6 @@ parse_labels() {
 
   SEG_COUNT=${#SEGMENT_STARTS[@]}
   ok "${SEG_COUNT} segment(s) détecté(s)"
-
-  TOTAL_DURATION="$(ffprobe -v error -show_entries format=duration \
-    -of default=noprint_wrappers=1:nokey=1 "${FLAC_FILES[0]}")"
-  ok "Durée totale : ${TOTAL_DURATION}s"
 }
 
 # ────────────────────────── Répertoires de travail ───────────
