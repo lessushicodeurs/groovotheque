@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Player — Groovotheque</title>
+  <link rel="icon" href="data:,">
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
@@ -59,6 +60,23 @@
       </div>
     </div>
   </main>
+  <!-- 13.2 — Tablature drawer (desktop only, visible si tabFile présent) -->
+  <div id="tab-drawer" class="tab-drawer tab-drawer--strip" hidden>
+    <div id="tab-handle" class="tab-handle" title="Redimensionner la tablature">
+      <div class="tab-handle-grip"></div>
+      <div class="tab-drawer-header">
+        <span class="tab-drawer-title">Tablature</span>
+        <div id="tab-track-list" class="tab-track-list"></div>
+        <div id="tab-loop-controls" class="tab-loop-controls" hidden>
+          <button id="btn-tab-loop-clear" class="tab-btn" title="Effacer la boucle tablature">✕ boucle</button>
+        </div>
+        <button id="btn-tab-fullscreen" class="tab-btn tab-btn--state"        title="Plein écran" aria-pressed="false">⛶</button>
+        <button id="btn-tab-strip"     class="tab-btn tab-btn--state active" title="Strip"       aria-pressed="true">▬</button>
+        <button id="btn-tab-collapse"  class="tab-btn tab-btn--state"        title="Réduire"     aria-pressed="false">−</button>
+      </div>
+    </div>
+    <div id="tab-content" class="tab-content"></div>
+  </div>
   <script type="module" src="/js/player.js"></script>
 </body>
 </html>

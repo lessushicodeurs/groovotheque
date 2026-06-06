@@ -22,6 +22,9 @@ const sharedAudioCtx = new AudioContext()
 const params = new URLSearchParams(location.search)
 const grooveSlug = params.get('groove')
 
+// 13.7 — Desktop only: tablature désactivée sur mobile
+const IS_DESKTOP = window.matchMedia('(min-width: 769px)').matches
+
 const titleEl          = document.getElementById('groove-title')
 const loadBarEl        = document.getElementById('load-bar')
 const mainEl           = document.getElementById('player-main')
@@ -48,6 +51,17 @@ const tempoSliderEl    = document.getElementById('tempo-slider')
 const tempoValueEl     = document.getElementById('tempo-value')
 const tempoBadgeEl     = document.getElementById('tempo-badge')
 const tempoPresets     = Array.from(document.querySelectorAll('.tempo-preset'))
+
+// 13.2 — Tab drawer DOM elements
+const tabDrawerEl       = document.getElementById('tab-drawer')
+const tabHandleEl       = document.getElementById('tab-handle')
+const tabContentEl      = document.getElementById('tab-content')
+const tabTrackListEl    = document.getElementById('tab-track-list')
+const tabLoopControlsEl  = document.getElementById('tab-loop-controls')
+const btnTabFullscreen   = document.getElementById('btn-tab-fullscreen')
+const btnTabStrip        = document.getElementById('btn-tab-strip')
+const btnTabCollapse     = document.getElementById('btn-tab-collapse')
+const btnTabLoopClear    = document.getElementById('btn-tab-loop-clear')
 
 let prevSlug = null
 let nextSlug = null
@@ -109,6 +123,9 @@ const gainNodes    = []   // GainNode per track (volume in Web Audio graph)
 const panNodes     = []   // StereoPannerNode per track
 const panKnobs       = []   // PanKnob UI per track
 const webAudioRouted = []   // true if MediaElementSource successfully connected
+const waveEls        = []   // .track-wave div per track (for proportional width)
+const minimapRowEls  = []   // .minimap-row div per track (for proportional width)
+const trackDurations = []   // duration in seconds per track, set on 'ready'
 let currentTracks  = []   // groove.tracks list, set at init time
 let pendingLoop    = null // loop à restaurer dès que la waveform est prête
 let isPlaying       = false
@@ -121,6 +138,13 @@ let isSyncingRegion = false
 let loopJumping     = false  // prevents double-trigger of loop rebound
 let loopFieldCommitting = false  // prevents blur re-running commit after Enter
 let currentTempo    = 100  // percent (50–120)
+
+// 13.3–13.6 — Tablature state
+let alphaTabApi    = null  // AlphaTabApi instance
+let tabState       = 'strip'  // 'collapsed' | 'strip' | 'fullscreen'
+let tabSyncRafId   = null
+let tabLoopPending = null  // seconds — first beat click pending second click
+let tabSyncPoints  = null  // BackingTrackSyncPoint[] from GP sync markers, or null
 
 // ── PanKnob ────────────────────────────────────────────────────────────────
 // Custom SVG knob for stereo pan (-1 to +1).
@@ -574,11 +598,13 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
 
   row.append(sidebar, waveEl)
   tracksContainer.appendChild(row)
+  waveEls.push(waveEl)
 
   // ── Dedicated minimap row per track ───────────
   const minimapRow = document.createElement('div')
   minimapRow.className = 'minimap-row'
   minimapContainer.appendChild(minimapRow)
+  minimapRowEls.push(minimapRow)
 
   // ── Plugins ───────────────────────────────────
   const regionsPlugin = RegionsPlugin.create()
@@ -663,6 +689,11 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
   // Creating a region on any track syncs to all other tracks.
   regionsPlugin.enableDragSelection({ color: 'rgba(255,255,255,0.2)' })
   regionsPlugin.on('region-created', (region) => {
+    // 13.6 — when tab drawer is open, beat clicks drive the loop; ignore waveform drags
+    if (tabState !== 'collapsed') {
+      region.remove()
+      return
+    }
     syncRegionToAll(region.start, region.end)
   })
 
@@ -697,6 +728,21 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
         syncRegionToAll(pendingLoop.in, pendingLoop.out)
         pendingLoop = null
       }
+      // Déplacer la timeline (dernier enfant de .wrapper dans le Shadow DOM) en tête,
+      // pour qu'elle apparaisse au-dessus de la waveform plutôt qu'en-dessous.
+      const wrapper = ws.getWrapper()
+      const shadowWrapper = wrapper?.parentElement
+      const shadowRoot   = shadowWrapper?.getRootNode()
+      const domWrapper   = shadowRoot instanceof ShadowRoot
+        ? shadowRoot.querySelector('.wrapper')
+        : null
+      if (domWrapper && domWrapper.lastElementChild !== domWrapper.firstElementChild) {
+        domWrapper.insertBefore(domWrapper.lastElementChild, domWrapper.firstElementChild)
+      }
+    }
+    trackDurations[idx] = ws.getDuration()
+    if (trackDurations.filter(d => d > 0).length === wavesurfers.length) {
+      adjustTrackWidths()
     }
   })
 
@@ -750,6 +796,404 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
   panKnob.wrap.addEventListener('change', (e) => {
     setPan(idx, e.detail)
   })
+}
+
+// ── Proportional track widths ──────────────────────────────────────────────
+
+function adjustTrackWidths() {
+  const maxDur = Math.max(...trackDurations.filter(d => d > 0))
+  if (!maxDur) return
+
+  // sidebar width is fixed at 176px (matches .track-sidebar { width: 176px })
+  const SIDEBAR_W = 176
+
+  waveEls.forEach((el, i) => {
+    const ratio = (trackDurations[i] ?? maxDur) / maxDur
+    if (ratio < 1) {
+      el.style.flex = 'none'
+      // calc uses 100% = track-row width, dynamically correct on resize
+      el.style.width = `calc(${ratio.toFixed(6)} * (100% - ${SIDEBAR_W}px))`
+    }
+  })
+
+  const minimapW = minimapContainer.offsetWidth
+  minimapRowEls.forEach((el, i) => {
+    const ratio = (trackDurations[i] ?? maxDur) / maxDur
+    if (ratio < 1) {
+      el.style.width = Math.floor(minimapW * ratio) + 'px'
+    }
+  })
+}
+
+// ── Epic 13 — Tablature synchronisée ──────────────────────────────────────
+
+const TAB_HEIGHTS = { collapsed: 40, strip: 280 }
+
+function tabFullscreenHeight() {
+  const headerH    = document.querySelector('.player-header')?.getBoundingClientRect().height || 60
+  const transportH = document.getElementById('transport')?.getBoundingClientRect().height     || 100
+  return Math.max(300, window.innerHeight - headerH - transportH - 8)
+}
+function getStateHeight(state) {
+  if (state === 'fullscreen') return tabFullscreenHeight()
+  return TAB_HEIGHTS[state] ?? 280
+}
+
+function setDrawerCssHeight(px) {
+  document.documentElement.style.setProperty('--drawer-height', px + 'px')
+}
+
+function setTabState(newState) {
+  if (!tabDrawerEl) return
+  tabState = newState
+  tabDrawerEl.classList.remove('tab-drawer--collapsed', 'tab-drawer--strip', 'tab-drawer--fullscreen')
+  tabDrawerEl.classList.add(`tab-drawer--${newState}`)
+
+  const h = getStateHeight(newState)
+  tabDrawerEl.style.height = h + 'px'
+  setDrawerCssHeight(h)
+
+  // En mode plein écran : contraindre player-main + bloquer scroll page
+  if (newState === 'fullscreen') {
+    const headerH = document.querySelector('.player-header')?.getBoundingClientRect().height || 60
+    const playerH = window.innerHeight - headerH - h
+    document.documentElement.style.setProperty('--player-main-h', playerH + 'px')
+    document.documentElement.classList.add('tab-no-scroll')
+    document.body.classList.add('tab-no-scroll')
+    window.scrollTo({ top: 0 })
+  } else {
+    document.documentElement.classList.remove('tab-no-scroll')
+    document.body.classList.remove('tab-no-scroll')
+    document.documentElement.style.removeProperty('--player-main-h')
+  }
+
+  // Show/hide waveform tracks in fullscreen mode
+  const tracksEl  = document.getElementById('tracks-container')
+  const minimapEl = document.getElementById('minimap-container')
+  if (newState === 'fullscreen') {
+    tracksEl?.classList.add('tab-hidden')
+    minimapEl?.classList.add('tab-hidden')
+  } else {
+    tracksEl?.classList.remove('tab-hidden')
+    minimapEl?.classList.remove('tab-hidden')
+  }
+
+  const stateMap = { fullscreen: btnTabFullscreen, strip: btnTabStrip, collapsed: btnTabCollapse }
+  ;[btnTabFullscreen, btnTabStrip, btnTabCollapse].forEach(btn => {
+    btn?.classList.remove('active')
+    btn?.setAttribute('aria-pressed', 'false')
+  })
+  stateMap[newState]?.classList.add('active')
+  stateMap[newState]?.setAttribute('aria-pressed', 'true')
+
+  if (newState === 'collapsed') {
+    stopTabSync()
+  } else {
+    startTabSync()
+    if (alphaTabApi) {
+      const mod = window.__alphaTabModule
+      if (mod) {
+        const usePageLayout = newState === 'fullscreen'
+        alphaTabApi.settings.display.layoutMode = usePageLayout
+          ? mod.LayoutMode.Page
+          : mod.LayoutMode.Horizontal
+        alphaTabApi.updateSettings()
+        alphaTabApi.render()
+      }
+    }
+  }
+}
+
+function setupTabHandleDrag() {
+  if (!tabHandleEl) return
+  let dragging = false
+  let startY = 0
+  let startH = 0
+
+  const onMove = (e) => {
+    if (!dragging) return
+    const newH = Math.max(TAB_HEIGHTS.collapsed, Math.min(window.innerHeight * 0.9, startH - (e.clientY - startY)))
+    tabDrawerEl.style.transition = 'none'
+    tabDrawerEl.style.height = newH + 'px'
+    setDrawerCssHeight(newH)
+  }
+
+  const commit = () => {
+    if (!dragging) return
+    dragging = false
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', commit)
+    tabDrawerEl.style.transition = ''
+    const h = tabDrawerEl.getBoundingClientRect().height
+    const distances = [
+      { state: 'collapsed',  dist: Math.abs(h - TAB_HEIGHTS.collapsed) },
+      { state: 'strip',      dist: Math.abs(h - TAB_HEIGHTS.strip) },
+      { state: 'fullscreen', dist: Math.abs(h - tabFullscreenHeight()) },
+    ]
+    const nearest = distances.reduce((a, b) => a.dist < b.dist ? a : b).state
+    setTabState(nearest)
+  }
+
+  tabHandleEl.addEventListener('mousedown', (e) => {
+    if (e.target.closest('button, label, input')) return
+    dragging = true
+    startY = e.clientY
+    startH = tabDrawerEl.getBoundingClientRect().height
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', commit)
+    e.preventDefault()
+  })
+
+  tabHandleEl.addEventListener('touchstart', (e) => {
+    if (e.target.closest('button, label, input')) return
+    dragging = true
+    startY = e.touches[0].clientY
+    startH = tabDrawerEl.getBoundingClientRect().height
+    e.preventDefault()
+  }, { passive: false })
+
+  tabHandleEl.addEventListener('touchmove', (e) => {
+    if (!dragging) return
+    onMove(e.touches[0].clientY)
+    e.preventDefault()
+  }, { passive: false })
+
+  tabHandleEl.addEventListener('touchend', commit)
+}
+
+// 13.9 — Conversion audio↔synth time using GP sync markers.
+// BackingTrackSyncPoint: syncTime=ms in audio, synthTime=ms in score-tempo clock.
+// Piecewise-linear interpolation between anchor points.
+function audioTimeToSynthTime(audioMs) {
+  const sps = tabSyncPoints
+  if (!sps || sps.length === 0) return audioMs
+
+  let i = sps.length - 1
+  for (let j = 0; j < sps.length - 1; j++) {
+    if (audioMs < sps[j + 1].syncTime) { i = j; break }
+  }
+  const sp0 = sps[i]
+  const sp1 = (i + 1 < sps.length) ? sps[i + 1] : null
+
+  if (!sp1) {
+    const totalAudioMs  = (wavesurfers[0]?.getDuration() ?? 0) * 1000 || sp0.syncTime
+    const totalSynthMs  = alphaTabApi?.endTime || sp0.synthTime
+    const dt = totalAudioMs - sp0.syncTime
+    if (dt <= 0) return sp0.synthTime
+    return sp0.synthTime + ((audioMs - sp0.syncTime) / dt) * (totalSynthMs - sp0.synthTime)
+  }
+
+  const dt = sp1.syncTime - sp0.syncTime
+  if (dt <= 0) return sp0.synthTime
+  return sp0.synthTime + ((audioMs - sp0.syncTime) / dt) * (sp1.synthTime - sp0.synthTime)
+}
+
+// Converts a MIDI tick position to audio seconds using sync points + synthBpm.
+function beatTickToAudioTimeSec(tick) {
+  const sps = tabSyncPoints
+  if (!sps || sps.length === 0) {
+    // No sync data: use score tempo directly
+    const tempo    = alphaTabApi?.score?.tempo || 120
+    const synthMs  = tick * 60000 / (tempo * 960)
+    return synthMs / 1000
+  }
+  let i = sps.length - 1
+  for (let j = 0; j < sps.length - 1; j++) {
+    if (tick < sps[j + 1].synthTick) { i = j; break }
+  }
+  const sp0      = sps[i]
+  const bpm      = sp0.synthBpm || alphaTabApi?.score?.tempo || 98.5
+  const deltaTick = tick - sp0.synthTick
+  const synthMs  = sp0.synthTime + deltaTick * 60000 / (bpm * 960)
+  return synthTimeToAudioTime(synthMs) / 1000
+}
+
+function synthTimeToAudioTime(synthMs) {
+  const sps = tabSyncPoints
+  if (!sps || sps.length === 0) return synthMs
+
+  let i = sps.length - 1
+  for (let j = 0; j < sps.length - 1; j++) {
+    if (synthMs < sps[j + 1].synthTime) { i = j; break }
+  }
+  const sp0 = sps[i]
+  const sp1 = (i + 1 < sps.length) ? sps[i + 1] : null
+
+  if (!sp1) {
+    const totalAudioMs  = (wavesurfers[0]?.getDuration() ?? 0) * 1000 || sp0.syncTime
+    const totalSynthMs  = alphaTabApi?.endTime || sp0.synthTime
+    const dt = totalSynthMs - sp0.synthTime
+    if (dt <= 0) return sp0.syncTime
+    return sp0.syncTime + ((synthMs - sp0.synthTime) / dt) * (totalAudioMs - sp0.syncTime)
+  }
+
+  const dt = sp1.synthTime - sp0.synthTime
+  if (dt <= 0) return sp0.syncTime
+  return sp0.syncTime + ((synthMs - sp0.synthTime) / dt) * (sp1.syncTime - sp0.syncTime)
+}
+
+function startTabSync() {
+  if (tabSyncRafId !== null) return
+  const loop = () => {
+    if (alphaTabApi && tabState !== 'collapsed' && wavesurfers.length > 0) {
+      const audioMs = wavesurfers[0].getCurrentTime() * 1000
+      alphaTabApi.timePosition = audioTimeToSynthTime(audioMs)
+    }
+    tabSyncRafId = requestAnimationFrame(loop)
+  }
+  tabSyncRafId = requestAnimationFrame(loop)
+}
+
+function stopTabSync() {
+  if (tabSyncRafId !== null) {
+    cancelAnimationFrame(tabSyncRafId)
+    tabSyncRafId = null
+  }
+}
+
+function buildTrackSelector(score) {
+  if (!tabTrackListEl) return
+  tabTrackListEl.innerHTML = ''
+  score.tracks.forEach((track, i) => {
+    const label = document.createElement('label')
+    label.className = 'tab-track-label'
+    const cb = document.createElement('input')
+    cb.type = 'checkbox'
+    cb.checked = true
+    cb.dataset.trackIdx = String(i)
+    cb.addEventListener('change', () => {
+      if (!alphaTabApi) return
+      const cbs = tabTrackListEl.querySelectorAll('input[type=checkbox]')
+      const selected = score.tracks.filter((_, j) => cbs[j]?.checked)
+      alphaTabApi.renderTracks(selected.length > 0 ? selected : [score.tracks[0]])
+    })
+    label.append(cb, document.createTextNode(track.name || `Piste ${i + 1}`))
+    tabTrackListEl.appendChild(label)
+  })
+}
+
+async function initTabDrawer(tabFile) {
+  if (!IS_DESKTOP || !tabDrawerEl) return
+
+  tabContentEl.classList.add('tab-content--loading')
+  tabDrawerEl.removeAttribute('hidden')
+  setTabState('strip')
+  setupTabHandleDrag()
+
+  btnTabFullscreen?.addEventListener('click', () => setTabState('fullscreen'))
+  btnTabStrip?.addEventListener('click',     () => setTabState('strip'))
+  btnTabCollapse?.addEventListener('click',  () => setTabState('collapsed'))
+
+  btnTabLoopClear?.addEventListener('click', () => {
+    clearLoop()
+    tabLoopPending = null
+    tabDrawerEl.classList.remove('tab-drawer--loop-pending')
+    tabLoopControlsEl?.setAttribute('hidden', '')
+  })
+
+  // Note: le package alphaTab utilise un T majuscule dans les noms de fichiers dist
+  const AT_VER  = '1.8.3'
+  const AT_BASE = `https://cdn.jsdelivr.net/npm/@coderline/alphatab@${AT_VER}/dist`
+
+  let alphaTabMod
+  try {
+    alphaTabMod = await import(`${AT_BASE}/alphaTab.mjs`)
+    window.__alphaTabModule = alphaTabMod
+  } catch (err) {
+    tabContentEl.textContent = 'AlphaTab non disponible (vérifier la connexion).'
+    tabContentEl.classList.remove('tab-content--loading')
+    console.warn('[tab] Échec chargement AlphaTab:', err)
+    return
+  }
+
+  tabContentEl.classList.remove('tab-content--loading')
+
+  alphaTabApi = new alphaTabMod.AlphaTabApi(tabContentEl, {
+    core: {
+      workerFile:    `${AT_BASE}/alphaTab.worker.mjs`,
+      fontDirectory: `${AT_BASE}/font/`,
+      logLevel:      alphaTabMod.LogLevel.Warning,
+    },
+    player: {
+      enablePlayer:         true,
+      enableCursor:         true,
+      enableUserInteraction: true,
+      soundFont:            `${AT_BASE}/soundfont/sonivox.sf2`,
+    },
+    display: {
+      layoutMode:   alphaTabMod.LayoutMode.Horizontal,
+      staveProfile: alphaTabMod.StaveProfile.ScoreTab,
+      scale:        0.9,
+    },
+  })
+
+  window.__alphaTabApi = alphaTabApi
+  alphaTabApi.error.on(err => console.error('[AlphaTab]', err))
+
+  // Auto-fit strip height + annuler tout scroll parasite déclenché par le re-render
+  alphaTabApi.renderFinished.on(() => {
+    // En mode élargi, le re-render peut déclencher un scroll : annuler
+    if (tabState === 'fullscreen') {
+      window.scrollTo({ top: 0 })
+    }
+
+    // Ajuster la hauteur strip au SVG rendu
+    if (tabState === 'strip') {
+      const svg = tabContentEl.querySelector('svg')
+      if (svg) {
+        const svgH = parseInt(svg.getAttribute('height') || '0', 10)
+        if (svgH > 0) {
+          const handleH = tabHandleEl?.getBoundingClientRect().height || 50
+          TAB_HEIGHTS.strip = svgH + handleH + 8
+          document.documentElement.style.setProperty('--tab-strip-height', TAB_HEIGHTS.strip + 'px')
+          setTabState('strip')
+        }
+      }
+    }
+  })
+
+  // Track selector + sync points after score load
+  alphaTabApi.scoreLoaded.on(score => {
+    buildTrackSelector(score)
+    // Generate sync points from embedded GP markers (mod.midi.MidiFileGenerator)
+    try {
+      const mod = window.__alphaTabModule
+      const sps = mod?.midi?.MidiFileGenerator?.generateSyncPoints(score)
+      if (sps?.length > 0) {
+        tabSyncPoints = sps
+        alphaTabApi.updateSyncPoints()
+        console.info('[tab] sync points:', sps.length,
+          sps.map(p => `bar${p.masterBarIndex}@${(p.syncTime/1000).toFixed(2)}s→${(p.synthTime/1000).toFixed(2)}s`).join(' '))
+      }
+    } catch (e) {
+      console.warn('[tab] sync points extraction failed:', e)
+    }
+  })
+
+  // 13.6 — Measure-based loop: two consecutive beat clicks define a loop
+  alphaTabApi.beatMouseDown.on(beat => {
+    if (tabState === 'collapsed') return
+
+    const wsTimeSec = beatTickToAudioTimeSec(beat.absolutePlaybackStart)
+
+    if (tabLoopPending === null) {
+      tabLoopPending = wsTimeSec
+      tabDrawerEl.classList.add('tab-drawer--loop-pending')
+    } else {
+      const loopStart = Math.min(tabLoopPending, wsTimeSec)
+      const loopEnd   = Math.max(tabLoopPending, wsTimeSec)
+      tabLoopPending = null
+      tabDrawerEl.classList.remove('tab-drawer--loop-pending')
+      if (loopEnd - loopStart > 0.05) {
+        syncRegionToAll(loopStart, loopEnd)
+        setLoopEnabled(true)
+        tabLoopControlsEl?.removeAttribute('hidden')
+      }
+    }
+  })
+
+  alphaTabApi.load(`/tab/${encodeURIComponent(grooveSlug)}/${encodeURIComponent(tabFile)}`)
+  startTabSync()
 }
 
 // 11.3 / 15.5 — Chargement silencieux du mix sauvegardé
@@ -880,6 +1324,11 @@ async function init() {
     })
 
     await loadMix(groove.tracks)
+
+    // 13.1 / 13.3 — Init tablature si fichier GP présent (desktop uniquement)
+    if (groove.tabFile && IS_DESKTOP) {
+      initTabDrawer(groove.tabFile)
+    }
 
     // 11.4 — Bouton Save Mix visible uniquement pour l'admin
     if (window.CURRENT_USER === 'admin') {
