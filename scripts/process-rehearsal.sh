@@ -51,6 +51,11 @@ EXCLUDES_COUNT=0
 
 MIX_ALL_SOURCES=()
 
+# Tables de réglages par piste (clé = nom de piste sans extension)
+declare -A TRACK_NORMALIZE_MODE=()   # peak | rms
+declare -A TRACK_NORMALIZE_DB=()     # cible dBFS (peak ou rms selon mode)
+declare -A TRACK_GAIN_DB=()          # gain additionnel après normalisation
+
 load_config_python() {
   local cfg="$1"
   # Un seul appel Python; toutes les sorties sont évaluées via eval
@@ -91,6 +96,15 @@ excludes = tracks.get('exclude', [])
 print(f"EXCLUDES_COUNT='{len(excludes)}'")
 for i, e in enumerate(excludes):
     print(f"EXCLUDE_{i}='{sh(e)}'")
+
+per_track = tracks.get('per_track') or {}
+print(f"PER_TRACK_COUNT='{len(per_track)}'")
+for i, (name, settings) in enumerate(per_track.items()):
+    s = settings or {}
+    print(f"PER_TRACK_{i}_NAME='{sh(name)}'")
+    print(f"PER_TRACK_{i}_MODE='{sh(s.get('normalize_mode','peak'))}'")
+    print(f"PER_TRACK_{i}_DB='{sh(s.get('normalize_db',''))}'")
+    print(f"PER_TRACK_{i}_GAIN='{sh(s.get('gain_db',0))}'")
 PYEOF
   )"
 }
@@ -138,6 +152,21 @@ load_config() {
       local fvar="MIX_${mi}_SRC_${j}_FILE"
       MIX_ALL_SOURCES+=("${!fvar}")
     done
+  done
+
+  # Peupler les tables de réglages par piste
+  TRACK_NORMALIZE_MODE=()
+  TRACK_NORMALIZE_DB=()
+  TRACK_GAIN_DB=()
+  local ptc="${PER_TRACK_COUNT:-0}"
+  for ((i=0; i<ptc; i++)); do
+    local n_var="PER_TRACK_${i}_NAME"
+    local m_var="PER_TRACK_${i}_MODE"
+    local d_var="PER_TRACK_${i}_DB"
+    local g_var="PER_TRACK_${i}_GAIN"
+    TRACK_NORMALIZE_MODE["${!n_var}"]="${!m_var}"
+    TRACK_NORMALIZE_DB["${!n_var}"]="${!d_var}"
+    TRACK_GAIN_DB["${!n_var}"]="${!g_var}"
   done
 }
 
@@ -350,22 +379,53 @@ compress_normalize() {
       -af "acompressor=threshold=${COMP_THRESHOLD}dB:ratio=${COMP_RATIO}:attack=${COMP_ATTACK}:release=${COMP_RELEASE}:knee=${COMP_KNEE}dB:makeup=1" \
       "$compressed"
 
-    local max_vol
-    max_vol="$(ffmpeg -i "$compressed" -af volumedetect -f null /dev/null 2>&1 \
-      | grep max_volume \
-      | awk '{print $5}')"
+    # Détection des niveaux (peak + mean en une passe)
+    local vol_out
+    vol_out="$(ffmpeg -i "$compressed" -af volumedetect -f null /dev/null 2>&1)"
+    local max_vol mean_vol
+    max_vol="$(echo "$vol_out" | grep max_volume  | awk '{print $5}')"
+    mean_vol="$(echo "$vol_out" | grep mean_volume | awk '{print $5}')"
 
-    local gain
-    gain="$(echo "${NORMALIZE_PEAK_DB} - (${max_vol})" | bc -l)"
-    log "  Normalisation : ${name} (peak=${max_vol}dB → gain=${gain}dB)"
+    # Réglages par piste (avec fallback sur les valeurs globales)
+    local mode="${TRACK_NORMALIZE_MODE[$name]:-peak}"
+    local target_db="${TRACK_NORMALIZE_DB[$name]:-$NORMALIZE_PEAK_DB}"
+    local extra_gain="${TRACK_GAIN_DB[$name]:-0}"
+    [[ -z "$target_db" ]] && target_db="$NORMALIZE_PEAK_DB"
 
+    # Gain de normalisation selon le mode
+    local norm_gain ref_vol
+    if [[ "$mode" == "rms" ]]; then
+      ref_vol="$mean_vol"
+      norm_gain="$(echo "${target_db} - (${mean_vol})" | bc -l)"
+      log "  Normalisation RMS : ${name} (mean=${mean_vol}dB → cible=${target_db}dB)"
+    else
+      ref_vol="$max_vol"
+      norm_gain="$(echo "${target_db} - (${max_vol})" | bc -l)"
+      log "  Normalisation peak : ${name} (peak=${max_vol}dB → cible=${target_db}dB)"
+    fi
+
+    # Gain total = normalisation + trim par piste
+    local total_gain
+    total_gain="$(echo "${norm_gain} + ${extra_gain}" | bc -l)"
+
+    # Limiteur safety : si le peak projeté dépasse -1 dBFS, réduire le gain
+    local projected_peak
+    projected_peak="$(echo "${max_vol} + ${total_gain}" | bc -l)"
+    if [ "$(echo "$projected_peak > -1" | bc -l)" -eq 1 ]; then
+      local reduction
+      reduction="$(echo "${projected_peak} + 1" | bc -l)"
+      total_gain="$(echo "${total_gain} - ${reduction}" | bc -l)"
+      warn "  ${name} : gain réduit de ${reduction}dB (limiteur safety -1 dBFS)"
+    fi
+
+    log "  gain total appliqué : ${total_gain}dB"
     local normalized="${WORK_DIR}/normalized/${name}.flac"
     ffmpeg -y -hide_banner -loglevel warning \
       -i "$compressed" \
-      -af "volume=${gain}dB" \
+      -af "volume=${total_gain}dB" \
       "$normalized"
 
-    ok "  → ${name}.flac normalisé"
+    ok "  → ${name}.flac normalisé (mode=${mode})"
   done
 }
 
