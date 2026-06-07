@@ -360,6 +360,19 @@ body {
 
 /* ── Waveform ────────────────────────────── */
 
+.track-wave-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.track-timeline-ext {
+  background: #0f0f0f;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
 .track-wave {
   flex: 1;
   min-width: 0;
@@ -391,7 +404,7 @@ body {
   background: #131313;
   border-top: 1px solid #1a1a1a;
   position: sticky;
-  bottom: 0;
+  bottom: var(--drawer-height, 0px);
   z-index: 10;
 }
 
@@ -757,9 +770,217 @@ button, a, input[type="range"], .seek-bar {
   display: none;
 }
 
+/* ── Tablature drawer (Epic 13) ──────────── */
+
+/* player-main gets bottom padding so transport doesn't hide under drawer (strip/collapsed) */
+#player-main {
+  padding-bottom: var(--drawer-height, 0px);
+}
+
+/* En mode élargi : contraindre player-main pour éviter le scroll de page */
+html.tab-no-scroll #player-main {
+  height: var(--player-main-h, auto);
+  overflow-y: auto;
+  padding-bottom: 0 !important;
+}
+
+.tab-drawer {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 8; /* below transport z-index 10 */
+  background: #141414;
+  border-top: 1px solid #2a2a2a;
+  display: flex;
+  flex-direction: column;
+  transition: height 200ms ease;
+  overflow: hidden;
+}
+
+.tab-drawer[hidden] {
+  display: none;
+}
+
+/* Three height states — actual heights are set via inline style by JS (CSS is fallback) */
+.tab-drawer--collapsed   { height: 40px; }
+.tab-drawer--strip       { height: var(--tab-strip-height, 280px); }
+.tab-drawer--fullscreen  { height: var(--tab-fullscreen-height, 85vh); }
+
+/* Used when fullscreen tab hides waveforms */
+.tab-hidden { display: none !important; }
+
+/* Bloquer le scroll de page en mode fullscreen */
+html.tab-no-scroll,
+body.tab-no-scroll { overflow: hidden; }
+
+/* Drag handle + header row */
+.tab-handle {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  cursor: ns-resize;
+  user-select: none;
+}
+
+.tab-handle-grip {
+  height: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tab-handle-grip::before {
+  content: '';
+  display: block;
+  width: 32px;
+  height: 3px;
+  background: #333;
+  border-radius: 2px;
+}
+
+.tab-handle:hover .tab-handle-grip::before {
+  background: #555;
+}
+
+.tab-drawer-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 0.75rem 0.4rem;
+  cursor: default;
+}
+
+.tab-drawer-title {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #444;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+/* Track list checkboxes */
+.tab-track-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.6rem;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.tab-track-label {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.68rem;
+  color: #666;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tab-track-label input[type=checkbox] {
+  accent-color: #555;
+  cursor: pointer;
+}
+
+.tab-track-label:hover {
+  color: #999;
+}
+
+/* Loop controls in drawer header */
+.tab-loop-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+
+.tab-loop-controls[hidden] { display: none; }
+
+/* Generic tab button */
+.tab-btn {
+  background: #1c1c1c;
+  border: 1px solid #2a2a2a;
+  color: #555;
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 0.18rem 0.5rem;
+  border-radius: 3px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+
+.tab-btn:hover {
+  background: #242424;
+  border-color: #3a3a3a;
+  color: #bbb;
+}
+
+/* State toggle buttons */
+.tab-btn--state.active {
+  background: #1a2a3a;
+  border-color: #2a4a6a;
+  color: #6aaccc;
+}
+
+/* AlphaTab container */
+.tab-content {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+  background: #fff; /* AlphaTab renders on white background */
+  scrollbar-width: none;       /* Firefox */
+  -ms-overflow-style: none;    /* IE/Edge */
+}
+.tab-content::-webkit-scrollbar { display: none; } /* Chrome/Safari */
+
+/* Strip → scroll horizontal ; Fullscreen → scroll vertical */
+.tab-drawer--strip      .tab-content { overflow-x: auto; overflow-y: hidden; }
+.tab-drawer--fullscreen .tab-content { overflow-y: auto; overflow-x: hidden; }
+
+/* AlphaTab cursor + selection highlight */
+.tab-content .at-cursor-bar {
+  background: rgba(100, 200, 255, 0.12);
+}
+.tab-content .at-cursor-beat {
+  background: rgba(100, 200, 255, 0.4);
+  width: 3px;
+}
+.tab-content .at-selection div {
+  background: rgba(100, 200, 255, 0.25);
+}
+
+/* Loading state inside drawer */
+.tab-content--loading::after {
+  content: 'Chargement AlphaTab…';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #555;
+  font-size: 0.8rem;
+  background: #141414;
+}
+
+/* Drag-select cursor on tab content */
+.tab-content {
+  cursor: crosshair;
+}
+
+/* Mobile: hide drawer entirely */
+@media (max-width: 768px) {
+  .tab-drawer {
+    display: none !important;
+  }
+}
+
 /* ── Responsive — tablet + mobile tracks ─── */
 /* Stacked track layout (sidebar strip on top, waveform below) applies
-   to both tablet and mobile so all track controls are always reachable. */
+   to both tablet et mobile so all track controls are always reachable. */
 
 @media (max-width: 1023px) {
   .site-header {

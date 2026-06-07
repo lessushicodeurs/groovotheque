@@ -68,6 +68,7 @@ app.get('/player.html', (req, res) => {
 app.use(express.static(path.join(__dirname, 'public')));
 
 const AUDIO_EXTENSIONS = new Set(['.mp3', '.wav', '.flac']);
+const GP_EXTENSIONS = new Set(['.gp', '.gpx', '.gp8']);
 const GROOVES_DIR = path.resolve(__dirname, 'grooves');
 
 function getTrackDisplayName(filename) {
@@ -161,7 +162,9 @@ app.get('/api/grooves/:name', async (req, res) => {
     if (mdEntry) {
       mdContent = await fs.promises.readFile(path.join(grooveDir, mdEntry.name), 'utf8');
     }
-    res.json({ slug: req.params.name, tracks, mdContent });
+    const gpEntry = entries.find(e => e.isFile() && GP_EXTENSIONS.has(path.extname(e.name).toLowerCase()));
+    const tabFile = gpEntry ? gpEntry.name : null;
+    res.json({ slug: req.params.name, tracks, mdContent, tabFile });
   } catch (err) {
     if (err.code === 'ENOENT') return res.status(404).json({ error: 'Groove introuvable' });
     res.status(500).json({ error: err.message });
@@ -240,6 +243,22 @@ app.get('/audio/:groove/:file', (req, res) => {
     return res.status(403).json({ error: 'Accès interdit' });
   }
   if (!AUDIO_EXTENSIONS.has(path.extname(filePath).toLowerCase())) {
+    return res.status(403).json({ error: 'Type de fichier non autorisé' });
+  }
+  res.sendFile(filePath, err => {
+    if (err && !res.headersSent) {
+      res.status(err.code === 'ENOENT' ? 404 : 500).json({ error: 'Fichier introuvable' });
+    }
+  });
+});
+
+// 13.1 — Téléchargement du fichier Guitar Pro
+app.get('/tab/:groove/:file', (req, res) => {
+  const filePath = path.resolve(GROOVES_DIR, req.params.groove, req.params.file);
+  if (!filePath.startsWith(GROOVES_DIR + path.sep)) {
+    return res.status(403).json({ error: 'Accès interdit' });
+  }
+  if (!GP_EXTENSIONS.has(path.extname(filePath).toLowerCase())) {
     return res.status(403).json({ error: 'Type de fichier non autorisé' });
   }
   res.sendFile(filePath, err => {

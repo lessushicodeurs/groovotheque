@@ -14,5 +14,9 @@
     "express": "^4.19.2",
     "express-basic-auth": "^1.2.1",
     "marked": "^12.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "playwright": "^1.60.0"
   }
 }
