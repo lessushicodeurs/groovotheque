@@ -90,7 +90,7 @@ def build_structure_block(sorted_markers, bpm=None):
             f"| {m['label']} | {fmt_time(m['in'])} | {fmt_time(m['out'])} | {fmt_dur(m['out'] - m['in'])} |"
             for m in sorted_markers
         )
-    bpm_line = f'_{round(bpm)} bpm_\n\n' if bpm else ''
+    bpm_line = f'- {round(bpm)} bpm\n\n' if bpm else ''
     return '## Structure\n\n' + bpm_line + header + rows
 
 
