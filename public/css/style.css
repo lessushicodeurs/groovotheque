@@ -406,13 +406,6 @@ body {
 
 /* ── Waveform ────────────────────────────── */
 
-.track-wave-col {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-
 .track-timeline-ext {
   background: #0f0f0f;
   overflow: hidden;
