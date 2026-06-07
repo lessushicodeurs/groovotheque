@@ -57,7 +57,7 @@ fi
 if [ "$SHOW_ALL" -eq 0 ]; then
   # Vérifier quels grooves sont déjà présents sur le serveur (par existence du répertoire)
   mapfile -t REMOTE_LIST < <(ssh "$REMOTE" \
-    "find $REMOTE_GROOVES -mindepth 1 -type d 2>/dev/null | sed 's|$REMOTE_GROOVES/||' | sort || true")
+    "cd $REMOTE_GROOVES 2>/dev/null && find . -mindepth 1 -type d | sed 's|^\./||' | sort" 2>/dev/null || true)
   declare -A REMOTE_SET
   for r in "${REMOTE_LIST[@]}"; do REMOTE_SET["$r"]=1; done
 
@@ -120,7 +120,10 @@ for idx in "${SELECTED[@]}"; do
   echo "=== Déploiement de '$groove' ==="
 
   # Créer l'arborescence de répertoires sur le serveur
-  ssh "$REMOTE" "mkdir -p \"$remote_path\""
+  # Note: ~ entre double quotes ne s'expande pas sur le shell distant ;
+  # on substitue ~/  par $HOME/ (qui lui s'expande en double quotes).
+  remote_path_home="\${HOME}/${remote_path#\~/}"
+  ssh "$REMOTE" "mkdir -p \"$remote_path_home\""
 
   # Uploader uniquement les fichiers utiles, exclure les sous-dossiers internes
   rsync -avz \
