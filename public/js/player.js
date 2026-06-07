@@ -2373,7 +2373,7 @@ function initCommentModal() {
 async function loadComments() {
   currentComments = await fetchComments()
   currentComments.sort((a, b) => a.position - b.position)
-  // Rendu différé dans renderCommentMarkers() (appelé après adjustTrackWidths)
+  renderCommentMarkers()
   updateCommentBadge()
 
   // Révéler les boutons dans le transport
