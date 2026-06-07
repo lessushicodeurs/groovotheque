@@ -113,6 +113,8 @@ function markSegmentLoaded(idx, color) {
 function finishLoading() {
   mainEl.classList.remove('loading')
   loadBarEl.classList.add('done')
+  btnLoopGoIn.disabled = false
+  btnLoopGoOut.disabled = false
 }
 
 function showFatalError(msg, isError = true) {
@@ -566,8 +568,6 @@ function updateLoopFields() {
   loopOutEl.value = hasRegion ? formatLoopTime(activeLoopOut) : '—'
   loopInEl.disabled = !hasRegion
   loopOutEl.disabled = !hasRegion
-  btnLoopGoIn.disabled = !hasRegion
-  btnLoopGoOut.disabled = !hasRegion
   btnLoopClear.disabled = !hasRegion
 }
 

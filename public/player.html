@@ -10,6 +10,7 @@
 <body>
   <div id="load-bar" role="progressbar" aria-label="Chargement des pistes" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div>
   <header class="site-header player-header">
+    <a id="back-btn" class="back-link" href="/" aria-label="Retour">←</a>
     <nav id="player-breadcrumb" class="breadcrumb breadcrumb--player" aria-label="Navigation"></nav>
     <h1 id="groove-title">…</h1>
     <button id="btn-prev" class="nav-btn" aria-label="Groove précédent" disabled>‹</button>
@@ -27,8 +28,10 @@
     </button>
     <div id="transport" class="transport">
       <div class="transport-row">
+        <button id="btn-loop-go-in"  class="transport-btn transport-btn--marker-nav" aria-label="Région précédente">⏮</button>
         <button id="btn-play" class="transport-btn" aria-label="Lecture / Pause">▶</button>
         <button id="btn-stop" class="transport-btn transport-btn--stop" aria-label="Stop">■</button>
+        <button id="btn-loop-go-out" class="transport-btn transport-btn--marker-nav" aria-label="Région suivante">⏭</button>
         <div class="transport-time">
           <span id="timecode" class="timecode">0:00.000</span>
           <span class="timecode-sep">/</span>
@@ -38,12 +41,10 @@
           <div id="seek-fill" class="seek-fill"></div>
         </div>
         <div class="transport-loop">
-          <button id="btn-loop-go-in" class="transport-btn transport-btn--loop-nav" aria-label="Aller au point IN" disabled>⏮</button>
           <span class="loop-label">IN</span>
           <input id="loop-in" class="loop-input" type="text" value="—" aria-label="Point IN" disabled>
           <span class="loop-label">OUT</span>
           <input id="loop-out" class="loop-input" type="text" value="—" aria-label="Point OUT" disabled>
-          <button id="btn-loop-go-out" class="transport-btn transport-btn--loop-nav" aria-label="Aller au point OUT" disabled>⏭</button>
           <button id="btn-loop" class="transport-btn transport-btn--loop" aria-label="Boucle" aria-pressed="false">⟳</button>
           <button id="btn-loop-clear" class="transport-btn transport-btn--loop-clear" aria-label="Supprimer la boucle" disabled>✕</button>
         </div>
