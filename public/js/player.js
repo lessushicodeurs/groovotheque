@@ -707,11 +707,6 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
   // Creating a region on any track syncs to all other tracks.
   regionsPlugin.enableDragSelection({ color: 'rgba(255,255,255,0.2)' })
   regionsPlugin.on('region-created', (region) => {
-    // 13.6 — when tab drawer is open, beat clicks drive the loop; ignore waveform drags
-    if (tabState !== 'collapsed') {
-      region.remove()
-      return
-    }
     syncRegionToAll(region.start, region.end)
   })
 
