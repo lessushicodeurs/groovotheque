@@ -282,8 +282,34 @@ body {
   border-bottom: 1px solid #1a1a1a;
 }
 
+/* Epic 21 — timeline-row est désormais le premier enfant ; .track-row:first-child
+   ne s'applique plus quand la timeline-row est présente.
+   La règle est conservée en fallback (pas de groove chargé, tests…). */
 .track-row:first-child {
   border-top: 1px solid #1a1a1a;
+}
+
+/* ── Epic 21 — Rangée timeline détachée ────── */
+
+.timeline-row {
+  display: flex;
+  align-items: stretch;
+  border-top: 1px solid #1a1a1a;
+  border-bottom: 1px solid #1a1a1a;
+}
+
+.timeline-sidebar {
+  width: 176px;
+  flex-shrink: 0;
+  background: #141414;
+  border-right: 1px solid #1a1a1a;
+}
+
+.timeline-wave-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 /* ── Sidebar ─────────────────────────────── */
@@ -379,13 +405,6 @@ body {
 }
 
 /* ── Waveform ────────────────────────────── */
-
-.track-wave-col {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
 
 .track-timeline-ext {
   background: #0f0f0f;
@@ -1014,6 +1033,12 @@ body.tab-no-scroll { overflow: hidden; }
 
   .track-row {
     flex-direction: column;
+  }
+
+  /* Sur tablette, la sidebar des tracks devient pleine largeur (strip horizontal).
+     Le placeholder .timeline-sidebar (176px vide) ne s'aligne plus avec rien → masqué. */
+  .timeline-sidebar {
+    display: none;
   }
 
   .track-sidebar {

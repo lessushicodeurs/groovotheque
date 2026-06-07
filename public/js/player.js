@@ -138,6 +138,7 @@ const waveEls        = []   // .track-wave div per track (for proportional width
 const minimapRowEls  = []   // .minimap-row div per track (for proportional width)
 const trackDurations = []   // duration in seconds per track, set on 'ready'
 let timelinePluginRef = null  // TimelinePlugin instance (track 0), for duration correction
+let timelineExtEl     = null  // container DOM element for TimelinePlugin (in .timeline-row)
 let currentTracks  = []   // groove.tracks list, set at init time
 let pendingLoop    = null // loop à restaurer dès que toutes les waveforms sont prêtes
 let isPlaying       = false
@@ -622,6 +623,32 @@ function setLoopEnabled(val) {
   btnLoop.setAttribute('aria-pressed', String(loopEnabled))
 }
 
+// ── Epic 21 — Rangée timeline / marqueurs détachée ────────────────────────
+// Insère une .timeline-row avant toutes les .track-row. Elle contient le
+// TimelinePlugin et la bande de marqueurs, alignés avec les zones waveform
+// via une .timeline-sidebar placeholder de la même largeur que .track-sidebar.
+function buildTimelineRow() {
+  const row = document.createElement('div')
+  row.className = 'timeline-row'
+
+  const sidebar = document.createElement('div')
+  sidebar.className = 'timeline-sidebar'
+
+  const waveCol = document.createElement('div')
+  waveCol.className = 'timeline-wave-col'
+
+  timelineExtEl = document.createElement('div')
+  timelineExtEl.className = 'track-timeline-ext'
+
+  markerLaneEl = document.createElement('div')
+  markerLaneEl.className = 'marker-lane'
+  markerLaneEl.setAttribute('aria-label', 'Bande de marqueurs')
+
+  waveCol.append(timelineExtEl, markerLaneEl)
+  row.append(sidebar, waveCol)
+  tracksContainer.appendChild(row)
+}
+
 function buildTrackRow(track, idx, cachedPeaks = null) {
   const color         = TRACK_COLORS[idx % TRACK_COLORS.length]
   const waveColor     = color + '55'  // dim = unplayed
@@ -690,23 +717,7 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
   const waveEl = document.createElement('div')
   waveEl.className = 'track-wave'
 
-  // Track 0 gets a column wrapper so the timeline renders above the waveform
-  // in the light DOM (via TimelinePlugin's container option), avoiding Shadow DOM offsets.
-  let timelineExtEl = null
-  if (idx === 0) {
-    const waveCol = document.createElement('div')
-    waveCol.className = 'track-wave-col'
-    timelineExtEl = document.createElement('div')
-    timelineExtEl.className = 'track-timeline-ext'
-    // Epic 17: marker lane between timeline and first waveform
-    markerLaneEl = document.createElement('div')
-    markerLaneEl.className = 'marker-lane'
-    markerLaneEl.setAttribute('aria-label', 'Bande de marqueurs')
-    waveCol.append(timelineExtEl, markerLaneEl, waveEl)
-    row.append(sidebar, waveCol)
-  } else {
-    row.append(sidebar, waveEl)
-  }
+  row.append(sidebar, waveEl)
   tracksContainer.appendChild(row)
   waveEls.push(waveEl)
 
@@ -1927,11 +1938,12 @@ async function init() {
     )
 
     currentTracks = groove.tracks
+    buildTimelineRow()
     groove.tracks.forEach((track, i) => {
       buildTrackRow(track, track.index, cachedPeaksArr[i])
     })
 
-    // Epic 17 — init marker lane (markerLaneEl set during buildTrackRow idx=0)
+    // Epic 17 — init marker lane (markerLaneEl set during buildTimelineRow)
     initMarkerLane()
 
     await loadMix(groove.tracks)
