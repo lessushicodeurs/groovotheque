@@ -1,12 +1,23 @@
 import { marked } from '/vendor/marked.esm.js';
 
-const listEl = document.getElementById('groove-list');
+const listEl    = document.getElementById('groove-list');
 const tooltipEl = document.getElementById('tooltip');
+
+// Encode un chemin relatif pour l'utiliser dans une URL path
+function encodePath(p) {
+  return p.split('/').map(encodeURIComponent).join('/');
+}
+
+// Lit le query param ?path= de l'URL courante
+function getCurrentPath() {
+  return new URLSearchParams(location.search).get('path') || '';
+}
+
+// ── Tooltip ────────────────────────────────────────────────────────────────
 
 const mdCache = new Map();
 let activeCard = null;
 
-// Sanitisation DOM : supprime les scripts et handlers d'événements du HTML rendu
 function sanitizeHtml(html) {
   const tmp = document.createElement('div');
   tmp.innerHTML = html;
@@ -21,15 +32,13 @@ function sanitizeHtml(html) {
   return tmp.innerHTML;
 }
 
-// Charge uniquement le markdown (endpoint dédié, sans les pistes)
-// Throws on network/HTTP error — ne met PAS en cache les erreurs transitoires
-async function loadMd(slug) {
-  if (mdCache.has(slug)) return mdCache.get(slug);
-  const res = await fetch(`/api/grooves/${encodeURIComponent(slug)}/md`);
+async function loadMd(groovePath) {
+  if (mdCache.has(groovePath)) return mdCache.get(groovePath);
+  const res = await fetch(`/api/grooves/${encodePath(groovePath)}/md`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   const html = data.mdContent ? sanitizeHtml(marked.parse(data.mdContent)) : null;
-  mdCache.set(slug, html);
+  mdCache.set(groovePath, html);
   return html;
 }
 
@@ -66,9 +75,9 @@ function positionTooltip(card) {
   tooltipEl.style.top = `${top}px`;
 }
 
-async function showTooltip(card, slug) {
+async function showTooltip(card, groovePath) {
   try {
-    const html = await loadMd(slug);
+    const html = await loadMd(groovePath);
     if (!html || activeCard !== card) return;
     tooltipEl.innerHTML = html;
     tooltipEl.style.left = '-9999px';
@@ -77,7 +86,7 @@ async function showTooltip(card, slug) {
     tooltipEl.setAttribute('aria-hidden', 'false');
     positionTooltip(card);
   } catch {
-    // Erreur réseau transitoire : pas de mise en cache, réessayable au prochain survol
+    // Erreur transitoire : pas de mise en cache
   }
 }
 
@@ -87,14 +96,22 @@ function hideTooltip() {
   tooltipEl.setAttribute('aria-hidden', 'true');
 }
 
-function createCard(groove) {
+document.addEventListener('touchstart', (e) => {
+  if (activeCard && !activeCard.contains(e.target)) hideTooltip();
+}, { passive: true });
+
+document.addEventListener('scroll', hideTooltip, { passive: true });
+
+// ── Cartes ─────────────────────────────────────────────────────────────────
+
+function createGrooveCard(groove) {
   const card = document.createElement('a');
   card.className = 'groove-card';
-  card.href = `player.html?groove=${encodeURIComponent(groove.slug)}`;
+  card.href = `player.html?groove=${encodePath(groove.path)}`;
 
   const name = document.createElement('p');
   name.className = 'groove-card-name';
-  name.textContent = groove.name;
+  name.textContent = groove.displayName;
   card.appendChild(name);
 
   if (groove.hasMd) {
@@ -105,50 +122,140 @@ function createCard(groove) {
 
     card.addEventListener('mouseenter', () => {
       activeCard = card;
-      showTooltip(card, groove.slug);
+      showTooltip(card, groove.path);
     });
     card.addEventListener('mouseleave', () => {
       if (activeCard === card) hideTooltip();
     });
 
-    // Touch: premier tap = tooltip, deuxième tap = navigation
     card.addEventListener('touchend', (e) => {
       const tooltipVisible = !tooltipEl.hasAttribute('hidden') && activeCard === card;
       if (!tooltipVisible) {
         e.preventDefault();
         activeCard = card;
-        showTooltip(card, groove.slug);
+        showTooltip(card, groove.path);
       }
-      // sinon: laisser le comportement par défaut → navigation
     }, { passive: false });
   }
 
   return card;
 }
 
-// Ferme le tooltip si le tap est en dehors de la carte active
-document.addEventListener('touchstart', (e) => {
-  if (activeCard && !activeCard.contains(e.target)) hideTooltip();
-}, { passive: true });
+function createFolderCard(folder) {
+  const card = document.createElement('a');
+  card.className = 'groove-card groove-card--folder';
+  card.href = `/?path=${encodePath(folder.path)}`;
 
-// Ferme le tooltip au scroll (évite qu'il reste fixé à l'écran)
-document.addEventListener('scroll', hideTooltip, { passive: true });
+  const icon = document.createElement('span');
+  icon.className = 'folder-icon';
+  icon.setAttribute('aria-hidden', 'true');
+  icon.textContent = '📁';
+  card.appendChild(icon);
 
-async function init() {
+  const name = document.createElement('p');
+  name.className = 'groove-card-name';
+  name.textContent = folder.displayName;
+  card.appendChild(name);
+
+  return card;
+}
+
+// ── Fil d'Ariane (20.6) ────────────────────────────────────────────────────
+
+function renderBreadcrumb(currentPath) {
+  const nav = document.getElementById('breadcrumb');
+  if (!nav) return;
+  nav.innerHTML = '';
+
+  const home = document.createElement('a');
+  home.href = '/';
+  home.className = 'breadcrumb-link';
+  home.textContent = 'Accueil';
+  nav.appendChild(home);
+
+  if (!currentPath) return;
+
+  const segments = currentPath.split('/');
+  segments.forEach((seg, i) => {
+    const sep = document.createElement('span');
+    sep.className = 'breadcrumb-sep';
+    sep.textContent = '›';
+    nav.appendChild(sep);
+
+    const partialPath = segments.slice(0, i + 1).join('/');
+    const isLast = i === segments.length - 1;
+
+    if (isLast) {
+      const current = document.createElement('span');
+      current.className = 'breadcrumb-current';
+      current.textContent = seg.replace(/[-_]/g, ' ');
+      nav.appendChild(current);
+    } else {
+      const link = document.createElement('a');
+      link.href = `/?path=${encodePath(partialPath)}`;
+      link.className = 'breadcrumb-link';
+      link.textContent = seg.replace(/[-_]/g, ' ');
+      nav.appendChild(link);
+    }
+  });
+}
+
+// ── Recherche live (20.7) ──────────────────────────────────────────────────
+
+let allGrooves = null;
+
+async function loadAllGrooves() {
+  if (allGrooves !== null) return allGrooves;
+  const res = await fetch('/api/search');
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  allGrooves = await res.json();
+  return allGrooves;
+}
+
+function renderSearchResults(query, grooves) {
+  listEl.innerHTML = '';
+  if (grooves.length === 0) {
+    listEl.innerHTML = '<p class="state-msg">Aucun résultat.</p>';
+    return;
+  }
+  for (const groove of grooves) {
+    const card = createGrooveCard(groove);
+    const segments = groove.path.split('/');
+    if (segments.length > 1) {
+      const breadcrumb = document.createElement('p');
+      breadcrumb.className = 'groove-card-path';
+      breadcrumb.textContent = segments.slice(0, -1).map(s => s.replace(/[-_]/g, ' ')).join(' › ');
+      card.appendChild(breadcrumb);
+    }
+    listEl.appendChild(card);
+  }
+}
+
+async function renderLevel(currentPath) {
+  listEl.innerHTML = '<p class="state-msg">Chargement…</p>';
+
+  const url = currentPath
+    ? `/api/grooves?path=${encodeURIComponent(currentPath)}`
+    : '/api/grooves';
+
   try {
-    const res = await fetch('/api/grooves');
+    const res = await fetch(url);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const grooves = await res.json();
+    const items = await res.json();
 
     listEl.innerHTML = '';
 
-    if (grooves.length === 0) {
-      listEl.innerHTML = '<p class="state-msg">Aucun titre trouvé dans grooves/.</p>';
+    if (items.length === 0) {
+      listEl.innerHTML = '<p class="state-msg">Aucun titre trouvé.</p>';
       return;
     }
 
-    for (const groove of grooves) {
-      listEl.appendChild(createCard(groove));
+    for (const item of items) {
+      if (item.type === 'folder') {
+        listEl.appendChild(createFolderCard(item));
+      } else {
+        listEl.appendChild(createGrooveCard(item));
+      }
     }
   } catch (err) {
     const p = document.createElement('p');
@@ -157,6 +264,42 @@ async function init() {
     listEl.innerHTML = '';
     listEl.appendChild(p);
   }
+}
+
+function setupSearch(currentPath) {
+  const searchInput = document.getElementById('search-input');
+  if (!searchInput) return;
+
+  let pendingQuery = '';
+
+  searchInput.addEventListener('input', async () => {
+    const query = searchInput.value.trim().toLowerCase();
+    pendingQuery = query;
+
+    if (!query) {
+      renderLevel(currentPath);
+      return;
+    }
+
+    try {
+      const grooves = await loadAllGrooves();
+      if (pendingQuery !== query) return;
+      const filtered = grooves.filter(g =>
+        g.displayName.toLowerCase().includes(query) ||
+        g.path.toLowerCase().includes(query)
+      );
+      renderSearchResults(query, filtered);
+    } catch (err) {
+      listEl.innerHTML = `<p class="state-msg error">Erreur : ${err.message}</p>`;
+    }
+  });
+}
+
+async function init() {
+  const currentPath = getCurrentPath();
+  renderBreadcrumb(currentPath);
+  setupSearch(currentPath);
+  await renderLevel(currentPath);
 }
 
 init();

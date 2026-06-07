@@ -1301,3 +1301,117 @@ body.tab-no-scroll { overflow: hidden; }
     transform: none;
   }
 }
+
+/* ── Epic 20 — Dossiers, fil d'Ariane, recherche ─────────────────── */
+
+/* Carte dossier : bordure bleue + fond légèrement distinct */
+.groove-card--folder {
+  border-color: #1e3a5a;
+  background: #121e2a;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.groove-card--folder:hover {
+  border-color: #2a5a88;
+  background: #162534;
+}
+
+.folder-icon {
+  font-size: 1.25rem;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+/* Chemin affiché sous les résultats de recherche */
+.groove-card-path {
+  margin: 0.3rem 0 0;
+  font-size: 0.72rem;
+  color: #556;
+}
+
+/* Contrôles en haut de l'index (fil d'Ariane + recherche) */
+.index-controls {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.875rem 2rem 0;
+  flex-wrap: wrap;
+}
+
+/* Barre de recherche */
+.search-wrap {
+  margin-left: auto;
+}
+
+.search-input {
+  background: #191919;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  color: #ddd;
+  font-size: 0.9rem;
+  padding: 0.4rem 0.8rem;
+  width: 220px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.search-input:focus {
+  border-color: #3a6a9a;
+}
+
+.search-input::placeholder {
+  color: #444;
+}
+
+/* Fil d'Ariane commun */
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  font-size: 0.83rem;
+  min-width: 0;
+}
+
+.breadcrumb-link {
+  color: #557;
+  text-decoration: none;
+  transition: color 0.1s;
+}
+
+.breadcrumb-link:hover {
+  color: #88b;
+}
+
+.breadcrumb-sep {
+  color: #333;
+  user-select: none;
+}
+
+.breadcrumb-current {
+  color: #aaa;
+}
+
+/* Variante player : dans le header, remplace le bouton ← */
+.breadcrumb--player {
+  flex-shrink: 0;
+  max-width: 40%;
+  overflow: hidden;
+}
+
+@media (max-width: 767px) {
+  .index-controls {
+    padding: 0.625rem 1rem 0;
+  }
+
+  .search-input {
+    width: 160px;
+  }
+
+  .breadcrumb--player {
+    max-width: 55%;
+    font-size: 0.75rem;
+  }
+}
