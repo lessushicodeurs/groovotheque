@@ -2168,6 +2168,8 @@ function openCommentPopover(comment, anchorEl) {
     editBtn.className = 'comment-popover-btn'
     editBtn.textContent = 'Modifier'
     editBtn.addEventListener('click', () => {
+      editBtn.disabled = true
+
       cpText.setAttribute('hidden', '')
       const area = document.createElement('textarea')
       area.className = 'comment-edit-textarea'
@@ -2176,24 +2178,36 @@ function openCommentPopover(comment, anchorEl) {
       cpText.parentNode.insertBefore(area, cpText)
       area.focus()
 
+      const exitEdit = () => {
+        area.remove()
+        saveBtn.remove()
+        cpText.removeAttribute('hidden')
+        editBtn.disabled = false
+      }
+
       const saveBtn = document.createElement('button')
       saveBtn.className = 'comment-popover-btn'
       saveBtn.textContent = 'Sauvegarder'
       saveBtn.addEventListener('click', async () => {
         const newText = area.value.trim()
         if (!newText) return
+        saveBtn.disabled = true
         try {
           const updated = await apiUpdateComment(comment.id, newText)
           comment.text = updated.text
           comment.updatedAt = updated.updatedAt
           cpText.textContent = updated.text
-          cpText.removeAttribute('hidden')
-          area.remove()
-          saveBtn.remove()
-        } catch (err) {
+          exitEdit()
+        } catch {
           saveBtn.textContent = 'Erreur ✗'
+          saveBtn.disabled = false
         }
       })
+
+      area.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { e.stopPropagation(); exitEdit() }
+      })
+
       cpActions.appendChild(saveBtn)
     })
 
