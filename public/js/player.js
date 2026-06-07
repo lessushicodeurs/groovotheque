@@ -153,11 +153,21 @@ let currentTempo    = 100  // percent (50–120)
 let drawerOpen      = true
 
 // ── Epic 17 — Marker band state ───────────────────────────────────────────
-let markerLaneEl     = null
-let markerPopoverEl  = null
-let markers          = []    // { id, start, end, label }[]
-let selectedMarkerId = null
-let markerIdCounter  = 0
+let markerLaneEl      = null
+let markerPopoverEl   = null
+let markers           = []    // { id, start, end, label }[]
+let markerAnchorId    = null  // premier marqueur cliqué (ancre de la sélection)
+let markerSelectionIn = null  // borne gauche de la sélection courante (peut couvrir N marqueurs)
+let markerSelectionOut= null  // borne droite
+let markerIdCounter   = 0
+
+const MARKER_EPS = 0.05  // 50 ms — tolérance de contigüité
+
+function isMarkerInSelection(marker) {
+  return markerSelectionIn !== null &&
+    marker.start >= markerSelectionIn - MARKER_EPS &&
+    marker.end   <= markerSelectionOut + MARKER_EPS
+}
 
 function nextMarkerId() { return 'mk_' + (++markerIdCounter) }
 
@@ -1549,7 +1559,7 @@ function updateRegionElPosition(el, marker) {
   el.title = marker.label
   const span = el.querySelector('.marker-region-text')
   if (span) span.textContent = marker.label
-  el.classList.toggle('marker-region--selected', marker.id === selectedMarkerId)
+  el.classList.toggle('marker-region--selected', isMarkerInSelection(marker))
 }
 
 function setupRegionInteraction(el, marker) {
@@ -1557,11 +1567,11 @@ function setupRegionInteraction(el, marker) {
   const edgeR = el.querySelector('.marker-region-edge--right')
   let didDrag = false
 
-  // Single click → select region (set IN/OUT)
-  el.addEventListener('click', () => {
+  // Single click → select region (set IN/OUT) ; Ctrl/Cmd+click → étend la sélection
+  el.addEventListener('click', (e) => {
     if (didDrag) return
     const m = markers.find(mk => mk.id === marker.id)
-    if (m) selectMarker(m.id)
+    if (m) selectMarker(m.id, e.ctrlKey || e.metaKey)
   })
 
   // Double-click → edit label (desktop only)
@@ -1599,7 +1609,7 @@ function setupRegionInteraction(el, marker) {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
       // Update cycle if this is the selected region
-      if (m.id === selectedMarkerId) syncRegionToAll(m.start, m.end)
+      if (isMarkerInSelection(m)) syncRegionToAll(markerSelectionIn, markerSelectionOut)
     }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
@@ -1624,7 +1634,7 @@ function setupRegionInteraction(el, marker) {
       const onUp = () => {
         window.removeEventListener('mousemove', onMove)
         window.removeEventListener('mouseup', onUp)
-        if (m.id === selectedMarkerId) syncRegionToAll(m.start, m.end)
+        if (isMarkerInSelection(m)) syncRegionToAll(markerSelectionIn, markerSelectionOut)
       }
       window.addEventListener('mousemove', onMove)
       window.addEventListener('mouseup', onUp)
@@ -1675,13 +1685,38 @@ function renderMarkers() {
   }
 }
 
-function selectMarker(id) {
-  selectedMarkerId = id
+function refreshMarkerSelectionVisual() {
   markerLaneEl?.querySelectorAll('.marker-region').forEach(el => {
-    el.classList.toggle('marker-region--selected', el.dataset.markerId === id)
+    const m = markers.find(mk => mk.id === el.dataset.markerId)
+    if (m) el.classList.toggle('marker-region--selected', isMarkerInSelection(m))
   })
+}
+
+function selectMarker(id, extend = false) {
   const m = markers.find(mk => mk.id === id)
-  if (m) syncRegionToAll(m.start, m.end)
+  if (!m) return
+
+  if (extend && markerSelectionIn !== null) {
+    const touchesRight = Math.abs(m.start - markerSelectionOut) < MARKER_EPS
+    const touchesLeft  = Math.abs(m.end   - markerSelectionIn)  < MARKER_EPS
+    if (touchesRight || touchesLeft) {
+      // Extension contigüe
+      markerSelectionIn  = Math.min(markerSelectionIn,  m.start)
+      markerSelectionOut = Math.max(markerSelectionOut, m.end)
+    } else {
+      // Pas contigu → nouvelle sélection simple
+      markerAnchorId    = id
+      markerSelectionIn  = m.start
+      markerSelectionOut = m.end
+    }
+  } else {
+    markerAnchorId    = id
+    markerSelectionIn  = m.start
+    markerSelectionOut = m.end
+  }
+
+  refreshMarkerSelectionVisual()
+  syncRegionToAll(markerSelectionIn, markerSelectionOut)
 }
 
 function openPopover(marker, regionEl) {
@@ -1731,8 +1766,10 @@ function openPopover(marker, regionEl) {
   delBtn.onclick = () => {
     const idx = markers.findIndex(mk => mk.id === marker.id)
     if (idx !== -1) markers.splice(idx, 1)
-    if (selectedMarkerId === marker.id) {
-      selectedMarkerId = null
+    if (isMarkerInSelection(marker)) {
+      markerAnchorId = null
+      markerSelectionIn = null
+      markerSelectionOut = null
       clearLoop()
     }
     const el = markerLaneEl?.querySelector(`[data-marker-id="${marker.id}"]`)
