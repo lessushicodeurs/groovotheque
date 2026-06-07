@@ -2130,7 +2130,7 @@ function renderReplies(replies) {
   }
 }
 
-function openCommentPopover(comment, anchorEl) {
+function openCommentPopover(comment, anchorEl, autoEdit = false) {
   // Seek à la position du commentaire
   performSeek(comment.position)
 
@@ -2231,6 +2231,7 @@ function openCommentPopover(comment, anchorEl) {
     })
 
     cpActions.append(editBtn, delBtn)
+    if (autoEdit) editBtn.click()
   } else {
     cpActions.setAttribute('hidden', '')
   }
@@ -2303,7 +2304,18 @@ function initCommentPopover() {
 
 // ── Modal de création ────────────────────────────────────────────────────
 function openCommentModal() {
-  commentModalPosition_ = wavesurfers[0]?.getCurrentTime() ?? 0
+  const pos = wavesurfers[0]?.getCurrentTime() ?? 0
+
+  // Si un commentaire existe déjà à ce timestamp, passer en modification
+  const TOLERANCE = 0.5
+  const existing = currentComments.find(c => Math.abs(c.position - pos) < TOLERANCE)
+  if (existing) {
+    const markerEl = commentMarkersLaneEl?.querySelector(`[data-comment-id="${existing.id}"]`)
+    openCommentPopover(existing, markerEl ?? commentMarkersLaneEl, window.CURRENT_USER === existing.author)
+    return
+  }
+
+  commentModalPosition_ = pos
   commentModalPosition.textContent = `Position : ${formatCommentPosition(commentModalPosition_)}`
   commentModalText.value = ''
   commentModalSubmit.disabled = true
