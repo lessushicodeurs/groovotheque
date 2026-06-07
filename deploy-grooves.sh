@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Déploie un ou plusieurs dossiers de grooves sur AlwaysData via SSH.
-# Les grooves existants sur le serveur ne sont pas touchés.
-# Usage : ./deploy-grooves.sh "Nom du groove 1" ["Nom du groove 2" ...]
+# Sélection interactive : numéros individuels (1,3) ou plages (2~4).
 
 set -euo pipefail
 
@@ -10,32 +9,60 @@ REMOTE_GROOVES="~/sites/ghismo.com/groovotheque/grooves"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOCAL_GROOVES="$SCRIPT_DIR/grooves"
 
-if [ $# -eq 0 ]; then
-  echo "Usage : $0 <nom-du-groove> [<nom-du-groove> ...]"
-  echo ""
-  echo "Grooves disponibles localement :"
-  ls -1 "$LOCAL_GROOVES" 2>/dev/null | grep -v '~$' || echo "  (aucun)"
+# Construire la liste des grooves (hors dossiers se terminant par ~)
+mapfile -t GROOVES < <(find "$LOCAL_GROOVES" -mindepth 1 -maxdepth 1 -type d | sort | grep -v '~$' | sed "s|$LOCAL_GROOVES/||")
+
+if [ ${#GROOVES[@]} -eq 0 ]; then
+  echo "Aucun groove trouvé dans grooves/"
+  exit 1
+fi
+
+echo "Grooves disponibles :"
+for i in "${!GROOVES[@]}"; do
+  printf "  %2d) %s\n" "$((i + 1))" "${GROOVES[$i]}"
+done
+echo ""
+echo "Sélection (ex: 1  ou  1,3  ou  2~4) :"
+read -r SELECTION
+
+# Parser la sélection en indices (base 0)
+SELECTED=()
+IFS=',' read -ra PARTS <<< "$SELECTION"
+for part in "${PARTS[@]}"; do
+  part="${part// /}"
+  if [[ "$part" =~ ^([0-9]+)~([0-9]+)$ ]]; then
+    from="${BASH_REMATCH[1]}"
+    to="${BASH_REMATCH[2]}"
+    for ((n = from; n <= to; n++)); do
+      SELECTED+=("$((n - 1))")
+    done
+  elif [[ "$part" =~ ^[0-9]+$ ]]; then
+    SELECTED+=("$((part - 1))")
+  else
+    echo "ERREUR : sélection invalide '$part'"
+    exit 1
+  fi
+done
+
+if [ ${#SELECTED[@]} -eq 0 ]; then
+  echo "Aucun groove sélectionné."
   exit 1
 fi
 
 ERRORS=0
-
-for groove in "$@"; do
-  local_path="$LOCAL_GROOVES/$groove"
-
-  if [ ! -d "$local_path" ]; then
-    echo "ERREUR : groove '$groove' introuvable dans grooves/"
+for idx in "${SELECTED[@]}"; do
+  if [ "$idx" -lt 0 ] || [ "$idx" -ge "${#GROOVES[@]}" ]; then
+    echo "ERREUR : numéro $((idx + 1)) hors de la liste."
     ERRORS=$((ERRORS + 1))
     continue
   fi
 
+  groove="${GROOVES[$idx]}"
+  local_path="$LOCAL_GROOVES/$groove"
+
   echo "=== Déploiement de '$groove' ==="
-  ssh "$REMOTE" "mkdir -p $REMOTE_GROOVES/$(printf '%q' "$groove")"
-
-  rsync -avz --delete \
-    "$local_path/" \
-    "$REMOTE:$REMOTE_GROOVES/$groove/"
-
+  ssh "$REMOTE" "mkdir -p \"$REMOTE_GROOVES/$groove\""
+  rsync -avz --delete "$local_path/" "$REMOTE:$REMOTE_GROOVES/$groove/"
   echo "=== '$groove' déployé ==="
   echo ""
 done
