@@ -126,6 +126,7 @@ const webAudioRouted = []   // true if MediaElementSource successfully connected
 const waveEls        = []   // .track-wave div per track (for proportional width)
 const minimapRowEls  = []   // .minimap-row div per track (for proportional width)
 const trackDurations = []   // duration in seconds per track, set on 'ready'
+let timelinePluginRef = null  // TimelinePlugin instance (track 0), for duration correction
 let currentTracks  = []   // groove.tracks list, set at init time
 let pendingLoop    = null // loop à restaurer dès que la waveform est prête
 let isPlaying       = false
@@ -596,7 +597,19 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
   const waveEl = document.createElement('div')
   waveEl.className = 'track-wave'
 
-  row.append(sidebar, waveEl)
+  // Track 0 gets a column wrapper so the timeline renders above the waveform
+  // in the light DOM (via TimelinePlugin's container option), avoiding Shadow DOM offsets.
+  let timelineExtEl = null
+  if (idx === 0) {
+    const waveCol = document.createElement('div')
+    waveCol.className = 'track-wave-col'
+    timelineExtEl = document.createElement('div')
+    timelineExtEl.className = 'track-timeline-ext'
+    waveCol.append(timelineExtEl, waveEl)
+    row.append(sidebar, waveCol)
+  } else {
+    row.append(sidebar, waveEl)
+  }
   tracksContainer.appendChild(row)
   waveEls.push(waveEl)
 
@@ -628,13 +641,15 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
   ]
 
   if (idx === 0) {
-    plugins.push(TimelinePlugin.create({
+    timelinePluginRef = TimelinePlugin.create({
       height: 18,
       timeInterval: 5,
       primaryLabelInterval: 30,
       secondaryLabelInterval: 10,
       style: { color: '#555', fontSize: '10px' },
-    }))
+      container: timelineExtEl,
+    })
+    plugins.push(timelinePluginRef)
   }
 
   // ── WaveSurfer instance ───────────────────────
@@ -728,17 +743,6 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
         syncRegionToAll(pendingLoop.in, pendingLoop.out)
         pendingLoop = null
       }
-      // Déplacer la timeline (dernier enfant de .wrapper dans le Shadow DOM) en tête,
-      // pour qu'elle apparaisse au-dessus de la waveform plutôt qu'en-dessous.
-      const wrapper = ws.getWrapper()
-      const shadowWrapper = wrapper?.parentElement
-      const shadowRoot   = shadowWrapper?.getRootNode()
-      const domWrapper   = shadowRoot instanceof ShadowRoot
-        ? shadowRoot.querySelector('.wrapper')
-        : null
-      if (domWrapper && domWrapper.lastElementChild !== domWrapper.firstElementChild) {
-        domWrapper.insertBefore(domWrapper.lastElementChild, domWrapper.firstElementChild)
-      }
     }
     trackDurations[idx] = ws.getDuration()
     if (trackDurations.filter(d => d > 0).length === wavesurfers.length) {
@@ -770,7 +774,13 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
     })
   }
 
-  ws.on('finish', onFinish)
+  ws.on('finish', () => {
+    // Ignore finish from tracks shorter than the longest track — a short track
+    // (e.g. metronome) reaching its end must not stop the whole playback.
+    const maxDur = Math.max(...trackDurations.filter(d => d > 0))
+    if (maxDur > 0 && ws.getDuration() < maxDur - 0.1) return
+    onFinish()
+  })
 
   // ── Per-track controls ────────────────────────
   btnMute.addEventListener('click', () => {
@@ -803,6 +813,15 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
 function adjustTrackWidths() {
   const maxDur = Math.max(...trackDurations.filter(d => d > 0))
   if (!maxDur) return
+
+  // Track 0 may be shorter than others (e.g. a metronome). Always sync
+  // totalDuration and the timeline to the actual longest track.
+  totalDuration = maxDur
+  durationEl.textContent = formatTimecode(maxDur)
+  if (timelinePluginRef) {
+    timelinePluginRef.options.duration = maxDur
+    wavesurfers[0]?.emit('redraw')
+  }
 
   // sidebar width is fixed at 176px (matches .track-sidebar { width: 176px })
   const SIDEBAR_W = 176
