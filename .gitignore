@@ -4,6 +4,7 @@ grooves/
 cache/*
 !cache/.gitkeep
 .auth
+comments.json
 .env
 .env.deploy
 .worktrees
