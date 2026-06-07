@@ -144,7 +144,7 @@ let currentTempo    = 100  // percent (50–120)
 let alphaTabApi    = null  // AlphaTabApi instance
 let tabState       = 'strip'  // 'collapsed' | 'strip' | 'fullscreen'
 let tabSyncRafId   = null
-let tabLoopPending = null  // seconds — first beat click pending second click
+let tabDragBeat    = null  // Beat object — start of drag selection
 let tabSyncPoints  = null  // BackingTrackSyncPoint[] from GP sync markers, or null
 
 // ── PanKnob ────────────────────────────────────────────────────────────────
@@ -1146,8 +1146,7 @@ async function initTabDrawer(tabFile) {
 
   btnTabLoopClear?.addEventListener('click', () => {
     clearLoop()
-    tabLoopPending = null
-    tabDrawerEl.classList.remove('tab-drawer--loop-pending')
+    tabDragBeat = null
     tabLoopControlsEl?.setAttribute('hidden', '')
   })
 
@@ -1230,26 +1229,36 @@ async function initTabDrawer(tabFile) {
     }
   })
 
-  // 13.6 — Measure-based loop: two consecutive beat clicks define a loop
+  // 13.6 — Drag-to-select loop: mousedown → drag → mouseup
   alphaTabApi.beatMouseDown.on(beat => {
     if (tabState === 'collapsed') return
+    tabDragBeat = beat
+    alphaTabApi.highlightPlaybackRange(beat, beat)
+  })
 
-    const wsTimeSec = beatTickToAudioTimeSec(beat.absolutePlaybackStart)
+  alphaTabApi.beatMouseMove.on(beat => {
+    if (!tabDragBeat || tabState === 'collapsed') return
+    const [s, e] = tabDragBeat.absolutePlaybackStart <= beat.absolutePlaybackStart
+      ? [tabDragBeat, beat] : [beat, tabDragBeat]
+    alphaTabApi.highlightPlaybackRange(s, e)
+  })
 
-    if (tabLoopPending === null) {
-      tabLoopPending = wsTimeSec
-      tabDrawerEl.classList.add('tab-drawer--loop-pending')
-    } else {
-      const loopStart = Math.min(tabLoopPending, wsTimeSec)
-      const loopEnd   = Math.max(tabLoopPending, wsTimeSec)
-      tabLoopPending = null
-      tabDrawerEl.classList.remove('tab-drawer--loop-pending')
-      if (loopEnd - loopStart > 0.05) {
-        syncRegionToAll(loopStart, loopEnd)
-        setLoopEnabled(true)
-        tabLoopControlsEl?.removeAttribute('hidden')
-      }
-    }
+  alphaTabApi.beatMouseUp.on(beat => {
+    if (!tabDragBeat || tabState === 'collapsed') { tabDragBeat = null; return }
+    const endBeat = beat ?? tabDragBeat
+    alphaTabApi.clearPlaybackRangeHighlight()
+
+    const [startBeat, lastBeat] = tabDragBeat.absolutePlaybackStart <= endBeat.absolutePlaybackStart
+      ? [tabDragBeat, endBeat] : [endBeat, tabDragBeat]
+
+    const loopStart = beatTickToAudioTimeSec(startBeat.absolutePlaybackStart)
+    const loopEnd   = beatTickToAudioTimeSec(lastBeat.absolutePlaybackStart + lastBeat.playbackDuration)
+    tabDragBeat = null
+
+    if (loopEnd - loopStart < 0.05) return
+    syncRegionToAll(loopStart, loopEnd)
+    setLoopEnabled(true)
+    tabLoopControlsEl?.removeAttribute('hidden')
   })
 
   alphaTabApi.load(`/tab/${encodeURIComponent(grooveSlug)}/${encodeURIComponent(tabFile)}`)

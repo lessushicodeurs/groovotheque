@@ -915,13 +915,16 @@ body.tab-no-scroll { overflow: hidden; }
 .tab-drawer--strip      .tab-content { overflow-x: auto; overflow-y: hidden; }
 .tab-drawer--fullscreen .tab-content { overflow-y: auto; overflow-x: hidden; }
 
-/* AlphaTab cursor highlight */
+/* AlphaTab cursor + selection highlight */
 .tab-content .at-cursor-bar {
   background: rgba(100, 200, 255, 0.12);
 }
 .tab-content .at-cursor-beat {
   background: rgba(100, 200, 255, 0.4);
   width: 3px;
+}
+.tab-content .at-selection div {
+  background: rgba(100, 200, 255, 0.25);
 }
 
 /* Loading state inside drawer */
@@ -937,12 +940,9 @@ body.tab-no-scroll { overflow: hidden; }
   background: #141414;
 }
 
-/* Measure click mode indicator */
-.tab-drawer--loop-pending .tab-drawer-header::after {
-  content: 'Cliquez une mesure de fin…';
-  font-size: 0.65rem;
-  color: #ff8c00;
-  margin-left: 0.5rem;
+/* Drag-select cursor on tab content */
+.tab-content {
+  cursor: crosshair;
 }
 
 /* Mobile: hide drawer entirely */
