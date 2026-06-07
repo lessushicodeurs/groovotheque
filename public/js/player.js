@@ -2547,9 +2547,8 @@ async function init() {
 
     // ── Keyboard shortcuts ─────────────────────
     document.addEventListener('keydown', (e) => {
-      // Skip when user is interacting with any input element (text fields,
-      // range sliders) — arrow keys on range inputs must work natively.
-      if (e.target instanceof HTMLInputElement) return
+      // Skip when user is interacting with any input or textarea element
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
 
       if (e.key === ' ') {
         e.preventDefault()
