@@ -1771,24 +1771,46 @@ body.tab-no-scroll { overflow: hidden; }
   display: none;
 }
 
-/* Badge sur les cartes de l'index */
-.groove-comment-badge {
+/* Icône commentaire sur les cartes de l'index */
+.groove-comment-icon {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 18px;
-  height: 18px;
-  border-radius: 9px;
-  background: #374151;
-  color: #9ca3af;
-  font-size: 10px;
-  font-weight: 700;
-  padding: 0 4px;
   flex-shrink: 0;
   margin-left: auto;
+  font-size: 1rem;
+  line-height: 1;
+  color: #4b5563;
+  transition: color 0.1s;
 }
 
-.groove-comment-badge--unseen {
+.groove-comment-icon::before {
+  content: '💬';
+}
+
+.groove-comment-icon--unseen {
+  color: #f59e0b;
+}
+
+.groove-comment-icon-count {
+  position: absolute;
+  top: -5px;
+  right: -7px;
+  min-width: 14px;
+  height: 14px;
+  border-radius: 7px;
+  background: #374151;
+  color: #9ca3af;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+  padding: 0 3px;
+  pointer-events: none;
+}
+
+.groove-comment-icon--unseen .groove-comment-icon-count {
   background: #f59e0b;
   color: #1a1000;
 }

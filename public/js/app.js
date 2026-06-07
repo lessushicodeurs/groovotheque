@@ -30,11 +30,15 @@ function applyCommentBadges() {
     const info = commentSummary[path];
     if (!info || info.count === 0) return;
     const hasUnseen = info.ids.some(id => !seen.has(id));
-    const badge = document.createElement('span');
-    badge.className = 'groove-comment-badge' + (hasUnseen ? ' groove-comment-badge--unseen' : '');
-    badge.textContent = String(info.count);
-    badge.title = `${info.count} commentaire${info.count > 1 ? 's' : ''}`;
-    card.appendChild(badge);
+    const wrap = document.createElement('span');
+    wrap.className = 'groove-comment-icon' + (hasUnseen ? ' groove-comment-icon--unseen' : '');
+    wrap.title = `${info.count} commentaire${info.count > 1 ? 's' : ''}`;
+    wrap.setAttribute('aria-label', wrap.title);
+    const count = document.createElement('span');
+    count.className = 'groove-comment-icon-count';
+    count.textContent = String(info.count);
+    wrap.appendChild(count);
+    card.appendChild(wrap);
   });
 }
 
