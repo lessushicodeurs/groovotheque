@@ -32,6 +32,10 @@
         <button id="btn-play" class="transport-btn" aria-label="Lecture / Pause">▶</button>
         <button id="btn-stop" class="transport-btn transport-btn--stop" aria-label="Stop">■</button>
         <button id="btn-loop-go-out" class="transport-btn transport-btn--marker-nav" aria-label="Région suivante">⏭</button>
+        <button id="btn-add-comment" class="transport-btn transport-btn--marker-nav" aria-label="Ajouter un commentaire" title="Ajouter un commentaire" hidden>✚</button>
+        <button id="btn-toggle-comments" class="transport-btn btn-comments" aria-label="Afficher/masquer les commentaires" aria-pressed="true" title="Commentaires" hidden>
+          💬<span id="comment-badge" class="comment-badge" hidden>0</span>
+        </button>
         <div class="transport-time">
           <span id="timecode" class="timecode">0:00.000</span>
           <span class="timecode-sep">/</span>
@@ -82,6 +86,39 @@
       </div>
     </div>
     <div id="tab-content" class="tab-content"></div>
+  </div>
+  <!-- 22 — Comment creation modal -->
+  <div id="comment-modal-backdrop" class="comment-modal-backdrop" hidden>
+    <div class="comment-modal" role="dialog" aria-modal="true" aria-labelledby="comment-modal-title">
+      <h2 id="comment-modal-title">Nouveau commentaire</h2>
+      <p id="comment-modal-position" class="comment-modal-position">Position : —</p>
+      <textarea id="comment-modal-text" class="comment-modal-textarea"
+                placeholder="Votre commentaire…" maxlength="1000"></textarea>
+      <div class="comment-modal-footer">
+        <button id="comment-modal-cancel" class="comment-modal-cancel">Annuler</button>
+        <button id="comment-modal-submit" class="comment-modal-submit" disabled>Envoyer</button>
+      </div>
+    </div>
+  </div>
+  <!-- 22 — Comment popover (singleton) -->
+  <div id="comment-popover" class="comment-popover" hidden>
+    <button class="comment-popover-close" aria-label="Fermer">×</button>
+    <div class="comment-popover-header">
+      <div class="comment-popover-initials" id="cp-initials"></div>
+      <div class="comment-popover-meta">
+        <span class="comment-popover-author" id="cp-author"></span>
+        <span class="comment-popover-pos" id="cp-pos"></span>
+      </div>
+    </div>
+    <div class="comment-popover-text" id="cp-text"></div>
+    <div class="comment-popover-date" id="cp-date"></div>
+    <div class="comment-popover-replies" id="cp-replies"></div>
+    <div class="comment-popover-reply-form">
+      <input type="text" class="comment-popover-reply-input" id="cp-reply-input"
+             placeholder="Répondre…" maxlength="500">
+      <button class="comment-popover-reply-send" id="cp-reply-send">Envoyer</button>
+    </div>
+    <div class="comment-popover-actions" id="cp-actions" hidden></div>
   </div>
   <script type="module" src="/js/player.js"></script>
 </body>

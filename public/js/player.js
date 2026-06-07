@@ -56,6 +56,26 @@ const btnPrev          = document.getElementById('btn-prev')
 const btnNext          = document.getElementById('btn-next')
 const btnSaveMix       = document.getElementById('btn-save-mix')
 const btnDownloadAll   = document.getElementById('btn-download-all')
+
+// ── Epic 22 — DOM refs commentaires ──────────────────────────────────────
+const btnAddComment        = document.getElementById('btn-add-comment')
+const btnToggleComments    = document.getElementById('btn-toggle-comments')
+const commentBadgeEl       = document.getElementById('comment-badge')
+const commentModalBackdrop = document.getElementById('comment-modal-backdrop')
+const commentModalPosition = document.getElementById('comment-modal-position')
+const commentModalText     = document.getElementById('comment-modal-text')
+const commentModalCancel   = document.getElementById('comment-modal-cancel')
+const commentModalSubmit   = document.getElementById('comment-modal-submit')
+const commentPopoverEl     = document.getElementById('comment-popover')
+const cpInitials           = document.getElementById('cp-initials')
+const cpAuthor             = document.getElementById('cp-author')
+const cpPos                = document.getElementById('cp-pos')
+const cpText               = document.getElementById('cp-text')
+const cpDate               = document.getElementById('cp-date')
+const cpReplies            = document.getElementById('cp-replies')
+const cpReplyInput         = document.getElementById('cp-reply-input')
+const cpReplySend          = document.getElementById('cp-reply-send')
+const cpActions            = document.getElementById('cp-actions')
 const tempoSliderEl    = document.getElementById('tempo-slider')
 const tempoValueEl     = document.getElementById('tempo-value')
 const tempoBadgeEl     = document.getElementById('tempo-badge')
@@ -161,6 +181,50 @@ let markerAnchorId    = null  // premier marqueur cliqué (ancre de la sélectio
 let markerSelectionIn = null  // borne gauche de la sélection courante (peut couvrir N marqueurs)
 let markerSelectionOut= null  // borne droite
 let markerIdCounter   = 0
+
+// ── Epic 22 — Comments state ──────────────────────────────────────────────
+let commentMarkersLaneEl  = null  // div dans .timeline-wave-col pour les triangles
+let currentComments       = []    // { id, position, author, text, createdAt, replies }[]
+let commentsVisible       = true
+let activeCommentId       = null  // commentaire ouvert dans le popover
+let commentModalPosition_ = 0    // position capturée à l'ouverture de la modal
+
+const SEEN_KEY = 'groovotheque:seen_comments'
+
+function getSeenIds() {
+  try { return new Set(JSON.parse(localStorage.getItem(SEEN_KEY) || '[]')) }
+  catch { return new Set() }
+}
+
+function markCommentSeen(id) {
+  const seen = getSeenIds()
+  if (seen.has(id)) return
+  seen.add(id)
+  try { localStorage.setItem(SEEN_KEY, JSON.stringify([...seen])) } catch { /* ignore */ }
+}
+
+function formatCommentPosition(sec) {
+  if (!isFinite(sec) || sec < 0) sec = 0
+  const total = Math.round(sec)
+  const m = Math.floor(total / 60)
+  const s = total % 60
+  return `${m}:${s.toString().padStart(2, '0')}`
+}
+
+function initials(name) {
+  if (!name) return '?'
+  const parts = name.split(/[\s._-]+/).filter(Boolean)
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase()
+  return name.slice(0, 2).toUpperCase()
+}
+
+function formatRelativeDate(iso) {
+  try {
+    const d = new Date(iso)
+    return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })
+      + ' ' + d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+  } catch { return iso }
+}
 
 const MARKER_EPS = 0.05  // 50 ms — tolérance de contigüité
 
@@ -644,7 +708,10 @@ function buildTimelineRow() {
   markerLaneEl.className = 'marker-lane'
   markerLaneEl.setAttribute('aria-label', 'Bande de marqueurs')
 
-  waveCol.append(timelineExtEl, markerLaneEl)
+  commentMarkersLaneEl = document.createElement('div')
+  commentMarkersLaneEl.className = 'comment-markers-lane'
+
+  waveCol.append(timelineExtEl, markerLaneEl, commentMarkersLaneEl)
   row.append(sidebar, waveCol)
   tracksContainer.appendChild(row)
 }
@@ -953,6 +1020,8 @@ function adjustTrackWidths() {
   })
 
   renderMarkers()
+  renderCommentMarkers()
+  animateSeenComments()
 }
 
 // ── Epic 13 — Tablature synchronisée ──────────────────────────────────────
@@ -1887,6 +1956,417 @@ function navigateNextMarker() {
   return false
 }
 
+// ── Epic 22 — Comments implementation ────────────────────────────────────
+
+// ── API helpers ─────────────────────────────────────────────────────────
+async function fetchComments() {
+  try {
+    const res = await fetch(`/api/comments/${encodePath(grooveSlug)}`)
+    if (!res.ok) return []
+    return await res.json()
+  } catch { return [] }
+}
+
+async function apiCreateComment(position, text) {
+  const res = await fetch(`/api/comments/${encodePath(grooveSlug)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ position, text }),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+async function apiUpdateComment(id, text) {
+  const res = await fetch(`/api/comments/${encodePath(grooveSlug)}/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+async function apiDeleteComment(id) {
+  const res = await fetch(`/api/comments/${encodePath(grooveSlug)}/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+async function apiAddReply(id, text) {
+  const res = await fetch(`/api/comments/${encodePath(grooveSlug)}/${encodeURIComponent(id)}/replies`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+// ── Badge transport ──────────────────────────────────────────────────────
+function updateCommentBadge() {
+  const total = currentComments.length
+  if (total === 0) {
+    commentBadgeEl.setAttribute('hidden', '')
+    btnToggleComments.classList.remove('active')
+    return
+  }
+  const seen = getSeenIds()
+  const hasUnseen = currentComments.some(c => !seen.has(c.id))
+  commentBadgeEl.textContent = String(total)
+  commentBadgeEl.removeAttribute('hidden')
+  commentBadgeEl.classList.toggle('comment-badge--unseen', hasUnseen)
+  btnToggleComments.classList.toggle('active', commentsVisible)
+}
+
+// ── Rendu des marqueurs de commentaires ──────────────────────────────────
+function renderCommentMarkers() {
+  if (!commentMarkersLaneEl || !totalDuration) return
+
+  // Effacer la lane triangles
+  commentMarkersLaneEl.innerHTML = ''
+
+  // Effacer les lignes verticales dans chaque track-wave
+  waveEls.forEach(el => {
+    el.querySelectorAll('.comment-line').forEach(l => l.remove())
+  })
+
+  if (!commentsVisible) return
+
+  const seen = getSeenIds()
+
+  for (const comment of currentComments) {
+    if (comment.position > totalDuration) continue
+    const leftPct = (comment.position / totalDuration) * 100
+
+    const isSeen = seen.has(comment.id)
+
+    // Triangle dans la lane
+    const markerEl = document.createElement('div')
+    markerEl.className = 'comment-marker' +
+      (isSeen ? ' comment-marker--seen' : ' comment-marker--unseen')
+    markerEl.style.left = leftPct + '%'
+    markerEl.dataset.commentId = comment.id
+
+    const triangle = document.createElement('div')
+    triangle.className = 'comment-marker-triangle'
+    markerEl.appendChild(triangle)
+
+    markerEl.addEventListener('click', () => openCommentPopover(comment, markerEl))
+    commentMarkersLaneEl.appendChild(markerEl)
+
+    // Ligne verticale dans chaque track-wave
+    waveEls.forEach(el => {
+      const line = document.createElement('div')
+      line.className = 'comment-line' + (isSeen ? ' comment-line--seen' : '')
+      line.style.left = leftPct + '%'
+      line.dataset.commentId = comment.id
+      el.appendChild(line)
+    })
+  }
+}
+
+// 22.7 — Animation "déjà consulté" au chargement
+function animateSeenComments() {
+  if (!commentMarkersLaneEl) return
+  const seen = getSeenIds()
+  commentMarkersLaneEl.querySelectorAll('.comment-marker--seen').forEach(el => {
+    const id = el.dataset.commentId
+    if (seen.has(id)) {
+      el.classList.add('comment-marker--seen-anim')
+      // Retirer la classe après la fin de l'animation pour ne pas boucler
+      el.addEventListener('animationend', () => el.classList.remove('comment-marker--seen-anim'), { once: true })
+    }
+  })
+}
+
+// ── Popover commentaire ──────────────────────────────────────────────────
+function closeCommentPopover() {
+  activeCommentId = null
+  commentPopoverEl.setAttribute('hidden', '')
+  cpReplyInput.value = ''
+  cpActions.innerHTML = ''
+  cpActions.setAttribute('hidden', '')
+  // Remettre le texte en mode lecture (annuler édition éventuelle)
+  const editArea = commentPopoverEl.querySelector('.comment-edit-textarea')
+  if (editArea) {
+    const textEl = commentPopoverEl.querySelector('#cp-text')
+    if (textEl) textEl.removeAttribute('hidden')
+    editArea.remove()
+  }
+}
+
+function renderReplies(replies) {
+  cpReplies.innerHTML = ''
+  if (!replies?.length) return
+  for (const reply of replies) {
+    const item = document.createElement('div')
+    item.className = 'comment-reply'
+
+    const ini = document.createElement('div')
+    ini.className = 'comment-reply-initials'
+    ini.textContent = initials(reply.author)
+
+    const body = document.createElement('div')
+    body.className = 'comment-reply-body'
+
+    const auth = document.createElement('span')
+    auth.className = 'comment-reply-author'
+    auth.textContent = reply.author + ' '
+
+    const txt = document.createElement('span')
+    txt.className = 'comment-reply-text'
+    txt.textContent = reply.text
+
+    const date = document.createElement('div')
+    date.className = 'comment-reply-date'
+    date.textContent = formatRelativeDate(reply.createdAt)
+
+    body.append(auth, txt, date)
+    item.append(ini, body)
+    cpReplies.appendChild(item)
+  }
+}
+
+function openCommentPopover(comment, anchorEl) {
+  // Seek à la position du commentaire
+  performSeek(comment.position)
+
+  // Marquer comme vu
+  markCommentSeen(comment.id)
+  activeCommentId = comment.id
+
+  // Mettre à jour le visuel du marqueur (vu)
+  const markerEl = commentMarkersLaneEl?.querySelector(`[data-comment-id="${comment.id}"]`)
+  if (markerEl) {
+    markerEl.classList.remove('comment-marker--unseen')
+    markerEl.classList.add('comment-marker--seen')
+    markerEl.querySelector('.comment-marker-triangle').style.removeProperty('animation')
+  }
+  waveEls.forEach(el => {
+    el.querySelector(`.comment-line[data-comment-id="${comment.id}"]`)
+      ?.classList.add('comment-line--seen')
+  })
+
+  // Remplir le popover
+  cpInitials.textContent = initials(comment.author)
+  cpAuthor.textContent = comment.author
+  cpPos.textContent = formatCommentPosition(comment.position)
+  cpText.textContent = comment.text
+  cpText.removeAttribute('hidden')
+  cpDate.textContent = formatRelativeDate(comment.createdAt)
+  renderReplies(comment.replies)
+
+  // Actions auteur
+  cpActions.innerHTML = ''
+  if (window.CURRENT_USER === comment.author) {
+    cpActions.removeAttribute('hidden')
+
+    const editBtn = document.createElement('button')
+    editBtn.className = 'comment-popover-btn'
+    editBtn.textContent = 'Modifier'
+    editBtn.addEventListener('click', () => {
+      cpText.setAttribute('hidden', '')
+      const area = document.createElement('textarea')
+      area.className = 'comment-edit-textarea'
+      area.value = comment.text
+      area.rows = 3
+      cpText.parentNode.insertBefore(area, cpText)
+      area.focus()
+
+      const saveBtn = document.createElement('button')
+      saveBtn.className = 'comment-popover-btn'
+      saveBtn.textContent = 'Sauvegarder'
+      saveBtn.addEventListener('click', async () => {
+        const newText = area.value.trim()
+        if (!newText) return
+        try {
+          const updated = await apiUpdateComment(comment.id, newText)
+          comment.text = updated.text
+          comment.updatedAt = updated.updatedAt
+          cpText.textContent = updated.text
+          cpText.removeAttribute('hidden')
+          area.remove()
+          saveBtn.remove()
+        } catch (err) {
+          saveBtn.textContent = 'Erreur ✗'
+        }
+      })
+      cpActions.appendChild(saveBtn)
+    })
+
+    const delBtn = document.createElement('button')
+    delBtn.className = 'comment-popover-btn comment-popover-btn--danger'
+    delBtn.textContent = 'Supprimer'
+    delBtn.addEventListener('click', async () => {
+      delBtn.disabled = true
+      try {
+        await apiDeleteComment(comment.id)
+        currentComments = currentComments.filter(c => c.id !== comment.id)
+        renderCommentMarkers()
+        updateCommentBadge()
+        closeCommentPopover()
+      } catch {
+        delBtn.disabled = false
+        delBtn.textContent = 'Erreur ✗'
+      }
+    })
+
+    cpActions.append(editBtn, delBtn)
+  } else {
+    cpActions.setAttribute('hidden', '')
+  }
+
+  // Positionner le popover près du marqueur
+  positionCommentPopover(anchorEl)
+  commentPopoverEl.removeAttribute('hidden')
+
+  // Mettre à jour le badge (le commentaire vient d'être vu)
+  updateCommentBadge()
+}
+
+function positionCommentPopover(anchorEl) {
+  const rect = anchorEl.getBoundingClientRect()
+  const pw = 280
+  const gap = 8
+  let left = rect.left + (rect.width / 2) - pw / 2
+  left = Math.max(gap, Math.min(left, window.innerWidth - pw - gap))
+  const spaceBelow = window.innerHeight - rect.bottom - gap
+  let top
+  if (spaceBelow >= 200) {
+    top = rect.bottom + gap
+  } else {
+    top = Math.max(gap, rect.top - gap - commentPopoverEl.offsetHeight)
+  }
+  commentPopoverEl.style.left = left + 'px'
+  commentPopoverEl.style.top  = top + 'px'
+}
+
+function initCommentPopover() {
+  // Bouton fermer
+  commentPopoverEl.querySelector('.comment-popover-close').addEventListener('click', closeCommentPopover)
+
+  // Fermer au clic en dehors
+  document.addEventListener('mousedown', (e) => {
+    if (commentPopoverEl.hasAttribute('hidden')) return
+    if (!commentPopoverEl.contains(e.target) && !e.target.closest('.comment-marker')) {
+      closeCommentPopover()
+    }
+  })
+
+  // Envoyer une réponse
+  cpReplySend.addEventListener('click', async () => {
+    const text = cpReplyInput.value.trim()
+    if (!text || !activeCommentId) return
+    cpReplySend.disabled = true
+    try {
+      const reply = await apiAddReply(activeCommentId, text)
+      const comment = currentComments.find(c => c.id === activeCommentId)
+      if (comment) {
+        comment.replies.push(reply)
+        renderReplies(comment.replies)
+        cpReplyInput.value = ''
+        cpReplies.scrollTop = cpReplies.scrollHeight
+      }
+    } catch {
+      // silent
+    } finally {
+      cpReplySend.disabled = false
+    }
+  })
+
+  cpReplyInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      cpReplySend.click()
+    }
+  })
+}
+
+// ── Modal de création ────────────────────────────────────────────────────
+function openCommentModal() {
+  commentModalPosition_ = wavesurfers[0]?.getCurrentTime() ?? 0
+  commentModalPosition.textContent = `Position : ${formatCommentPosition(commentModalPosition_)}`
+  commentModalText.value = ''
+  commentModalSubmit.disabled = true
+  commentModalBackdrop.removeAttribute('hidden')
+  commentModalText.focus()
+}
+
+function closeCommentModal() {
+  commentModalBackdrop.setAttribute('hidden', '')
+}
+
+function initCommentModal() {
+  commentModalText.addEventListener('input', () => {
+    commentModalSubmit.disabled = commentModalText.value.trim().length === 0
+  })
+
+  commentModalCancel.addEventListener('click', closeCommentModal)
+
+  commentModalBackdrop.addEventListener('click', (e) => {
+    if (e.target === commentModalBackdrop) closeCommentModal()
+  })
+
+  commentModalSubmit.addEventListener('click', async () => {
+    const text = commentModalText.value.trim()
+    if (!text) return
+    commentModalSubmit.disabled = true
+    try {
+      const comment = await apiCreateComment(commentModalPosition_, text)
+      currentComments.push(comment)
+      currentComments.sort((a, b) => a.position - b.position)
+      renderCommentMarkers()
+      updateCommentBadge()
+      closeCommentModal()
+      // Ouvrir le popover sur le nouveau commentaire
+      const newMarkerEl = commentMarkersLaneEl?.querySelector(`[data-comment-id="${comment.id}"]`)
+      if (newMarkerEl) openCommentPopover(comment, newMarkerEl)
+    } catch {
+      commentModalSubmit.textContent = 'Erreur ✗'
+      setTimeout(() => {
+        commentModalSubmit.textContent = 'Envoyer'
+        commentModalSubmit.disabled = false
+      }, 2000)
+    }
+  })
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !commentModalBackdrop.hasAttribute('hidden')) {
+      e.stopPropagation()
+      closeCommentModal()
+    }
+  }, { capture: true })
+}
+
+// ── Chargement initial + boutons ─────────────────────────────────────────
+async function loadComments() {
+  currentComments = await fetchComments()
+  currentComments.sort((a, b) => a.position - b.position)
+  // Rendu différé dans renderCommentMarkers() (appelé après adjustTrackWidths)
+  updateCommentBadge()
+
+  // Révéler les boutons dans le transport
+  btnToggleComments.removeAttribute('hidden')
+  btnAddComment.removeAttribute('hidden')
+}
+
+function initCommentControls() {
+  btnToggleComments.addEventListener('click', () => {
+    commentsVisible = !commentsVisible
+    btnToggleComments.classList.toggle('active', commentsVisible)
+    btnToggleComments.setAttribute('aria-pressed', String(commentsVisible))
+    renderCommentMarkers()
+  })
+
+  btnAddComment.addEventListener('click', openCommentModal)
+
+  initCommentPopover()
+  initCommentModal()
+}
+
 async function init() {
   if (!grooveSlug) {
     showFatalError('Aucun groove spécifié.')
@@ -1946,7 +2426,13 @@ async function init() {
     // Epic 17 — init marker lane (markerLaneEl set during buildTimelineRow)
     initMarkerLane()
 
+    // Epic 22 — init comment controls (UI wiring, always active)
+    initCommentControls()
+
     await loadMix(groove.tracks)
+
+    // Epic 22 — charger les commentaires après le mix (rendu différé dans adjustTrackWidths)
+    loadComments()
 
     // 13.1 / 13.3 — Init tablature si fichier GP présent (desktop uniquement)
     if (groove.tabFile && IS_DESKTOP) {
