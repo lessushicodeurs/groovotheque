@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Déploie un ou plusieurs dossiers de grooves sur AlwaysData via SSH.
+# Déploie un ou plusieurs grooves (arborescence à N niveaux) sur AlwaysData via SSH.
+# Détecte les grooves récursivement : un dossier est un groove s'il contient
+# directement au moins un fichier audio (.mp3 .wav .flac .ogg) ou GP.
 # Par défaut, liste uniquement les grooves absents du serveur.
 # Avec --all, liste tous les grooves locaux.
 
@@ -15,8 +17,37 @@ if [ "${1:-}" = "--all" ]; then
   SHOW_ALL=1
 fi
 
-# Liste locale (hors dossiers se terminant par ~)
-mapfile -t ALL_LOCAL < <(find "$LOCAL_GROOVES" -mindepth 1 -maxdepth 1 -type d | sort | grep -v '~$' | sed "s|$LOCAL_GROOVES/||")
+# Retourne 0 si le dossier contient directement au moins un fichier audio ou GP
+is_groove() {
+  local dir="$1"
+  find "$dir" -maxdepth 1 -type f \( \
+    -name "*.mp3" -o -name "*.wav" -o -name "*.flac" -o -name "*.ogg" \
+    -o -name "*.gp" -o -name "*.gpx" -o -name "*.gp5" -o -name "*.gp4" -o -name "*.gp8" \
+  \) -print -quit | grep -q .
+}
+
+# Collecte récursivement les chemins relatifs de tous les grooves locaux
+collect_local_grooves() {
+  local dir="$1"
+  local rel="$2"
+
+  for subdir in "$dir"/*/; do
+    [ -d "$subdir" ] || continue
+    local name
+    name="$(basename "$subdir")"
+    [[ "$name" == *~ ]] && continue
+
+    local subrel="${rel:+$rel/}$name"
+
+    if is_groove "$subdir"; then
+      echo "$subrel"
+    else
+      collect_local_grooves "$subdir" "$subrel"
+    fi
+  done
+}
+
+mapfile -t ALL_LOCAL < <(collect_local_grooves "$LOCAL_GROOVES" "" | sort)
 
 if [ ${#ALL_LOCAL[@]} -eq 0 ]; then
   echo "Aucun groove trouvé dans grooves/"
@@ -24,8 +55,9 @@ if [ ${#ALL_LOCAL[@]} -eq 0 ]; then
 fi
 
 if [ "$SHOW_ALL" -eq 0 ]; then
-  # Récupérer la liste des grooves déjà sur le serveur
-  mapfile -t REMOTE_LIST < <(ssh "$REMOTE" "ls -1 $REMOTE_GROOVES 2>/dev/null || true")
+  # Vérifier quels grooves sont déjà présents sur le serveur (par existence du répertoire)
+  mapfile -t REMOTE_LIST < <(ssh "$REMOTE" \
+    "find $REMOTE_GROOVES -mindepth 1 -type d 2>/dev/null | sed 's|$REMOTE_GROOVES/||' | sort || true")
   declare -A REMOTE_SET
   for r in "${REMOTE_LIST[@]}"; do REMOTE_SET["$r"]=1; done
 
@@ -50,7 +82,6 @@ echo ""
 echo "Sélection (ex: 1  ou  1,3  ou  2~4) :"
 read -r SELECTION
 
-# Parser la sélection en indices (base 0)
 SELECTED=()
 IFS=',' read -ra PARTS <<< "$SELECTION"
 for part in "${PARTS[@]}"; do
@@ -84,10 +115,22 @@ for idx in "${SELECTED[@]}"; do
 
   groove="${GROOVES[$idx]}"
   local_path="$LOCAL_GROOVES/$groove"
+  remote_path="$REMOTE_GROOVES/$groove"
 
   echo "=== Déploiement de '$groove' ==="
-  ssh "$REMOTE" "mkdir -p \"$REMOTE_GROOVES/$groove\""
-  rsync -avz --delete "$local_path/" "$REMOTE:$REMOTE_GROOVES/$groove/"
+
+  # Créer l'arborescence de répertoires sur le serveur
+  ssh "$REMOTE" "mkdir -p \"$remote_path\""
+
+  # Uploader uniquement les fichiers utiles, exclure les sous-dossiers internes
+  rsync -avz \
+    --include="*.mp3" --include="*.wav" --include="*.flac" --include="*.ogg" \
+    --include="*.gp"  --include="*.gpx" --include="*.gp5"  --include="*.gp4" --include="*.gp8" \
+    --include="mix.json" --include="*.md" \
+    --exclude="*/" \
+    --exclude="*" \
+    "$local_path/" "$REMOTE:$remote_path/"
+
   echo "=== '$groove' déployé ==="
   echo ""
 done

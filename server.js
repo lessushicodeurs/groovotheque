@@ -7,9 +7,6 @@ const { ZipArchive } = require('archiver');
 
 const app = express();
 const PORT = process.env.PORT || 3099;
-// Répertoire des peaks pré-calculés. Chaque fichier : cache/<groove>/<audio>.peaks.json
-// Invalidation manuelle : si un fichier audio est remplacé via FTP, supprimer le .peaks.json
-// correspondant dans cache/ pour forcer le recalcul au prochain chargement.
 const CACHE_DIR = path.resolve(__dirname, 'cache');
 
 function loadUsers() {
@@ -54,7 +51,6 @@ app.use(basicAuth({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: false }));
 
-// 11.1 — Injection du CURRENT_USER avant le static middleware
 app.get('/player.html', (req, res) => {
   const template = fs.readFileSync(path.join(__dirname, 'public', 'player.html'), 'utf8');
   const user = req.auth?.user ?? 'anonymous';
@@ -67,8 +63,11 @@ app.get('/player.html', (req, res) => {
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-const AUDIO_EXTENSIONS = new Set(['.mp3', '.wav', '.flac']);
-const GP_EXTENSIONS = new Set(['.gp', '.gpx', '.gp8']);
+// 20.1 — Extensions media pour la détection groove vs conteneur
+const AUDIO_EXTENSIONS     = new Set(['.mp3', '.wav', '.flac', '.ogg']);
+const GP_EXTENSIONS        = new Set(['.gp', '.gpx', '.gp5', '.gp4', '.gp8']);
+const ALL_MEDIA_EXTENSIONS = new Set([...AUDIO_EXTENSIONS, ...GP_EXTENSIONS]);
+
 const GROOVES_DIR = path.resolve(__dirname, 'grooves');
 
 function getTrackDisplayName(filename) {
@@ -81,8 +80,27 @@ function trackSortKey(filename) {
   return m ? parseInt(m[1], 10) : Infinity;
 }
 
-function resolveGrooveDir(name, res) {
-  const dir = path.resolve(GROOVES_DIR, name);
+// 20.1 — Formatage du nom d'affichage
+function formatDisplayName(slug) {
+  return slug.replace(/[-_]/g, ' ');
+}
+
+// 20.1 — Un dossier est un groove s'il contient directement un fichier audio ou GP
+async function classifyDir(dirPath) {
+  const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+  const hasMedia = entries.some(
+    e => e.isFile() && ALL_MEDIA_EXTENSIONS.has(path.extname(e.name).toLowerCase())
+  );
+  return hasMedia ? 'groove' : 'container';
+}
+
+// Anti path traversal : accepte les chemins multi-segments
+function resolveGrooveDir(groovePath, res) {
+  if (!groovePath) {
+    res.status(400).json({ error: 'Chemin manquant' });
+    return null;
+  }
+  const dir = path.resolve(GROOVES_DIR, groovePath);
   if (!dir.startsWith(GROOVES_DIR + path.sep)) {
     res.status(403).json({ error: 'Accès interdit' });
     return null;
@@ -90,37 +108,107 @@ function resolveGrooveDir(name, res) {
   return dir;
 }
 
-// Serve marked locally — évite la dépendance CDN externe
 app.get('/vendor/marked.esm.js', (req, res) => {
   res.sendFile(path.join(__dirname, 'node_modules/marked/lib/marked.esm.js'));
 });
 
-// 2.1 — Liste des grooves
+// 20.2 — Contenu d'un niveau : GET /api/grooves?path=
+// Conteneurs d'abord (alpha), grooves ensuite (alpha)
 app.get('/api/grooves', async (req, res) => {
+  const relPath = req.query.path || '';
+
+  let targetDir;
+  if (relPath) {
+    if (relPath.includes('..') || path.isAbsolute(relPath)) {
+      return res.status(403).json({ error: 'Accès interdit' });
+    }
+    targetDir = path.resolve(GROOVES_DIR, relPath);
+    if (!targetDir.startsWith(GROOVES_DIR + path.sep)) {
+      return res.status(403).json({ error: 'Accès interdit' });
+    }
+  } else {
+    targetDir = GROOVES_DIR;
+  }
+
   try {
-    const entries = await fs.promises.readdir(GROOVES_DIR, { withFileTypes: true });
+    const entries = await fs.promises.readdir(targetDir, { withFileTypes: true });
     const dirs = entries.filter(e => e.isDirectory() && !e.name.endsWith('~'));
-    const grooves = (await Promise.all(dirs.map(async entry => {
+
+    const items = (await Promise.all(dirs.map(async entry => {
       const slug = entry.name;
-      const name = slug.replace(/_/g, ' ');
+      const itemPath = relPath ? `${relPath}/${slug}` : slug;
+      const dirPath = path.join(targetDir, slug);
       try {
-        const files = await fs.promises.readdir(path.join(GROOVES_DIR, slug));
-        const hasMd = files.some(f => f.endsWith('.md'));
-        return { slug, name, hasMd };
+        const type = await classifyDir(dirPath);
+        const displayName = formatDisplayName(slug);
+        if (type === 'groove') {
+          const files = await fs.promises.readdir(dirPath);
+          const hasMd = files.some(f => f.endsWith('.md'));
+          return { type: 'groove', slug, path: itemPath, displayName, hasMd };
+        } else {
+          return { type: 'folder', slug, path: itemPath, displayName };
+        }
       } catch {
-        return null; // sous-dossier illisible : on saute sans casser le listing
+        return null;
       }
     }))).filter(Boolean);
-    grooves.sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+
+    items.sort((a, b) => {
+      if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+      return a.displayName.localeCompare(b.displayName, 'fr');
+    });
+
+    res.json(items);
+  } catch (err) {
+    if (err.code === 'ENOENT') return res.status(404).json({ error: 'Dossier introuvable' });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 20.3 — Collecte récursive de tous les grooves (feuilles)
+async function collectGrooves(dirPath, relPath) {
+  const results = [];
+  let entries;
+  try {
+    entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+  } catch {
+    return results;
+  }
+  const dirs = entries.filter(e => e.isDirectory() && !e.name.endsWith('~'));
+  await Promise.all(dirs.map(async entry => {
+    const slug = entry.name;
+    const itemPath = relPath ? `${relPath}/${slug}` : slug;
+    const subDir = path.join(dirPath, slug);
+    const type = await classifyDir(subDir).catch(() => 'container');
+    if (type === 'groove') {
+      const displayName = formatDisplayName(slug);
+      const files = await fs.promises.readdir(subDir).catch(() => []);
+      const hasMd = files.some(f => f.endsWith('.md'));
+      results.push({ type: 'groove', slug, path: itemPath, displayName, hasMd });
+    } else {
+      const sub = await collectGrooves(subDir, itemPath);
+      results.push(...sub);
+    }
+  }));
+  return results;
+}
+
+// 20.3 — GET /api/search : tous les grooves récursivement
+app.get('/api/search', async (req, res) => {
+  try {
+    const grooves = await collectGrooves(GROOVES_DIR, '');
+    grooves.sort((a, b) => a.path.localeCompare(b.path, 'fr'));
     res.json(grooves);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// 2.2b — Markdown seul (tooltip sans over-fetch des pistes)
-app.get('/api/grooves/:name/md', async (req, res) => {
-  const grooveDir = resolveGrooveDir(req.params.name, res);
+// 20.4 — Routes spécifiques AVANT le wildcard général /api/grooves/*
+
+app.get('/api/grooves/*/md', async (req, res) => {
+  const groovePath = req.params[0];
+  const grooveDir = resolveGrooveDir(groovePath, res);
   if (!grooveDir) return;
   try {
     const entries = await fs.promises.readdir(grooveDir, { withFileTypes: true });
@@ -134,46 +222,9 @@ app.get('/api/grooves/:name/md', async (req, res) => {
   }
 });
 
-// 2.2 — Détail d'un groove (pistes + contenu markdown)
-app.get('/api/grooves/:name', async (req, res) => {
-  const grooveDir = resolveGrooveDir(req.params.name, res);
-  if (!grooveDir) return;
-  try {
-    const entries = await fs.promises.readdir(grooveDir, { withFileTypes: true });
-    const audioEntries = entries.filter(
-      e => e.isFile() && !e.name.endsWith('~') && AUDIO_EXTENSIONS.has(path.extname(e.name).toLowerCase())
-    );
-    audioEntries.sort((a, b) => {
-      const ka = trackSortKey(a.name);
-      const kb = trackSortKey(b.name);
-      if (ka !== Infinity && kb !== Infinity) return ka - kb;
-      if (ka !== Infinity) return -1;
-      if (kb !== Infinity) return 1;
-      return a.name.localeCompare(b.name);
-    });
-    const tracks = audioEntries.map(({ name: filename }, index) => ({
-      index,
-      filename,
-      displayName: getTrackDisplayName(filename),
-      url: `/audio/${req.params.name}/${encodeURIComponent(filename)}`,
-    }));
-    const mdEntry = entries.find(e => e.isFile() && e.name.endsWith('.md'));
-    let mdContent = null;
-    if (mdEntry) {
-      mdContent = await fs.promises.readFile(path.join(grooveDir, mdEntry.name), 'utf8');
-    }
-    const gpEntry = entries.find(e => e.isFile() && GP_EXTENSIONS.has(path.extname(e.name).toLowerCase()));
-    const tabFile = gpEntry ? gpEntry.name : null;
-    res.json({ slug: req.params.name, tracks, mdContent, tabFile });
-  } catch (err) {
-    if (err.code === 'ENOENT') return res.status(404).json({ error: 'Groove introuvable' });
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// 9.2 — Téléchargement zip de toutes les pistes d'un groove
-app.get('/api/grooves/:name/download', async (req, res) => {
-  const grooveDir = resolveGrooveDir(req.params.name, res);
+app.get('/api/grooves/*/download', async (req, res) => {
+  const groovePath = req.params[0];
+  const grooveDir = resolveGrooveDir(groovePath, res);
   if (!grooveDir) return;
   try {
     await fs.promises.access(grooveDir);
@@ -181,7 +232,7 @@ app.get('/api/grooves/:name/download', async (req, res) => {
     return res.status(404).json({ error: 'Groove introuvable' });
   }
 
-  const slug = req.params.name;
+  const slug = groovePath.split('/').pop();
   res.setHeader('Content-Type', 'application/zip');
   res.setHeader('Content-Disposition', `attachment; filename="${slug}.zip"`);
 
@@ -208,9 +259,52 @@ app.get('/api/grooves/:name/download', async (req, res) => {
   await archive.finalize();
 });
 
-// 11.2 — Lecture du mix
-app.get('/api/mix/:groove', async (req, res) => {
-  const grooveDir = resolveGrooveDir(req.params.groove, res);
+// 20.4 — Détail d'un groove : chemin multi-segments
+app.get('/api/grooves/*', async (req, res) => {
+  const groovePath = req.params[0];
+  const grooveDir = resolveGrooveDir(groovePath, res);
+  if (!grooveDir) return;
+  try {
+    const entries = await fs.promises.readdir(grooveDir, { withFileTypes: true });
+    const audioEntries = entries.filter(
+      e => e.isFile() && !e.name.endsWith('~') && AUDIO_EXTENSIONS.has(path.extname(e.name).toLowerCase())
+    );
+    audioEntries.sort((a, b) => {
+      const ka = trackSortKey(a.name);
+      const kb = trackSortKey(b.name);
+      if (ka !== Infinity && kb !== Infinity) return ka - kb;
+      if (ka !== Infinity) return -1;
+      if (kb !== Infinity) return 1;
+      return a.name.localeCompare(b.name);
+    });
+    const slug = groovePath.split('/').pop();
+    const encodedPath = groovePath.split('/').map(encodeURIComponent).join('/');
+    const tracks = audioEntries.map(({ name: filename }, index) => ({
+      index,
+      filename,
+      displayName: getTrackDisplayName(filename),
+      url: `/audio/${encodedPath}/${encodeURIComponent(filename)}`,
+    }));
+    const mdEntry = entries.find(e => e.isFile() && e.name.endsWith('.md'));
+    let mdContent = null;
+    if (mdEntry) {
+      mdContent = await fs.promises.readFile(path.join(grooveDir, mdEntry.name), 'utf8');
+    }
+    const gpEntry = entries.find(
+      e => e.isFile() && GP_EXTENSIONS.has(path.extname(e.name).toLowerCase())
+    );
+    const tabFile = gpEntry ? gpEntry.name : null;
+    res.json({ slug, tracks, mdContent, tabFile });
+  } catch (err) {
+    if (err.code === 'ENOENT') return res.status(404).json({ error: 'Groove introuvable' });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 20.4 — Mix lecture/écriture : chemin multi-segments
+app.get('/api/mix/*', async (req, res) => {
+  const groovePath = req.params[0];
+  const grooveDir = resolveGrooveDir(groovePath, res);
   if (!grooveDir) return;
   const mixPath = path.join(grooveDir, 'mix.json');
   try {
@@ -222,10 +316,10 @@ app.get('/api/mix/:groove', async (req, res) => {
   }
 });
 
-// 11.2 — Écriture du mix (admin uniquement)
-app.post('/api/mix/:groove', async (req, res) => {
+app.post('/api/mix/*', async (req, res) => {
   if (req.auth?.user !== 'admin') return res.status(403).json({ error: 'Réservé à l\'admin' });
-  const grooveDir = resolveGrooveDir(req.params.groove, res);
+  const groovePath = req.params[0];
+  const grooveDir = resolveGrooveDir(groovePath, res);
   if (!grooveDir) return;
   const mixPath = path.join(grooveDir, 'mix.json');
   try {
@@ -236,9 +330,13 @@ app.post('/api/mix/:groove', async (req, res) => {
   }
 });
 
-// 2.3 — Stream audio avec support range requests
-app.get('/audio/:groove/:file', (req, res) => {
-  const filePath = path.resolve(GROOVES_DIR, req.params.groove, req.params.file);
+// 20.4 — Stream audio : chemin multi-segments (dernier segment = fichier)
+app.get('/audio/*', (req, res) => {
+  const parts = req.params[0].split('/');
+  if (parts.length < 2) return res.status(400).json({ error: 'Chemin invalide' });
+  const filename = decodeURIComponent(parts.pop());
+  const groovePath = parts.map(decodeURIComponent).join('/');
+  const filePath = path.resolve(GROOVES_DIR, groovePath, filename);
   if (!filePath.startsWith(GROOVES_DIR + path.sep)) {
     return res.status(403).json({ error: 'Accès interdit' });
   }
@@ -252,9 +350,13 @@ app.get('/audio/:groove/:file', (req, res) => {
   });
 });
 
-// 13.1 — Téléchargement du fichier Guitar Pro
-app.get('/tab/:groove/:file', (req, res) => {
-  const filePath = path.resolve(GROOVES_DIR, req.params.groove, req.params.file);
+// 20.4 — Tablature Guitar Pro : chemin multi-segments
+app.get('/tab/*', (req, res) => {
+  const parts = req.params[0].split('/');
+  if (parts.length < 2) return res.status(400).json({ error: 'Chemin invalide' });
+  const filename = decodeURIComponent(parts.pop());
+  const groovePath = parts.map(decodeURIComponent).join('/');
+  const filePath = path.resolve(GROOVES_DIR, groovePath, filename);
   if (!filePath.startsWith(GROOVES_DIR + path.sep)) {
     return res.status(403).json({ error: 'Accès interdit' });
   }
@@ -268,9 +370,9 @@ app.get('/tab/:groove/:file', (req, res) => {
   });
 });
 
-// 6.0 — Validation du chemin peaks (anti path traversal)
-function resolvePeaksPath(groove, file, res) {
-  const peaksPath = path.resolve(CACHE_DIR, groove, file + '.peaks.json');
+// 20.4 — Peaks : cache/<groove-path>/<file>.peaks.json
+function resolvePeaksPath(groovePath, file, res) {
+  const peaksPath = path.resolve(CACHE_DIR, groovePath, file + '.peaks.json');
   if (!peaksPath.startsWith(CACHE_DIR + path.sep)) {
     res.status(400).json({ error: 'Chemin invalide' });
     return null;
@@ -278,9 +380,12 @@ function resolvePeaksPath(groove, file, res) {
   return peaksPath;
 }
 
-// 6.1 — GET peaks cachés
-app.get('/api/peaks/:groove/:file', async (req, res) => {
-  const peaksPath = resolvePeaksPath(req.params.groove, req.params.file, res);
+app.get('/api/peaks/*', async (req, res) => {
+  const parts = req.params[0].split('/');
+  if (parts.length < 2) return res.status(400).json({ error: 'Chemin invalide' });
+  const file = decodeURIComponent(parts.pop());
+  const groovePath = parts.map(decodeURIComponent).join('/');
+  const peaksPath = resolvePeaksPath(groovePath, file, res);
   if (!peaksPath) return;
   try {
     const data = await fs.promises.readFile(peaksPath, 'utf8');
@@ -291,9 +396,12 @@ app.get('/api/peaks/:groove/:file', async (req, res) => {
   }
 });
 
-// 6.2 — POST sauvegarde des peaks
-app.post('/api/peaks/:groove/:file', async (req, res) => {
-  const peaksPath = resolvePeaksPath(req.params.groove, req.params.file, res);
+app.post('/api/peaks/*', async (req, res) => {
+  const parts = req.params[0].split('/');
+  if (parts.length < 2) return res.status(400).json({ error: 'Chemin invalide' });
+  const file = decodeURIComponent(parts.pop());
+  const groovePath = parts.map(decodeURIComponent).join('/');
+  const peaksPath = resolvePeaksPath(groovePath, file, res);
   if (!peaksPath) return;
   const { peaks } = req.body;
   if (!peaks || !Array.isArray(peaks)) {

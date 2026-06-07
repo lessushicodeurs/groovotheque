@@ -24,6 +24,11 @@ const sharedAudioCtx = new AudioContext()
 const params = new URLSearchParams(location.search)
 const grooveSlug = params.get('groove')
 
+// Encode un chemin relatif pour l'utiliser dans une URL path
+function encodePath(p) {
+  return p.split('/').map(encodeURIComponent).join('/')
+}
+
 // 13.7 — Desktop only: tablature désactivée sur mobile
 const IS_DESKTOP = window.matchMedia('(min-width: 769px)').matches
 
@@ -71,10 +76,10 @@ let prevSlug = null
 let nextSlug = null
 
 btnPrev.addEventListener('click', () => {
-  if (prevSlug) location.href = '/player.html?groove=' + encodeURIComponent(prevSlug)
+  if (prevSlug) location.href = '/player.html?groove=' + encodePath(prevSlug)
 })
 btnNext.addEventListener('click', () => {
-  if (nextSlug) location.href = '/player.html?groove=' + encodeURIComponent(nextSlug)
+  if (nextSlug) location.href = '/player.html?groove=' + encodePath(nextSlug)
 })
 
 let loadedCount = 0
@@ -349,7 +354,7 @@ function setPan(idx, value) {
 // 6.3 — Peaks cache helpers
 async function fetchPeaks(groove, filename) {
   try {
-    const res = await fetch(`/api/peaks/${encodeURIComponent(groove)}/${encodeURIComponent(filename)}`)
+    const res = await fetch(`/api/peaks/${encodePath(groove)}/${encodeURIComponent(filename)}`)
     if (!res.ok) return null
     const data = await res.json()
     return Array.isArray(data.peaks) ? data.peaks : null
@@ -391,7 +396,7 @@ function setupTitleMarquee() {
 }
 
 function postPeaks(groove, filename, peaks) {
-  fetch(`/api/peaks/${encodeURIComponent(groove)}/${encodeURIComponent(filename)}`, {
+  fetch(`/api/peaks/${encodePath(groove)}/${encodeURIComponent(filename)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ peaks }),
@@ -399,7 +404,8 @@ function postPeaks(groove, filename, peaks) {
 }
 
 function slugToName(slug) {
-  return slug.replace(/_/g, ' ')
+  const leaf = slug.includes('/') ? slug.split('/').pop() : slug
+  return leaf.replace(/[-_]/g, ' ')
 }
 
 // mm:ss.ms with 3 decimal digits — robust against floating-point rounding
@@ -1344,14 +1350,45 @@ async function initTabDrawer(tabFile) {
     tabLoopControlsEl?.removeAttribute('hidden')
   })
 
-  alphaTabApi.load(`/tab/${encodeURIComponent(grooveSlug)}/${encodeURIComponent(tabFile)}`)
+  alphaTabApi.load(`/tab/${encodePath(grooveSlug)}/${encodeURIComponent(tabFile)}`)
   startTabSync()
+}
+
+// 20.8 — Fil d'Ariane du player
+function renderPlayerBreadcrumb() {
+  const nav = document.getElementById('player-breadcrumb')
+  if (!nav) return
+
+  const home = document.createElement('a')
+  home.href = '/'
+  home.className = 'breadcrumb-link'
+  home.textContent = 'Accueil'
+  nav.appendChild(home)
+
+  if (!grooveSlug) return
+
+  // Le dernier segment est le nom du groove, déjà affiché dans le <h1>
+  // Tous les segments parents restent des liens cliquables
+  const segments = grooveSlug.split('/').slice(0, -1)
+  segments.forEach((seg, i) => {
+    const sep = document.createElement('span')
+    sep.className = 'breadcrumb-sep'
+    sep.textContent = '›'
+    nav.appendChild(sep)
+
+    const partialPath = segments.slice(0, i + 1).join('/')
+    const link = document.createElement('a')
+    link.href = `/?path=${encodePath(partialPath)}`
+    link.className = 'breadcrumb-link'
+    link.textContent = seg.replace(/[-_]/g, ' ')
+    nav.appendChild(link)
+  })
 }
 
 // 11.3 / 15.5 — Chargement silencieux du mix sauvegardé
 async function loadMix(tracks) {
   try {
-    const res = await fetch(`/api/mix/${encodeURIComponent(grooveSlug)}`)
+    const res = await fetch(`/api/mix/${encodePath(grooveSlug)}`)
     if (!res.ok) return
     const mix = await res.json()
     if (mix.tracks && typeof mix.tracks === 'object') {
@@ -1415,7 +1452,7 @@ async function saveMix() {
     mixData.markers = markers.map(({ start, end, label }) => ({ start, end, label }))
   }
   try {
-    const res = await fetch(`/api/mix/${encodeURIComponent(grooveSlug)}`, {
+    const res = await fetch(`/api/mix/${encodePath(grooveSlug)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(mixData),
@@ -1426,15 +1463,21 @@ async function saveMix() {
   }
 }
 
+// 20.8 — Voisins restreints au dossier courant du groove
 async function fetchNeighbours() {
   try {
-    const res = await fetch('/api/grooves')
+    const parentPath = grooveSlug.includes('/')
+      ? grooveSlug.split('/').slice(0, -1).join('/')
+      : ''
+    const url = parentPath ? `/api/grooves?path=${encodeURIComponent(parentPath)}` : '/api/grooves'
+    const res = await fetch(url)
     if (!res.ok) return
-    const grooves = await res.json()
-    const idx = grooves.findIndex(g => g.slug === grooveSlug)
+    const items = await res.json()
+    const grooves = items.filter(g => g.type === 'groove')
+    const idx = grooves.findIndex(g => g.path === grooveSlug)
     if (idx === -1) return
-    prevSlug = idx > 0 ? grooves[idx - 1].slug : null
-    nextSlug = idx < grooves.length - 1 ? grooves[idx + 1].slug : null
+    prevSlug = idx > 0 ? grooves[idx - 1].path : null
+    nextSlug = idx < grooves.length - 1 ? grooves[idx + 1].path : null
   } catch {
     // fetch échoue silencieusement — boutons restent disabled
   }
@@ -1797,13 +1840,14 @@ async function init() {
   }
 
   fetchNeighbours()
+  renderPlayerBreadcrumb()
 
   try {
-    const res = await fetch(`/api/grooves/${encodeURIComponent(grooveSlug)}`)
+    const res = await fetch(`/api/grooves/${encodePath(grooveSlug)}`)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const groove = await res.json()
 
-    const name = slugToName(groove.slug)
+    const name = slugToName(grooveSlug)
     titleEl.textContent = name
     document.title = `${name} — Groovotheque`
     setupTitleMarquee()
@@ -1823,8 +1867,8 @@ async function init() {
       btnDownloadAll.disabled = true
       btnDownloadAll.textContent = 'Préparation…'
       const a = document.createElement('a')
-      a.href = `/api/grooves/${encodeURIComponent(grooveSlug)}/download`
-      a.download = `${grooveSlug}.zip`
+      a.href = `/api/grooves/${encodePath(grooveSlug)}/download`
+      a.download = `${grooveSlug.split('/').pop()}.zip`
       document.body.appendChild(a)
       a.click()
       a.remove()
