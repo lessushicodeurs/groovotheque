@@ -894,9 +894,16 @@ function setTabState(newState) {
       const mod = window.__alphaTabModule
       if (mod) {
         const usePageLayout = newState === 'fullscreen'
-        const newMode = usePageLayout ? mod.LayoutMode.Page : mod.LayoutMode.Horizontal
-        if (alphaTabApi.settings.display.layoutMode !== newMode) {
-          alphaTabApi.settings.display.layoutMode = newMode
+        const newLayoutMode = usePageLayout ? mod.LayoutMode.Page : mod.LayoutMode.Horizontal
+        // scrollMode 3 (Smooth) pour horizontal : curseur fixe, partition défile
+        // scrollMode 2 (OffScreen) pour page : scroll par système
+        const newScrollMode = usePageLayout ? 2 : 3
+        const needsUpdate =
+          alphaTabApi.settings.display.layoutMode !== newLayoutMode ||
+          alphaTabApi.settings.player.scrollMode  !== newScrollMode
+        if (needsUpdate) {
+          alphaTabApi.settings.display.layoutMode = newLayoutMode
+          alphaTabApi.settings.player.scrollMode  = newScrollMode
           alphaTabApi.updateSettings()
           alphaTabApi.render()
         }
@@ -1109,6 +1116,9 @@ async function initTabDrawer(tabFile) {
 
   tabContentEl.classList.remove('tab-content--loading')
 
+  // Curseur à ~30% depuis le bord gauche en mode strip (scrollMode Smooth)
+  const scrollOffsetX = -Math.round((tabContentEl.clientWidth || window.innerWidth) * 0.3)
+
   alphaTabApi = new alphaTabMod.AlphaTabApi(tabContentEl, {
     core: {
       workerFile:    `${AT_BASE}/alphaTab.worker.mjs`,
@@ -1116,12 +1126,16 @@ async function initTabDrawer(tabFile) {
       logLevel:      alphaTabMod.LogLevel.Warning,
     },
     player: {
-      enablePlayer:         true,
-      enableCursor:         true,
-      enableUserInteraction: true,
-      soundFont:            `${AT_BASE}/soundfont/sonivox.sf2`,
-      scrollElement:        '#tab-content',
-      scrollMode:           1,
+      enablePlayer:              true,
+      enableCursor:              true,
+      enableUserInteraction:     true,
+      soundFont:                 `${AT_BASE}/soundfont/sonivox.sf2`,
+      scrollElement:             '#tab-content',
+      scrollMode:                3,     // Smooth — partition défile, curseur reste fixe
+      scrollOffsetX,                    // curseur à ~30% depuis la gauche en mode strip
+      scrollOffsetY:             -50,   // marge au-dessus du système en mode fullscreen
+      scrollSpeed:               300,   // durée ms pour scrollMode OffScreen (fullscreen)
+      nativeBrowserSmoothScroll: false, // RAF direct scrollLeft/Top — évite scrollTo(behavior:smooth) qui peut échouer silencieusement
     },
     display: {
       layoutMode:   alphaTabMod.LayoutMode.Horizontal,
@@ -1135,6 +1149,10 @@ async function initTabDrawer(tabFile) {
 
   // Auto-fit strip height once rendering is complete (postRenderFinished = once, not per partial)
   alphaTabApi.postRenderFinished.on(() => {
+    // Reset scroll à chaque nouveau rendu (changement de layout ou de pistes)
+    tabContentEl.scrollLeft = 0
+    tabContentEl.scrollTop  = 0
+
     if (tabState !== 'strip') return
     const atSurface = tabContentEl.querySelector('.at-surface')
     if (!atSurface) return
