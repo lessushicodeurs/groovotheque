@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Déploie un ou plusieurs dossiers de grooves sur AlwaysData via SSH.
-# Sélection interactive : numéros individuels (1,3) ou plages (2~4).
+# Par défaut, liste uniquement les grooves absents du serveur.
+# Avec --all, liste tous les grooves locaux.
 
 set -euo pipefail
 
@@ -9,15 +10,39 @@ REMOTE_GROOVES="~/sites/ghismo.com/groovotheque/grooves"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOCAL_GROOVES="$SCRIPT_DIR/grooves"
 
-# Construire la liste des grooves (hors dossiers se terminant par ~)
-mapfile -t GROOVES < <(find "$LOCAL_GROOVES" -mindepth 1 -maxdepth 1 -type d | sort | grep -v '~$' | sed "s|$LOCAL_GROOVES/||")
+SHOW_ALL=0
+if [ "${1:-}" = "--all" ]; then
+  SHOW_ALL=1
+fi
 
-if [ ${#GROOVES[@]} -eq 0 ]; then
+# Liste locale (hors dossiers se terminant par ~)
+mapfile -t ALL_LOCAL < <(find "$LOCAL_GROOVES" -mindepth 1 -maxdepth 1 -type d | sort | grep -v '~$' | sed "s|$LOCAL_GROOVES/||")
+
+if [ ${#ALL_LOCAL[@]} -eq 0 ]; then
   echo "Aucun groove trouvé dans grooves/"
   exit 1
 fi
 
-echo "Grooves disponibles :"
+if [ "$SHOW_ALL" -eq 0 ]; then
+  # Récupérer la liste des grooves déjà sur le serveur
+  mapfile -t REMOTE_LIST < <(ssh "$REMOTE" "ls -1 $REMOTE_GROOVES 2>/dev/null || true")
+  declare -A REMOTE_SET
+  for r in "${REMOTE_LIST[@]}"; do REMOTE_SET["$r"]=1; done
+
+  mapfile -t GROOVES < <(for g in "${ALL_LOCAL[@]}"; do
+    [ -z "${REMOTE_SET[$g]+x}" ] && echo "$g"
+  done)
+
+  if [ ${#GROOVES[@]} -eq 0 ]; then
+    echo "Tous les grooves locaux sont déjà sur le serveur."
+    echo "Utilisez --all pour les afficher quand même."
+    exit 0
+  fi
+else
+  GROOVES=("${ALL_LOCAL[@]}")
+fi
+
+echo "Grooves à déployer :"
 for i in "${!GROOVES[@]}"; do
   printf "  %2d) %s\n" "$((i + 1))" "${GROOVES[$i]}"
 done
