@@ -894,16 +894,9 @@ function setTabState(newState) {
       const mod = window.__alphaTabModule
       if (mod) {
         const usePageLayout = newState === 'fullscreen'
-        const newLayoutMode = usePageLayout ? mod.LayoutMode.Page : mod.LayoutMode.Horizontal
-        // scrollMode 3 (Smooth) pour horizontal : curseur fixe, partition défile
-        // scrollMode 2 (OffScreen) pour page : scroll par système
-        const newScrollMode = usePageLayout ? 2 : 3
-        const needsUpdate =
-          alphaTabApi.settings.display.layoutMode !== newLayoutMode ||
-          alphaTabApi.settings.player.scrollMode  !== newScrollMode
-        if (needsUpdate) {
-          alphaTabApi.settings.display.layoutMode = newLayoutMode
-          alphaTabApi.settings.player.scrollMode  = newScrollMode
+        const newMode = usePageLayout ? mod.LayoutMode.Page : mod.LayoutMode.Horizontal
+        if (alphaTabApi.settings.display.layoutMode !== newMode) {
+          alphaTabApi.settings.display.layoutMode = newMode
           alphaTabApi.updateSettings()
           alphaTabApi.render()
         }
@@ -1040,12 +1033,51 @@ function synthTimeToAudioTime(synthMs) {
   return sp0.syncTime + ((synthMs - sp0.synthTime) / dt) * (sp1.syncTime - sp0.syncTime)
 }
 
+// Scroll téléprompter — lit la position X/Y du curseur depuis son CSS transform
+// (coordonnées contenu, non affectées par scrollLeft/scrollTop), puis cible le scroll
+// pour maintenir le curseur fixe à une position relative dans le viewport.
+// Appelé chaque frame RAF depuis startTabSync.
+function enforceTabCursorVisible() {
+  if (!tabContentEl || tabState === 'collapsed') return
+  const cursor = tabContentEl.querySelector('.at-cursor-beat')
+  if (!cursor) return
+  const t = cursor.style.transform  // "translate(Xpx, Ypx) scale(w, h)"
+  if (!t) return
+
+  if (tabState === 'strip') {
+    const mx = /translate\((-?[\d.]+)px/.exec(t)
+    if (!mx) return
+    const contentX = parseFloat(mx[1])
+    const W = tabContentEl.clientWidth
+    // Curseur fixe à 35% — la partition défile en dessous (téléprompteur)
+    const target = Math.max(0, contentX - W * 0.35)
+    const diff = target - tabContentEl.scrollLeft
+    // Avance normale (≤ 5px/frame) → sync direct ; seek → ease 15%
+    tabContentEl.scrollLeft = Math.abs(diff) <= 5 ? target : tabContentEl.scrollLeft + diff * 0.15
+  } else if (tabState === 'fullscreen') {
+    const my = /translate\(-?[\d.]+px,\s*(-?[\d.]+)px/.exec(t)
+    if (!my) return
+    const contentY = parseFloat(my[1])
+    const H = tabContentEl.clientHeight
+    // OffScreen + ease : ne scroll que si curseur sort de la zone lisible (0–80% du viewport)
+    const visibleY = contentY - tabContentEl.scrollTop
+    if (visibleY > H * 0.8 || visibleY < 0) {
+      const target = Math.max(0, contentY - H * 0.25)
+      tabContentEl.scrollTop += (target - tabContentEl.scrollTop) * 0.15
+    }
+  }
+}
+
 function startTabSync() {
   if (tabSyncRafId !== null) return
   const loop = () => {
-    if (alphaTabApi && tabState !== 'collapsed' && wavesurfers.length > 0) {
-      const audioMs = wavesurfers[0].getCurrentTime() * 1000
-      alphaTabApi.timePosition = audioTimeToSynthTime(audioMs)
+    if (alphaTabApi && tabState !== 'collapsed') {
+      // window.__tabTestMode = true suspend la sync audio pour les tests Playwright
+      if (!window.__tabTestMode && wavesurfers.length > 0) {
+        const audioMs = wavesurfers[0].getCurrentTime() * 1000
+        alphaTabApi.timePosition = audioTimeToSynthTime(audioMs)
+      }
+      enforceTabCursorVisible()
     }
     tabSyncRafId = requestAnimationFrame(loop)
   }
@@ -1116,9 +1148,6 @@ async function initTabDrawer(tabFile) {
 
   tabContentEl.classList.remove('tab-content--loading')
 
-  // Curseur à ~30% depuis le bord gauche en mode strip (scrollMode Smooth)
-  const scrollOffsetX = -Math.round((tabContentEl.clientWidth || window.innerWidth) * 0.3)
-
   alphaTabApi = new alphaTabMod.AlphaTabApi(tabContentEl, {
     core: {
       workerFile:    `${AT_BASE}/alphaTab.worker.mjs`,
@@ -1126,16 +1155,11 @@ async function initTabDrawer(tabFile) {
       logLevel:      alphaTabMod.LogLevel.Warning,
     },
     player: {
-      enablePlayer:              true,
-      enableCursor:              true,
-      enableUserInteraction:     true,
-      soundFont:                 `${AT_BASE}/soundfont/sonivox.sf2`,
-      scrollElement:             '#tab-content',
-      scrollMode:                3,     // Smooth — partition défile, curseur reste fixe
-      scrollOffsetX,                    // curseur à ~30% depuis la gauche en mode strip
-      scrollOffsetY:             -50,   // marge au-dessus du système en mode fullscreen
-      scrollSpeed:               300,   // durée ms pour scrollMode OffScreen (fullscreen)
-      nativeBrowserSmoothScroll: false, // RAF direct scrollLeft/Top — évite scrollTo(behavior:smooth) qui peut échouer silencieusement
+      enablePlayer:         true,
+      enableCursor:         true,
+      enableUserInteraction: true,
+      soundFont:            `${AT_BASE}/soundfont/sonivox.sf2`,
+      scrollMode:           0,   // Off — scroll géré par enforceTabCursorVisible (AlphaTab scroll ne fonctionne pas sans son player interne actif)
     },
     display: {
       layoutMode:   alphaTabMod.LayoutMode.Horizontal,
