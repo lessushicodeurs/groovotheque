@@ -41,6 +41,7 @@ rsync "${RSYNC_OPTS[@]}" \
   --exclude='.git' \
   --exclude='.worktrees' \
   --exclude='grooves' \
+  --exclude='grooves-tmp' \
   --exclude='cache' \
   --exclude='.auth' \
   --exclude='.env.deploy' \
