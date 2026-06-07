@@ -132,7 +132,7 @@ const minimapRowEls  = []   // .minimap-row div per track (for proportional widt
 const trackDurations = []   // duration in seconds per track, set on 'ready'
 let timelinePluginRef = null  // TimelinePlugin instance (track 0), for duration correction
 let currentTracks  = []   // groove.tracks list, set at init time
-let pendingLoop    = null // loop à restaurer dès que la waveform est prête
+let pendingLoop    = null // loop à restaurer dès que toutes les waveforms sont prêtes
 let isPlaying       = false
 let seekGen         = 0    // increments on every seek; prevents stale async play() callbacks
 let totalDuration   = 0
@@ -808,14 +808,14 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
     if (idx === 0) {
       totalDuration = ws.getDuration()
       durationEl.textContent = formatTimecode(totalDuration)
-      if (pendingLoop) {
-        syncRegionToAll(pendingLoop.in, pendingLoop.out)
-        pendingLoop = null
-      }
     }
     trackDurations[idx] = ws.getDuration()
     if (trackDurations.filter(d => d > 0).length === wavesurfers.length) {
       adjustTrackWidths()
+      if (pendingLoop) {
+        syncRegionToAll(pendingLoop.in, pendingLoop.out)
+        pendingLoop = null
+      }
     }
   })
 
@@ -1362,8 +1362,12 @@ async function loadMix(tracks) {
       applyVolumes()
     }
     if (mix.loop && typeof mix.loop.in === 'number' && typeof mix.loop.out === 'number') {
-      // La waveform n'est pas encore rendue ici — on diffère à l'événement ready
       pendingLoop = { in: mix.loop.in, out: mix.loop.out }
+      // Si toutes les waveforms sont déjà prêtes avant que le fetch mix revienne
+      if (wavesurfers.length > 0 && trackDurations.filter(d => d > 0).length === wavesurfers.length) {
+        syncRegionToAll(pendingLoop.in, pendingLoop.out)
+        pendingLoop = null
+      }
     }
   } catch { /* chargement silencieux */ }
 }
