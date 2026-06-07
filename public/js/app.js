@@ -109,16 +109,25 @@ function createGrooveCard(groove) {
   card.className = 'groove-card';
   card.href = `player.html?groove=${encodePath(groove.path)}`;
 
+  const icon = document.createElement('span');
+  icon.className = 'groove-icon';
+  icon.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="1" y="10" width="3" height="4" rx="1.5"/><rect x="6" y="5" width="3" height="14" rx="1.5"/><rect x="11" y="2" width="3" height="20" rx="1.5"/><rect x="16" y="5" width="3" height="14" rx="1.5"/><rect x="21" y="10" width="2" height="4" rx="1"/></svg>';
+  card.appendChild(icon);
+
+  const body = document.createElement('div');
+  body.className = 'groove-card-body';
+  card.appendChild(body);
+
   const name = document.createElement('p');
   name.className = 'groove-card-name';
   name.textContent = groove.displayName;
-  card.appendChild(name);
+  body.appendChild(name);
 
   if (groove.hasMd) {
     const note = document.createElement('p');
     note.className = 'groove-card-note';
     note.textContent = 'notes disponibles';
-    card.appendChild(note);
+    body.appendChild(note);
 
     card.addEventListener('mouseenter', () => {
       activeCard = card;
@@ -149,7 +158,7 @@ function createFolderCard(folder) {
   const icon = document.createElement('span');
   icon.className = 'folder-icon';
   icon.setAttribute('aria-hidden', 'true');
-  icon.textContent = '📁';
+  icon.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>';
   card.appendChild(icon);
 
   const name = document.createElement('p');
@@ -188,13 +197,13 @@ function renderBreadcrumb(currentPath) {
     if (isLast) {
       const current = document.createElement('span');
       current.className = 'breadcrumb-current';
-      current.textContent = seg.replace(/[-_]/g, ' ');
+      current.textContent = seg.replace(/_/g, ' ');
       nav.appendChild(current);
     } else {
       const link = document.createElement('a');
       link.href = `/?path=${encodePath(partialPath)}`;
       link.className = 'breadcrumb-link';
-      link.textContent = seg.replace(/[-_]/g, ' ');
+      link.textContent = seg.replace(/_/g, ' ');
       nav.appendChild(link);
     }
   });
@@ -224,7 +233,7 @@ function renderSearchResults(query, grooves) {
     if (segments.length > 1) {
       const breadcrumb = document.createElement('p');
       breadcrumb.className = 'groove-card-path';
-      breadcrumb.textContent = segments.slice(0, -1).map(s => s.replace(/[-_]/g, ' ')).join(' › ');
+      breadcrumb.textContent = segments.slice(0, -1).map(s => s.replace(/_/g, ' ')).join(' › ');
       card.appendChild(breadcrumb);
     }
     listEl.appendChild(card);
