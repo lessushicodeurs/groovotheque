@@ -405,7 +405,7 @@ function postPeaks(groove, filename, peaks) {
 
 function slugToName(slug) {
   const leaf = slug.includes('/') ? slug.split('/').pop() : slug
-  return leaf.replace(/[-_]/g, ' ')
+  return leaf.replace(/_/g, ' ')
 }
 
 // mm:ss.ms with 3 decimal digits — robust against floating-point rounding
@@ -1359,6 +1359,12 @@ function renderPlayerBreadcrumb() {
   const nav = document.getElementById('player-breadcrumb')
   if (!nav) return
 
+  const parentPath = grooveSlug.includes('/')
+    ? grooveSlug.split('/').slice(0, -1).join('/')
+    : ''
+  const backBtn = document.getElementById('back-btn')
+  if (backBtn) backBtn.href = parentPath ? `/?path=${encodePath(parentPath)}` : '/'
+
   const home = document.createElement('a')
   home.href = '/'
   home.className = 'breadcrumb-link'
@@ -1380,7 +1386,7 @@ function renderPlayerBreadcrumb() {
     const link = document.createElement('a')
     link.href = `/?path=${encodePath(partialPath)}`
     link.className = 'breadcrumb-link'
-    link.textContent = seg.replace(/[-_]/g, ' ')
+    link.textContent = seg.replace(/_/g, ' ')
     nav.appendChild(link)
   })
 }
@@ -1424,11 +1430,11 @@ async function loadMix(tracks) {
     // Epic 17 — charger les marqueurs (rendu différé dans adjustTrackWidths)
     if (Array.isArray(mix.markers) && mix.markers.length > 0) {
       markers = mix.markers
-        .filter(m => typeof m.start === 'number' && typeof m.end === 'number' && m.end > m.start)
+        .filter(m => typeof m.in === 'number' && typeof m.out === 'number' && m.out > m.in)
         .map(m => ({
           id:    nextMarkerId(),
-          start: m.start,
-          end:   m.end,
+          start: m.in,
+          end:   m.out,
           label: String(m.label ?? ''),
         }))
     }
@@ -1449,7 +1455,7 @@ async function saveMix() {
   }
   // Epic 17 — sauvegarder les marqueurs
   if (markers.length > 0) {
-    mixData.markers = markers.map(({ start, end, label }) => ({ start, end, label }))
+    mixData.markers = markers.map(({ start, end, label }) => ({ in: start, out: end, label }))
   }
   try {
     const res = await fetch(`/api/mix/${encodePath(grooveSlug)}`, {
