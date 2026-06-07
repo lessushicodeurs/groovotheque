@@ -90,8 +90,7 @@ def build_structure_block(sorted_markers, bpm=None):
             f"| {m['label']} | {fmt_time(m['in'])} | {fmt_time(m['out'])} | {fmt_dur(m['out'] - m['in'])} |"
             for m in sorted_markers
         )
-    bpm_line = f'- {round(bpm)} bpm\n\n' if bpm else ''
-    return '## Structure\n\n' + bpm_line + header + rows
+    return '## Structure\n\n' + header + rows
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -158,24 +157,26 @@ def main():
         print(f'BPM détecté : {bpm}  [erreur={score:.3f}, {n_used} sections{skipped_info}]')
 
     # Construire et écrire le bloc
-    name  = groove_name(groove_dir)
-    block = build_structure_block(sorted_markers, bpm)
+    name     = groove_name(groove_dir)
+    block    = build_structure_block(sorted_markers, bpm)
+    bpm_line = f'- {round(bpm)} bpm\n\n' if bpm else ''
 
     md_files = list(groove_dir.glob('*.md'))
     md_path  = md_files[0] if md_files else groove_dir / f'{groove_dir.name}.md'
     content  = md_path.read_text(encoding='utf-8') if md_path.exists() else ''
 
     if not content.strip():
-        content = f'# {name}\n\n{block}\n'
+        content = f'# {name}\n\n{bpm_line}{block}\n'
     elif re.search(r'^## Structure\b', content, re.MULTILINE):
+        # Remplace aussi l'éventuelle ligne bpm déjà présente juste avant ## Structure
         content = re.sub(
-            r'^## Structure\b.*?(?=^##|\Z)',
-            block + '\n\n',
+            r'(?:- \d+(?:\.\d+)? bpm\n\n)?^## Structure\b.*?(?=^##|\Z)',
+            bpm_line + block + '\n\n',
             content,
             flags=re.MULTILINE | re.DOTALL,
         )
     else:
-        content = content.rstrip('\n') + '\n\n' + block + '\n'
+        content = content.rstrip('\n') + '\n\n' + bpm_line + block + '\n'
 
     md_path.write_text(content, encoding='utf-8')
     print(f'→ {md_path}\n')
