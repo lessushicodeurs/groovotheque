@@ -79,15 +79,9 @@ def groove_name(path: Path) -> str:
 
 def build_structure_block(sorted_markers, bpm=None):
     if bpm:
-        header = '| Section | IN | OUT | Durée | Mesures |\n|---|---|---|---|---|\n'
+        header = '| Section | Mesures |\n|---|---|\n'
         rows = '\n'.join(
-            '| {label} | {in_} | {out_} | {dur} | {mes} |'.format(
-                label=m['label'],
-                in_=fmt_time(m['in']),
-                out_=fmt_time(m['out']),
-                dur=fmt_dur(m['out'] - m['in']),
-                mes=f"{measures(m['out'] - m['in'], bpm)}x",
-            )
+            f"| {m['label']} | {measures(m['out'] - m['in'], bpm)}x |"
             for m in sorted_markers
         )
     else:
