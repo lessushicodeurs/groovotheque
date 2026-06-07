@@ -145,6 +145,15 @@ let loopFieldCommitting = false  // prevents blur re-running commit after Enter
 let currentTempo    = 100  // percent (50–120)
 let drawerOpen      = true
 
+// ── Epic 17 — Marker band state ───────────────────────────────────────────
+let markerLaneEl     = null
+let markerPopoverEl  = null
+let markers          = []    // { id, start, end, label }[]
+let selectedMarkerId = null
+let markerIdCounter  = 0
+
+function nextMarkerId() { return 'mk_' + (++markerIdCounter) }
+
 // ── Drawer (mobile bottom sheet) ──────────────────────────────────────────
 
 function setDrawerOpen(open) {
@@ -673,7 +682,11 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
     waveCol.className = 'track-wave-col'
     timelineExtEl = document.createElement('div')
     timelineExtEl.className = 'track-timeline-ext'
-    waveCol.append(timelineExtEl, waveEl)
+    // Epic 17: marker lane between timeline and first waveform
+    markerLaneEl = document.createElement('div')
+    markerLaneEl.className = 'marker-lane'
+    markerLaneEl.setAttribute('aria-label', 'Bande de marqueurs')
+    waveCol.append(timelineExtEl, markerLaneEl, waveEl)
     row.append(sidebar, waveCol)
   } else {
     row.append(sidebar, waveEl)
@@ -911,6 +924,8 @@ function adjustTrackWidths() {
       el.style.width = Math.floor(minimapW * ratio) + 'px'
     }
   })
+
+  renderMarkers()
 }
 
 // ── Epic 13 — Tablature synchronisée ──────────────────────────────────────
@@ -1369,6 +1384,17 @@ async function loadMix(tracks) {
         pendingLoop = null
       }
     }
+    // Epic 17 — charger les marqueurs (rendu différé dans adjustTrackWidths)
+    if (Array.isArray(mix.markers) && mix.markers.length > 0) {
+      markers = mix.markers
+        .filter(m => typeof m.start === 'number' && typeof m.end === 'number' && m.end > m.start)
+        .map(m => ({
+          id:    nextMarkerId(),
+          start: m.start,
+          end:   m.end,
+          label: String(m.label ?? ''),
+        }))
+    }
   } catch { /* chargement silencieux */ }
 }
 
@@ -1383,6 +1409,10 @@ async function saveMix() {
   })
   if (activeLoopIn !== null && activeLoopOut !== null) {
     mixData.loop = { in: activeLoopIn, out: activeLoopOut }
+  }
+  // Epic 17 — sauvegarder les marqueurs
+  if (markers.length > 0) {
+    mixData.markers = markers.map(({ start, end, label }) => ({ start, end, label }))
   }
   try {
     const res = await fetch(`/api/mix/${encodeURIComponent(grooveSlug)}`, {
@@ -1410,6 +1440,354 @@ async function fetchNeighbours() {
   }
   btnPrev.disabled = prevSlug === null
   btnNext.disabled = nextSlug === null
+}
+
+// ── Epic 17 — Marker band implementation ──────────────────────────────────
+
+function laneXToTime(clientX) {
+  if (!markerLaneEl || !totalDuration) return 0
+  const rect = markerLaneEl.getBoundingClientRect()
+  return Math.max(0, Math.min(totalDuration, ((clientX - rect.left) / rect.width) * totalDuration))
+}
+
+// Returns the free interval [minStart, maxEnd] at anchorTime, or null if blocked
+function creationBoundsForAnchor(anchorTime) {
+  const sorted = [...markers].sort((a, b) => a.start - b.start)
+  let minStart = 0
+  let maxEnd = totalDuration
+  for (const m of sorted) {
+    if (m.end <= anchorTime)        minStart = Math.max(minStart, m.end)
+    else if (m.start >= anchorTime) { maxEnd = Math.min(maxEnd, m.start); break }
+    else return null  // anchorTime is inside an existing region
+  }
+  return { minStart, maxEnd }
+}
+
+// Returns [minStart, maxEnd] for moving marker id as a rigid block of given duration
+function getMoveBounds(id) {
+  const self = markers.find(m => m.id === id)
+  if (!self) return { minStart: 0, maxEnd: totalDuration }
+  const others = markers.filter(m => m.id !== id).sort((a, b) => a.start - b.start)
+  let minStart = 0
+  let maxEnd = totalDuration
+  for (const m of others) {
+    if (m.end <= self.start)       minStart = Math.max(minStart, m.end)
+    else if (m.start >= self.end)  { maxEnd = Math.min(maxEnd, m.start); break }
+  }
+  return { minStart, maxEnd }
+}
+
+// Returns [leftBound, rightBound] for resizing edges of marker id
+function getResizeBounds(id) {
+  const self = markers.find(m => m.id === id)
+  if (!self) return { leftBound: 0, rightBound: totalDuration }
+  const others = markers.filter(m => m.id !== id).sort((a, b) => a.start - b.start)
+  let leftBound = 0
+  let rightBound = totalDuration
+  for (const m of others) {
+    if (m.end <= self.start)       leftBound = Math.max(leftBound, m.end)
+    else if (m.start >= self.end)  { rightBound = Math.min(rightBound, m.start); break }
+  }
+  return { leftBound, rightBound }
+}
+
+function updateRegionElPosition(el, marker) {
+  if (!totalDuration) return
+  const left  = (marker.start / totalDuration) * 100
+  const width = ((marker.end - marker.start) / totalDuration) * 100
+  el.style.left  = left + '%'
+  el.style.width = width + '%'
+  el.title = marker.label
+  const span = el.querySelector('.marker-region-text')
+  if (span) span.textContent = marker.label
+  el.classList.toggle('marker-region--selected', marker.id === selectedMarkerId)
+}
+
+function setupRegionInteraction(el, marker) {
+  const edgeL = el.querySelector('.marker-region-edge--left')
+  const edgeR = el.querySelector('.marker-region-edge--right')
+  let didDrag = false
+
+  // Single click → select region (set IN/OUT)
+  el.addEventListener('click', () => {
+    if (didDrag) return
+    const m = markers.find(mk => mk.id === marker.id)
+    if (m) selectMarker(m.id)
+  })
+
+  // Double-click → edit label (desktop only)
+  el.addEventListener('dblclick', (e) => {
+    if (isMobile) return
+    e.stopPropagation()
+    const m = markers.find(mk => mk.id === marker.id)
+    if (m) openPopover(m, el)
+  })
+
+  // Body drag → move region
+  el.addEventListener('mousedown', (e) => {
+    if (isMobile || e.button !== 0) return
+    if (e.target === edgeL || e.target === edgeR) return
+    e.preventDefault()
+    e.stopPropagation()
+    didDrag = false
+    const startX = e.clientX
+    const m = markers.find(mk => mk.id === marker.id)
+    if (!m) return
+    const origStart = m.start
+    const duration  = m.end - m.start
+    const { minStart, maxEnd } = getMoveBounds(m.id)
+
+    const onMove = (ev) => {
+      if (Math.abs(ev.clientX - startX) > 3) didDrag = true
+      const rect = markerLaneEl.getBoundingClientRect()
+      const dt   = ((ev.clientX - startX) / rect.width) * totalDuration
+      let ns = Math.max(minStart, Math.min(origStart + dt, maxEnd - duration))
+      m.start = ns
+      m.end   = ns + duration
+      updateRegionElPosition(el, m)
+    }
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      // Update cycle if this is the selected region
+      if (m.id === selectedMarkerId) syncRegionToAll(m.start, m.end)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  })
+
+  // Edge drag → resize
+  function setupEdge(edgeEl, isLeft) {
+    edgeEl.addEventListener('mousedown', (e) => {
+      if (isMobile || e.button !== 0) return
+      e.preventDefault()
+      e.stopPropagation()
+      const m = markers.find(mk => mk.id === marker.id)
+      if (!m) return
+      const { leftBound, rightBound } = getResizeBounds(m.id)
+
+      const onMove = (ev) => {
+        const t = laneXToTime(ev.clientX)
+        if (isLeft) m.start = Math.max(leftBound,  Math.min(t, m.end - 0.1))
+        else        m.end   = Math.min(rightBound, Math.max(t, m.start + 0.1))
+        updateRegionElPosition(el, m)
+      }
+      const onUp = () => {
+        window.removeEventListener('mousemove', onMove)
+        window.removeEventListener('mouseup', onUp)
+        if (m.id === selectedMarkerId) syncRegionToAll(m.start, m.end)
+      }
+      window.addEventListener('mousemove', onMove)
+      window.addEventListener('mouseup', onUp)
+    })
+  }
+  setupEdge(edgeL, true)
+  setupEdge(edgeR, false)
+
+  // Mobile: tap → set cycle
+  if (isMobile) {
+    el.addEventListener('touchend', (e) => {
+      e.preventDefault()
+      const m = markers.find(mk => mk.id === marker.id)
+      if (m) selectMarker(m.id)
+    }, { passive: false })
+  }
+}
+
+function buildRegionEl(marker) {
+  const el = document.createElement('div')
+  el.className = 'marker-region'
+  el.dataset.markerId = marker.id
+
+  const edgeL = document.createElement('div')
+  edgeL.className = 'marker-region-edge marker-region-edge--left'
+
+  const labelDiv = document.createElement('div')
+  labelDiv.className = 'marker-region-label'
+  const span = document.createElement('span')
+  span.className = 'marker-region-text'
+  span.textContent = marker.label
+  labelDiv.appendChild(span)
+
+  const edgeR = document.createElement('div')
+  edgeR.className = 'marker-region-edge marker-region-edge--right'
+
+  el.append(edgeL, labelDiv, edgeR)
+  updateRegionElPosition(el, marker)
+  setupRegionInteraction(el, marker)
+  return el
+}
+
+function renderMarkers() {
+  if (!markerLaneEl || !totalDuration) return
+  markerLaneEl.querySelectorAll('.marker-region').forEach(el => el.remove())
+  for (const m of markers) {
+    markerLaneEl.appendChild(buildRegionEl(m))
+  }
+}
+
+function selectMarker(id) {
+  selectedMarkerId = id
+  markerLaneEl?.querySelectorAll('.marker-region').forEach(el => {
+    el.classList.toggle('marker-region--selected', el.dataset.markerId === id)
+  })
+  const m = markers.find(mk => mk.id === id)
+  if (m) syncRegionToAll(m.start, m.end)
+}
+
+function openPopover(marker, regionEl) {
+  if (!markerPopoverEl) return
+  // Close any open popover (fires commit on previous input via onblur)
+  if (!markerPopoverEl.hasAttribute('hidden')) closePopover()
+
+  const input   = markerPopoverEl.querySelector('.marker-popover-input')
+  const datalist = markerPopoverEl.querySelector('#marker-label-suggestions')
+  const delBtn  = markerPopoverEl.querySelector('.marker-popover-delete')
+
+  input.value = marker.label
+  // Autosuggestion: labels already used in this groove (excluding current)
+  const suggestions = [...new Set(markers.filter(m => m.id !== marker.id && m.label).map(m => m.label))]
+  datalist.innerHTML = ''
+  suggestions.forEach(s => {
+    const opt = document.createElement('option')
+    opt.value = s
+    datalist.appendChild(opt)
+  })
+
+  // Position near region
+  const rect = regionEl.getBoundingClientRect()
+  markerPopoverEl.style.left = Math.max(4, Math.min(rect.left, window.innerWidth - 220)) + 'px'
+  markerPopoverEl.style.top  = (rect.bottom + 4) + 'px'
+  markerPopoverEl.removeAttribute('hidden')
+  input.focus()
+  input.select()
+
+  const commit = () => {
+    const m = markers.find(mk => mk.id === marker.id)
+    if (m) {
+      m.label = input.value.trim()
+      const el = markerLaneEl?.querySelector(`[data-marker-id="${m.id}"]`)
+      if (el) updateRegionElPosition(el, m)
+    }
+    closePopover()
+  }
+
+  input.onkeydown = (e) => {
+    if (e.key === 'Enter')  { commit(); e.preventDefault() }
+    if (e.key === 'Escape') { closePopover(); e.preventDefault() }
+  }
+  // Delay blur so delete-button click fires first
+  input.onblur = () => setTimeout(commit, 150)
+
+  delBtn.onclick = () => {
+    const idx = markers.findIndex(mk => mk.id === marker.id)
+    if (idx !== -1) markers.splice(idx, 1)
+    if (selectedMarkerId === marker.id) {
+      selectedMarkerId = null
+      clearLoop()
+    }
+    const el = markerLaneEl?.querySelector(`[data-marker-id="${marker.id}"]`)
+    el?.remove()
+    // Prevent the blur-commit from re-running after we close
+    input.onblur = null
+    closePopover()
+  }
+}
+
+function closePopover() {
+  if (!markerPopoverEl) return
+  markerPopoverEl.setAttribute('hidden', '')
+  const input  = markerPopoverEl.querySelector('.marker-popover-input')
+  const delBtn = markerPopoverEl.querySelector('.marker-popover-delete')
+  if (input)  { input.onkeydown = null; input.onblur = null }
+  if (delBtn) delBtn.onclick = null
+}
+
+function setupLaneDragCreate() {
+  if (!markerLaneEl || isMobile) return
+
+  markerLaneEl.addEventListener('mousedown', (e) => {
+    // Only fire on the lane itself (not on existing regions)
+    if (e.target !== markerLaneEl) return
+    if (e.button !== 0) return
+    if (!totalDuration) return
+    e.preventDefault()
+
+    const anchorTime = laneXToTime(e.clientX)
+    const bounds = creationBoundsForAnchor(anchorTime)
+    if (!bounds) return  // anchorTime is inside an existing region
+
+    let ghost = document.createElement('div')
+    ghost.className = 'marker-lane-ghost'
+    ghost.style.left  = ((anchorTime / totalDuration) * 100) + '%'
+    ghost.style.width = '0%'
+    markerLaneEl.appendChild(ghost)
+
+    const onMove = (ev) => {
+      const cur = laneXToTime(ev.clientX)
+      const s   = Math.max(bounds.minStart, Math.min(anchorTime, cur))
+      const end = Math.min(bounds.maxEnd,   Math.max(anchorTime, cur))
+      ghost.style.left  = ((s / totalDuration) * 100) + '%'
+      ghost.style.width = (((end - s) / totalDuration) * 100) + '%'
+    }
+
+    const onUp = (ev) => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      ghost.remove()
+      ghost = null
+
+      const cur   = laneXToTime(ev.clientX)
+      const start = Math.max(bounds.minStart, Math.min(anchorTime, cur))
+      const end   = Math.min(bounds.maxEnd,   Math.max(anchorTime, cur))
+      if (end - start < 0.1) return  // too small → ignore
+
+      const id = nextMarkerId()
+      const m  = { id, start, end, label: '' }
+      markers.push(m)
+      const el = buildRegionEl(m)
+      markerLaneEl.appendChild(el)
+
+      selectMarker(id)
+      openPopover(m, el)
+    }
+
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  })
+}
+
+function initMarkerLane() {
+  // Build singleton popover
+  markerPopoverEl = document.createElement('div')
+  markerPopoverEl.className = 'marker-popover'
+  markerPopoverEl.setAttribute('hidden', '')
+  markerPopoverEl.innerHTML = `
+    <input type="text" class="marker-popover-input" placeholder="Label…" list="marker-label-suggestions" autocomplete="off">
+    <datalist id="marker-label-suggestions"></datalist>
+    <button class="marker-popover-delete" title="Supprimer la région">×</button>
+  `
+  document.body.appendChild(markerPopoverEl)
+  setupLaneDragCreate()
+}
+
+// Navigate to the previous/next marker from current playhead (17.6)
+function navigatePrevMarker() {
+  if (!markers.length || !wavesurfers.length) return false
+  const cur    = wavesurfers[0].getCurrentTime()
+  const sorted = [...markers].sort((a, b) => a.start - b.start)
+  const prev   = sorted.filter(m => m.start < cur - 0.05).pop()
+  if (prev) { performSeek(prev.start); return true }
+  return false
+}
+
+function navigateNextMarker() {
+  if (!markers.length || !wavesurfers.length) return false
+  const cur    = wavesurfers[0].getCurrentTime()
+  const sorted = [...markers].sort((a, b) => a.start - b.start)
+  const next   = sorted.find(m => m.start > cur + 0.05)
+  if (next) { performSeek(next.start); return true }
+  return false
 }
 
 async function init() {
@@ -1466,6 +1844,9 @@ async function init() {
       buildTrackRow(track, track.index, cachedPeaksArr[i])
     })
 
+    // Epic 17 — init marker lane (markerLaneEl set during buildTrackRow idx=0)
+    initMarkerLane()
+
     await loadMix(groove.tracks)
 
     // 13.1 / 13.3 — Init tablature si fichier GP présent (desktop uniquement)
@@ -1514,8 +1895,21 @@ async function init() {
 
     // ── Loop button + navigation ───────────────
     btnLoop.addEventListener('click', () => setLoopEnabled(!loopEnabled))
-    btnLoopGoIn.addEventListener('click', () => { if (activeLoopIn !== null) performSeek(activeLoopIn) })
-    btnLoopGoOut.addEventListener('click', () => { if (activeLoopOut !== null) performSeek(activeLoopOut) })
+    // Epic 17 — |<< and >>| navigate markers when present, else go to IN/OUT
+    btnLoopGoIn.addEventListener('click', () => {
+      if (markers.length > 0) {
+        if (!navigatePrevMarker()) performSeek(0)
+      } else {
+        if (activeLoopIn !== null) performSeek(activeLoopIn)
+      }
+    })
+    btnLoopGoOut.addEventListener('click', () => {
+      if (markers.length > 0) {
+        if (!navigateNextMarker()) performSeek(totalDuration)
+      } else {
+        if (activeLoopOut !== null) performSeek(activeLoopOut)
+      }
+    })
     btnLoopClear.addEventListener('click', clearLoop)
 
     // ── Tempo control ──────────────────────────

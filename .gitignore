@@ -8,3 +8,5 @@ cache/*
 .env.deploy
 .worktrees
 test-results/
+# ne pas commit :
+grooves-pour-epic-20

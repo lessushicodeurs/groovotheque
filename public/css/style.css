@@ -1301,3 +1301,171 @@ body.tab-no-scroll { overflow: hidden; }
     transform: none;
   }
 }
+
+/* ── Epic 17 — Bande de marqueurs ────────── */
+
+.marker-lane {
+  position: relative;
+  height: 30px;
+  background: #0b0b0b;
+  border-bottom: 1px solid #1a1a1a;
+  overflow: hidden;
+  user-select: none;
+  flex-shrink: 0;
+  cursor: crosshair;
+}
+
+.marker-region {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 2px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  min-width: 4px;
+  box-sizing: border-box;
+  overflow: hidden;
+  transition: background 0.1s, border-color 0.1s;
+}
+
+.marker-region:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.24);
+}
+
+.marker-region--selected {
+  background: rgba(100, 200, 255, 0.14);
+  border-color: rgba(100, 200, 255, 0.48);
+}
+
+.marker-region--selected:hover {
+  background: rgba(100, 200, 255, 0.2);
+}
+
+.marker-region-label {
+  flex: 1;
+  min-width: 0;
+  padding: 0 6px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.marker-region-text {
+  font-size: 10px;
+  font-weight: 700;
+  color: #777;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+.marker-region--selected .marker-region-text {
+  color: #99ccee;
+}
+
+.marker-region-edge {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: ew-resize;
+  z-index: 1;
+  transition: background 0.1s;
+}
+
+.marker-region-edge--left {
+  left: 0;
+}
+
+.marker-region-edge--right {
+  right: 0;
+}
+
+.marker-region-edge:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+/* Ghost pendant le drag-to-create */
+.marker-lane-ghost {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px dashed rgba(255, 255, 255, 0.28);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+/* Popover d'édition de label */
+.marker-popover {
+  position: fixed;
+  background: #1c1c1c;
+  border: 1px solid #333;
+  border-radius: 5px;
+  padding: 5px 7px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  z-index: 200;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.65);
+}
+
+.marker-popover[hidden] {
+  display: none;
+}
+
+.marker-popover-input {
+  background: #111;
+  border: 1px solid #333;
+  color: #ccc;
+  font-size: 0.78rem;
+  padding: 3px 6px;
+  border-radius: 3px;
+  width: 130px;
+  outline: none;
+  font-family: system-ui, sans-serif;
+}
+
+.marker-popover-input:focus {
+  border-color: #555;
+  color: #eee;
+}
+
+.marker-popover-delete {
+  background: none;
+  border: 1px solid #3a1a1a;
+  color: #885555;
+  font-size: 0.82rem;
+  width: 22px;
+  height: 22px;
+  border-radius: 3px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  line-height: 1;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+  flex-shrink: 0;
+}
+
+.marker-popover-delete:hover {
+  background: #2a1010;
+  border-color: #663333;
+  color: #cc5555;
+}
+
+/* Mobile : lane visible mais lecture seule */
+@media (max-width: 767px) {
+  .marker-lane {
+    cursor: default;
+  }
+}
