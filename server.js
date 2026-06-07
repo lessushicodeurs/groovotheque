@@ -82,7 +82,7 @@ function trackSortKey(filename) {
 
 // 20.1 — Formatage du nom d'affichage
 function formatDisplayName(slug) {
-  return slug.replace(/[-_]/g, ' ');
+  return slug.replace(/_/g, ' ');
 }
 
 // 20.1 — Un dossier est un groove s'il contient directement un fichier audio ou GP
@@ -323,7 +323,11 @@ app.post('/api/mix/*', async (req, res) => {
   if (!grooveDir) return;
   const mixPath = path.join(grooveDir, 'mix.json');
   try {
-    await fs.promises.writeFile(mixPath, JSON.stringify(req.body, null, 2), 'utf8');
+    const mix = req.body;
+    if (Array.isArray(mix.markers)) {
+      mix.markers.sort((a, b) => a.in - b.in);
+    }
+    await fs.promises.writeFile(mixPath, JSON.stringify(mix, null, 2), 'utf8');
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
