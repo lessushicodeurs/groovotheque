@@ -2168,7 +2168,8 @@ function openCommentPopover(comment, anchorEl) {
     editBtn.className = 'comment-popover-btn'
     editBtn.textContent = 'Modifier'
     editBtn.addEventListener('click', () => {
-      editBtn.disabled = true
+      editBtn.setAttribute('hidden', '')
+      delBtn.setAttribute('hidden', '')
 
       cpText.setAttribute('hidden', '')
       const area = document.createElement('textarea')
@@ -2182,7 +2183,8 @@ function openCommentPopover(comment, anchorEl) {
         area.remove()
         saveBtn.remove()
         cpText.removeAttribute('hidden')
-        editBtn.disabled = false
+        editBtn.removeAttribute('hidden')
+        delBtn.removeAttribute('hidden')
       }
 
       const saveBtn = document.createElement('button')
