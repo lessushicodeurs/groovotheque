@@ -1644,3 +1644,493 @@ body.tab-no-scroll { overflow: hidden; }
     align-items: center;
   }
 }
+
+/* ── Epic 22 — Commentaires ─────────────────── */
+
+/* Lane des triangles de commentaires (dans .timeline-wave-col) */
+.comment-markers-lane {
+  position: relative;
+  height: 14px;
+  background: #0b0b0b;
+  border-bottom: 1px solid #1a1a1a;
+  flex-shrink: 0;
+  overflow: visible;
+}
+
+/* Wrapper du marqueur : triangle + ligne */
+.comment-marker {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  cursor: pointer;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* Triangle pointant vers le bas */
+.comment-marker-triangle {
+  width: 0;
+  height: 0;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-top: 10px solid #f59e0b;
+  flex-shrink: 0;
+  transition: border-top-color 0.15s;
+}
+
+.comment-marker--seen .comment-marker-triangle {
+  border-top-color: #4b5563;
+}
+
+.comment-marker:hover .comment-marker-triangle {
+  border-top-color: #fbbf24;
+}
+
+.comment-marker--seen:hover .comment-marker-triangle {
+  border-top-color: #6b7280;
+}
+
+/* Animation pulse pour les commentaires non vus */
+@keyframes comment-pulse {
+  0%, 100% { transform: scaleY(1); }
+  50%       { transform: scaleY(1.15); }
+}
+
+.comment-marker--unseen .comment-marker-triangle {
+  animation: comment-pulse 1.8s ease-in-out 3;
+}
+
+/* Animation fade pour les commentaires déjà vus (22.7) */
+@keyframes comment-fade-in {
+  from { opacity: 0.3; }
+  to   { opacity: 1; }
+}
+
+.comment-marker--seen-anim .comment-marker-triangle {
+  animation: comment-fade-in 0.6s ease forwards;
+}
+
+/* Ligne pointillée verticale dans chaque track-wave */
+.track-wave {
+  position: relative;
+}
+
+.comment-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 1px dashed rgba(245, 158, 11, 0.55);
+  transform: translateX(-50%);
+  pointer-events: none;
+  z-index: 5;
+}
+
+.comment-line--seen {
+  border-left-color: rgba(75, 85, 99, 0.4);
+}
+
+/* Bouton commentaires dans le transport */
+.btn-comments {
+  position: relative;
+}
+
+.btn-comments.active {
+  background: #1a2510;
+  border-color: #405520;
+  color: #8ab840;
+}
+
+/* Badge compteur */
+.comment-badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 15px;
+  height: 15px;
+  border-radius: 8px;
+  background: #374151;
+  color: #9ca3af;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+  padding: 0 3px;
+  pointer-events: none;
+  letter-spacing: 0;
+}
+
+.comment-badge--unseen {
+  background: #f59e0b;
+  color: #1a1000;
+}
+
+.comment-badge[hidden] {
+  display: none;
+}
+
+/* Badge sur les cartes de l'index */
+.groove-comment-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  border-radius: 9px;
+  background: #374151;
+  color: #9ca3af;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 0 4px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.groove-comment-badge--unseen {
+  background: #f59e0b;
+  color: #1a1000;
+}
+
+/* Popover commentaire */
+.comment-popover {
+  position: fixed;
+  z-index: 300;
+  background: #1a1a1a;
+  border: 1px solid #2e2e2e;
+  border-radius: 8px;
+  padding: 0.875rem;
+  width: 280px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.7);
+  font-size: 0.82rem;
+  color: #ccc;
+}
+
+.comment-popover[hidden] { display: none; }
+
+.comment-popover-close {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  background: none;
+  border: none;
+  color: #555;
+  cursor: pointer;
+  font-size: 1rem;
+  padding: 0;
+  line-height: 1;
+}
+
+.comment-popover-close:hover { color: #999; }
+
+.comment-popover-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  padding-right: 1.2rem;
+}
+
+.comment-popover-initials {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #2e2e2e;
+  color: #f0f0f0;
+  font-size: 0.68rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.comment-popover-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.comment-popover-author {
+  font-weight: 600;
+  color: #e0e0e0;
+  font-size: 0.8rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.comment-popover-pos {
+  color: #666;
+  font-size: 0.72rem;
+  font-family: monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.comment-popover-text {
+  color: #d0d0d0;
+  line-height: 1.5;
+  margin: 0.5rem 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.comment-popover-date {
+  color: #555;
+  font-size: 0.7rem;
+  margin-bottom: 0.5rem;
+}
+
+.comment-popover-replies {
+  border-top: 1px solid #252525;
+  padding-top: 0.5rem;
+  max-height: 160px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #2a2a2a transparent;
+}
+
+.comment-reply {
+  display: flex;
+  gap: 0.4rem;
+  margin: 0.35rem 0;
+  align-items: flex-start;
+}
+
+.comment-reply-initials {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #252525;
+  color: #888;
+  font-size: 0.58rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  text-transform: uppercase;
+}
+
+.comment-reply-body { flex: 1; min-width: 0; }
+
+.comment-reply-author {
+  font-weight: 600;
+  color: #aaa;
+  font-size: 0.75rem;
+}
+
+.comment-reply-text {
+  color: #bbb;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.comment-reply-date {
+  color: #555;
+  font-size: 0.67rem;
+}
+
+/* Champ réponse */
+.comment-popover-reply-form {
+  margin-top: 0.6rem;
+  display: flex;
+  gap: 0.3rem;
+}
+
+.comment-popover-reply-input {
+  flex: 1;
+  background: #111;
+  border: 1px solid #2a2a2a;
+  border-radius: 4px;
+  color: #eee;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.78rem;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.1s;
+}
+
+.comment-popover-reply-input:focus {
+  border-color: #444;
+}
+
+.comment-popover-reply-send {
+  background: #1a2a1a;
+  border: 1px solid #2a4a2a;
+  border-radius: 4px;
+  color: #6a9a6a;
+  font-size: 0.72rem;
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+  flex-shrink: 0;
+}
+
+.comment-popover-reply-send:hover {
+  background: #223322;
+  color: #8acc8a;
+}
+
+/* Actions auteur (modifier / supprimer) */
+.comment-popover-actions {
+  margin-top: 0.5rem;
+  display: flex;
+  gap: 0.4rem;
+  border-top: 1px solid #252525;
+  padding-top: 0.5rem;
+}
+
+.comment-popover-btn {
+  background: #1c1c1c;
+  border: 1px solid #2a2a2a;
+  border-radius: 4px;
+  color: #777;
+  font-size: 0.7rem;
+  padding: 0.2rem 0.5rem;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.comment-popover-btn:hover {
+  background: #242424;
+  color: #ccc;
+}
+
+.comment-popover-btn--danger {
+  color: #884444;
+}
+
+.comment-popover-btn--danger:hover {
+  background: #2a1010;
+  border-color: #553333;
+  color: #cc6666;
+}
+
+/* Modal de création */
+.comment-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  z-index: 400;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.comment-modal-backdrop[hidden] { display: none; }
+
+.comment-modal {
+  background: #1a1a1a;
+  border: 1px solid #2e2e2e;
+  border-radius: 8px;
+  padding: 1.25rem;
+  width: 340px;
+  max-width: calc(100vw - 2rem);
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.85);
+}
+
+.comment-modal h2 {
+  margin: 0 0 0.75rem;
+  font-size: 0.95rem;
+  color: #e0e0e0;
+  font-weight: 600;
+}
+
+.comment-modal-position {
+  font-size: 0.78rem;
+  color: #666;
+  font-family: monospace;
+  margin-bottom: 0.75rem;
+}
+
+.comment-modal-textarea {
+  width: 100%;
+  min-height: 80px;
+  background: #111;
+  border: 1px solid #2a2a2a;
+  border-radius: 4px;
+  color: #eee;
+  padding: 0.5rem;
+  font-size: 0.85rem;
+  resize: vertical;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.1s;
+  box-sizing: border-box;
+}
+
+.comment-modal-textarea:focus {
+  border-color: #3a3a3a;
+}
+
+.comment-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.comment-modal-cancel {
+  background: #1c1c1c;
+  border: 1px solid #2a2a2a;
+  border-radius: 4px;
+  color: #666;
+  font-size: 0.8rem;
+  padding: 0.35rem 0.8rem;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.comment-modal-cancel:hover {
+  background: #242424;
+  color: #ccc;
+}
+
+.comment-modal-submit {
+  background: #1a2a3a;
+  border: 1px solid #2a4a6a;
+  border-radius: 4px;
+  color: #6aaccc;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.35rem 0.8rem;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.comment-modal-submit:hover:not(:disabled) {
+  background: #1e3650;
+  color: #88ccee;
+}
+
+.comment-modal-submit:disabled {
+  color: #3a5a6a;
+  cursor: default;
+}
+
+/* Champ d'édition inline dans le popover */
+.comment-edit-textarea {
+  width: 100%;
+  min-height: 60px;
+  background: #111;
+  border: 1px solid #333;
+  border-radius: 4px;
+  color: #eee;
+  padding: 0.4rem;
+  font-size: 0.8rem;
+  resize: vertical;
+  font-family: inherit;
+  outline: none;
+  margin-bottom: 0.4rem;
+  box-sizing: border-box;
+}
+
+.comment-edit-textarea:focus {
+  border-color: #555;
+}

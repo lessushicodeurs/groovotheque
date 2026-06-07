@@ -3,6 +3,41 @@ import { marked } from '/vendor/marked.esm.js';
 const listEl    = document.getElementById('groove-list');
 const tooltipEl = document.getElementById('tooltip');
 
+// ── Epic 22 — Badges commentaires sur l'index ───────────────────────────
+
+const SEEN_KEY = 'groovotheque:seen_comments';
+
+function getSeenIds() {
+  try { return new Set(JSON.parse(localStorage.getItem(SEEN_KEY) || '[]')); }
+  catch { return new Set(); }
+}
+
+let commentSummary = null; // { groovePath: { count, ids } }
+
+async function loadCommentSummary() {
+  try {
+    const res = await fetch('/api/comments-summary');
+    if (!res.ok) return;
+    commentSummary = await res.json();
+  } catch { /* silent */ }
+}
+
+function applyCommentBadges() {
+  if (!commentSummary) return;
+  const seen = getSeenIds();
+  listEl.querySelectorAll('.groove-card[data-groove-path]').forEach(card => {
+    const path = card.dataset.groovePath;
+    const info = commentSummary[path];
+    if (!info || info.count === 0) return;
+    const hasUnseen = info.ids.some(id => !seen.has(id));
+    const badge = document.createElement('span');
+    badge.className = 'groove-comment-badge' + (hasUnseen ? ' groove-comment-badge--unseen' : '');
+    badge.textContent = String(info.count);
+    badge.title = `${info.count} commentaire${info.count > 1 ? 's' : ''}`;
+    card.appendChild(badge);
+  });
+}
+
 // Encode un chemin relatif pour l'utiliser dans une URL path
 function encodePath(p) {
   return p.split('/').map(encodeURIComponent).join('/');
@@ -108,6 +143,7 @@ function createGrooveCard(groove) {
   const card = document.createElement('a');
   card.className = 'groove-card';
   card.href = `player.html?groove=${encodePath(groove.path)}`;
+  card.dataset.groovePath = groove.path;
 
   const icon = document.createElement('span');
   icon.className = 'groove-icon';
@@ -238,6 +274,7 @@ function renderSearchResults(query, grooves) {
     }
     listEl.appendChild(card);
   }
+  applyCommentBadges();
 }
 
 async function renderLevel(currentPath) {
@@ -266,6 +303,7 @@ async function renderLevel(currentPath) {
         listEl.appendChild(createGrooveCard(item));
       }
     }
+    applyCommentBadges();
   } catch (err) {
     const p = document.createElement('p');
     p.className = 'state-msg error';
@@ -308,6 +346,8 @@ async function init() {
   const currentPath = getCurrentPath();
   renderBreadcrumb(currentPath);
   setupSearch(currentPath);
+  // Charger le résumé des commentaires en parallèle du rendu de la liste
+  loadCommentSummary().then(applyCommentBadges);
   await renderLevel(currentPath);
 }
 

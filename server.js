@@ -424,6 +424,154 @@ app.post('/api/peaks/*', async (req, res) => {
   }
 });
 
+// ── Epic 22 — Commentaires ────────────────────────────────────────────────
+
+const COMMENTS_FILE = path.join(__dirname, 'comments.json');
+
+function readComments() {
+  try {
+    return JSON.parse(fs.readFileSync(COMMENTS_FILE, 'utf8'));
+  } catch (err) {
+    if (err.code === 'ENOENT') return {};
+    throw err;
+  }
+}
+
+function writeComments(data) {
+  fs.writeFileSync(COMMENTS_FILE, JSON.stringify(data, null, 2), 'utf8');
+}
+
+// GET /api/comments-summary — résumé {groovePath: {count, ids}} pour l'index
+app.get('/api/comments-summary', (req, res) => {
+  try {
+    const data = readComments();
+    const summary = {};
+    for (const [groove, comments] of Object.entries(data)) {
+      if (comments.length > 0) {
+        summary[groove] = {
+          count: comments.length,
+          ids: comments.map(c => c.id),
+        };
+      }
+    }
+    res.json(summary);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/comments/*/:id/replies — AVANT le POST générique (priorité de route)
+// Chemin exemple : /api/comments/SHK2/uuid-here/replies
+// params[0] = "SHK2", params.id = "uuid-here"
+app.post('/api/comments/*/:id/replies', (req, res) => {
+  const groovePath = req.params[0];
+  const { id } = req.params;
+  const author = req.auth?.user;
+  const { text } = req.body;
+  if (!text?.trim()) return res.status(400).json({ error: 'text requis' });
+  try {
+    const data = readComments();
+    const list = data[groovePath] || [];
+    const comment = list.find(c => c.id === id);
+    if (!comment) return res.status(404).json({ error: 'Commentaire introuvable' });
+    const reply = {
+      id: crypto.randomUUID(),
+      author,
+      text: text.trim(),
+      createdAt: new Date().toISOString(),
+    };
+    comment.replies.push(reply);
+    comment.updatedAt = new Date().toISOString();
+    writeComments(data);
+    res.status(201).json(reply);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/comments/* — liste des commentaires d'un groove
+app.get('/api/comments/*', (req, res) => {
+  const groovePath = req.params[0];
+  if (!groovePath) return res.status(400).json({ error: 'Chemin manquant' });
+  try {
+    const data = readComments();
+    res.json(data[groovePath] || []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/comments/* — crée un commentaire (après la route replies)
+app.post('/api/comments/*', (req, res) => {
+  const groovePath = req.params[0];
+  if (!groovePath) return res.status(400).json({ error: 'Chemin manquant' });
+  const author = req.auth?.user;
+  const { position, text } = req.body;
+  if (typeof position !== 'number' || !text?.trim()) {
+    return res.status(400).json({ error: 'position (number) et text requis' });
+  }
+  try {
+    const data = readComments();
+    if (!data[groovePath]) data[groovePath] = [];
+    const now = new Date().toISOString();
+    const comment = {
+      id: crypto.randomUUID(),
+      position,
+      author,
+      text: text.trim(),
+      createdAt: now,
+      updatedAt: now,
+      replies: [],
+    };
+    data[groovePath].push(comment);
+    writeComments(data);
+    res.status(201).json(comment);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/comments/*/:id — modifie le texte (auteur uniquement)
+app.put('/api/comments/*/:id', (req, res) => {
+  const groovePath = req.params[0];
+  const { id } = req.params;
+  const author = req.auth?.user;
+  const { text } = req.body;
+  if (!text?.trim()) return res.status(400).json({ error: 'text requis' });
+  try {
+    const data = readComments();
+    const list = data[groovePath] || [];
+    const comment = list.find(c => c.id === id);
+    if (!comment) return res.status(404).json({ error: 'Commentaire introuvable' });
+    if (comment.author !== author) return res.status(403).json({ error: 'Non autorisé' });
+    comment.text = text.trim();
+    comment.updatedAt = new Date().toISOString();
+    writeComments(data);
+    res.json(comment);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/comments/*/:id — supprime (auteur uniquement)
+app.delete('/api/comments/*/:id', (req, res) => {
+  const groovePath = req.params[0];
+  const { id } = req.params;
+  const author = req.auth?.user;
+  try {
+    const data = readComments();
+    const list = data[groovePath] || [];
+    const idx = list.findIndex(c => c.id === id);
+    if (idx === -1) return res.status(404).json({ error: 'Commentaire introuvable' });
+    if (list[idx].author !== author) return res.status(403).json({ error: 'Non autorisé' });
+    list.splice(idx, 1);
+    writeComments(data);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Groovotheque listening on port ${PORT}`);
 });
