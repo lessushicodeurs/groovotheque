@@ -452,6 +452,9 @@ function onFinish() {
 
 function seekAllTo(time) {
   wavesurfers.forEach(ws => ws.setTime(time))
+  if (alphaTabApi && tabState !== 'collapsed') {
+    alphaTabApi.timePosition = audioTimeToSynthTime(time * 1000)
+  }
 }
 
 // Shared seek-with-resume logic: pauses if playing, seeks all tracks, then
@@ -721,6 +724,9 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
     const wasPlaying = isPlaying
     if (wasPlaying) { isPlaying = false; wavesurfers.forEach(w => w.pause()) }
     wavesurfers.forEach((w, j) => { if (j !== idx) w.setTime(newTime) })
+    if (alphaTabApi && tabState !== 'collapsed') {
+      alphaTabApi.timePosition = audioTimeToSynthTime(newTime * 1000)
+    }
     if (wasPlaying) {
       try {
         await Promise.all(wavesurfers.map(w => w.play()))
