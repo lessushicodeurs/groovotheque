@@ -109,6 +109,85 @@ body {
   color: #c44;
 }
 
+/* ── Note accordion (player) ─────────────── */
+
+.btn-note {
+  flex-shrink: 0;
+  font-size: 1.1rem;
+}
+
+.btn-note[aria-expanded="true"] {
+  background: #1e1e1e;
+  border-color: #3a3a3a;
+  color: #ddd;
+}
+
+.note-panel {
+  background: #141414;
+  border-bottom: 1px solid #1e1e1e;
+  overflow: hidden;
+  max-height: 0;
+  transition: max-height 260ms ease;
+}
+
+.note-panel--open {
+  max-height: 800px;
+}
+
+.note-panel-inner {
+  padding: 0.75rem 2rem;
+}
+
+.note-panel-inner h1,
+.note-panel-inner h2,
+.note-panel-inner h3 {
+  margin: 0 0 0.4rem;
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: #eee;
+}
+
+.note-panel-inner p,
+.note-panel-inner ul,
+.note-panel-inner ol {
+  margin: 0.2rem 0;
+  font-size: 0.82rem;
+  color: #bbb;
+}
+
+.note-panel-inner .table-wrap {
+  overflow-x: auto;
+  width: 100%;
+  margin: 0.4rem 0;
+  scrollbar-width: thin;
+  scrollbar-color: #333 transparent;
+}
+
+.note-panel-inner table {
+  border-collapse: collapse;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.note-panel-inner th,
+.note-panel-inner td {
+  padding: 0.22rem 0.65rem;
+  border: 1px solid #2a2a2a;
+  text-align: left;
+  vertical-align: top;
+  color: #ccc;
+}
+
+.note-panel-inner th {
+  background: #1a1a1a;
+  color: #e0e0e0;
+  font-weight: 600;
+}
+
+.note-panel-inner tr:nth-child(even) td {
+  background: #181818;
+}
+
 /* ── Groove listing ──────────────────────── */
 
 .groove-list {

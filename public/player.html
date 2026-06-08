@@ -13,11 +13,13 @@
     <a id="back-btn" class="back-link" href="/" aria-label="Retour">←</a>
     <nav id="player-breadcrumb" class="breadcrumb breadcrumb--player" aria-label="Navigation"></nav>
     <h1 id="groove-title">…</h1>
+    <button id="btn-note" class="nav-btn btn-note" aria-expanded="false" aria-controls="note-panel" title="Notes" hidden>≡</button>
     <button id="btn-prev" class="nav-btn" aria-label="Groove précédent" disabled>‹</button>
     <button id="btn-next" class="nav-btn" aria-label="Groove suivant" disabled>›</button>
     <button id="btn-save-mix" class="btn-save-mix" hidden>Sauvegarder le mix</button>
     <button id="btn-download-all" class="btn-download-all" hidden>↓ Tout télécharger</button>
   </header>
+  <div id="note-panel" class="note-panel" role="region" aria-label="Notes"></div>
   <main id="player-main" class="loading">
     <div id="tracks-container" class="tracks-container" hidden></div>
     <div id="minimap-container" class="minimap-container" hidden></div>

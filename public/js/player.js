@@ -1,3 +1,4 @@
+import { marked } from '/vendor/marked.esm.js'
 import WaveSurfer from 'https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.esm.js'
 import TimelinePlugin from 'https://unpkg.com/wavesurfer.js@7/dist/plugins/timeline.esm.js'
 import MinimapPlugin from 'https://unpkg.com/wavesurfer.js@7/dist/plugins/minimap.esm.js'
@@ -2395,6 +2396,29 @@ function initCommentControls() {
   initCommentModal()
 }
 
+async function initNotePanel() {
+  const btnNote  = document.getElementById('btn-note')
+  const notePanel = document.getElementById('note-panel')
+  try {
+    const res = await fetch(`/api/grooves/${encodePath(grooveSlug)}/md`)
+    if (!res.ok) return
+    const { mdContent } = await res.json()
+    if (!mdContent) return
+    const html = marked.parse(mdContent)
+      .replace(/<table>/g, '<div class="table-wrap"><table>')
+      .replace(/<\/table>/g, '</table></div>')
+    const inner = document.createElement('div')
+    inner.className = 'note-panel-inner'
+    inner.innerHTML = html
+    notePanel.appendChild(inner)
+    btnNote.removeAttribute('hidden')
+    btnNote.addEventListener('click', () => {
+      const open = notePanel.classList.toggle('note-panel--open')
+      btnNote.setAttribute('aria-expanded', String(open))
+    })
+  } catch { /* pas de note */ }
+}
+
 async function init() {
   if (!grooveSlug) {
     showFatalError('Aucun groove spécifié.')
@@ -2413,6 +2437,7 @@ async function init() {
     titleEl.textContent = name
     document.title = `${name} — Groovotheque`
     setupTitleMarquee()
+    initNotePanel()
 
     if (!groove.tracks?.length) {
       showFatalError('Aucune piste audio dans ce groove.', false)
