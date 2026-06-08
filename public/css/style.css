@@ -252,7 +252,7 @@ body {
 
 .tooltip {
   position: fixed;
-  max-width: 400px;
+  max-width: min(90vw, 680px);
   background: rgba(16, 16, 16, 0.96);
   border: 1px solid #2e2e2e;
   border-radius: 8px;
@@ -298,6 +298,40 @@ body {
   border-radius: 3px;
   padding: 0.1em 0.35em;
   font-size: 0.9em;
+}
+
+.tooltip .table-wrap {
+  overflow-x: auto;
+  width: 100%;
+  margin: 0.4rem 0;
+  scrollbar-width: thin;
+  scrollbar-color: #333 transparent;
+}
+
+.tooltip table {
+  border-collapse: collapse;
+  font-size: 0.78rem;
+  white-space: nowrap;
+  min-width: 100%;
+}
+
+.tooltip th,
+.tooltip td {
+  padding: 0.2rem 0.55rem;
+  border: 1px solid #2e2e2e;
+  text-align: left;
+  vertical-align: top;
+  color: #ccc;
+}
+
+.tooltip th {
+  background: #1a1a1a;
+  color: #e0e0e0;
+  font-weight: 600;
+}
+
+.tooltip tr:nth-child(even) td {
+  background: #181818;
 }
 
 /* ── Player header ───────────────────────── */

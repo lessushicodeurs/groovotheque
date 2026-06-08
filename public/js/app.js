@@ -76,7 +76,8 @@ async function loadMd(groovePath) {
   const res = await fetch(`/api/grooves/${encodePath(groovePath)}/md`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
-  const html = data.mdContent ? sanitizeHtml(marked.parse(data.mdContent)) : null;
+  const raw = data.mdContent ? sanitizeHtml(marked.parse(data.mdContent)) : null;
+  const html = raw ? raw.replace(/<table>/g, '<div class="table-wrap"><table>').replace(/<\/table>/g, '</table></div>') : null;
   mdCache.set(groovePath, html);
   return html;
 }
