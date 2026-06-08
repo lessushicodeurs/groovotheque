@@ -73,7 +73,7 @@ groovotheque/
 ### 3. Player multipiste
 
 - Un WaveSurfer par piste, synchronisés via le plugin Multitrack
-- Plugins actifs : Multitrack, Regions, Timeline, Minimap, Hover
+- Plugins actifs : Multitrack, Regions, Timeline, Hover
 - Thème dark, couleur unique par piste (palette fixe, assignée par index)
 - Affichage du nom de la piste à gauche de la waveform
 - Contrôles par piste : Mute, Solo, Volume (slider)

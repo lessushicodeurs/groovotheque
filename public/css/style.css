@@ -419,20 +419,6 @@ body {
   overflow: hidden;
 }
 
-/* ── Minimap ─────────────────────────────── */
-
-.minimap-container {
-  background: #0d0d0d;
-  border-top: 1px solid #1a1a1a;
-  border-bottom: 1px solid #1a1a1a;
-  padding: 2px 0;
-}
-
-.minimap-row {
-  display: block;
-  line-height: 0;
-}
-
 /* ── Transport ───────────────────────────── */
 
 .transport {
@@ -1162,10 +1148,7 @@ body.tab-no-scroll { overflow: hidden; }
     height: 4px;
   }
 
-  /* Minimap: hidden on mobile (performance) */
-  .minimap-container {
-    display: none;
-  }
+
 
   /* ── Transport Drawer ────────────────────── */
 

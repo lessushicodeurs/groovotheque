@@ -1,6 +1,5 @@
 import WaveSurfer from 'https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.esm.js'
 import TimelinePlugin from 'https://unpkg.com/wavesurfer.js@7/dist/plugins/timeline.esm.js'
-import MinimapPlugin from 'https://unpkg.com/wavesurfer.js@7/dist/plugins/minimap.esm.js'
 import HoverPlugin from 'https://unpkg.com/wavesurfer.js@7/dist/plugins/hover.esm.js'
 import RegionsPlugin from 'https://unpkg.com/wavesurfer.js@7/dist/plugins/regions.esm.js'
 
@@ -36,7 +35,6 @@ const titleEl          = document.getElementById('groove-title')
 const loadBarEl        = document.getElementById('load-bar')
 const mainEl           = document.getElementById('player-main')
 const tracksContainer  = document.getElementById('tracks-container')
-const minimapContainer = document.getElementById('minimap-container')
 const drawerEl         = document.getElementById('transport-drawer')
 const handleEl         = document.getElementById('transport-handle')
 const transportEl      = document.getElementById('transport')
@@ -155,7 +153,6 @@ const panNodes     = []   // StereoPannerNode per track
 const panKnobs       = []   // PanKnob UI per track
 const webAudioRouted = []   // true if MediaElementSource successfully connected
 const waveEls        = []   // .track-wave div per track (for proportional width)
-const minimapRowEls  = []   // .minimap-row div per track (for proportional width)
 const trackDurations = []   // duration in seconds per track, set on 'ready'
 let timelinePluginRef = null  // TimelinePlugin instance (track 0), for duration correction
 let timelineExtEl     = null  // container DOM element for TimelinePlugin (in .timeline-row)
@@ -788,12 +785,6 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
   tracksContainer.appendChild(row)
   waveEls.push(waveEl)
 
-  // ── Dedicated minimap row per track ───────────
-  const minimapRow = document.createElement('div')
-  minimapRow.className = 'minimap-row'
-  minimapContainer.appendChild(minimapRow)
-  minimapRowEls.push(minimapRow)
-
   // ── Plugins ───────────────────────────────────
   const regionsPlugin = RegionsPlugin.create()
   trackRegions.push(regionsPlugin)
@@ -808,15 +799,6 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
       labelSize: '10px',
     }),
   ]
-
-  if (!isMobile) {
-    plugins.push(MinimapPlugin.create({
-      height: 22,
-      waveColor,
-      progressColor,
-      container: minimapRow,
-    }))
-  }
 
   if (idx === 0) {
     timelinePluginRef = TimelinePlugin.create({
@@ -1011,14 +993,6 @@ function adjustTrackWidths() {
     }
   })
 
-  const minimapW = minimapContainer.offsetWidth
-  minimapRowEls.forEach((el, i) => {
-    const ratio = (trackDurations[i] ?? maxDur) / maxDur
-    if (ratio < 1) {
-      el.style.width = Math.floor(minimapW * ratio) + 'px'
-    }
-  })
-
   renderMarkers()
   renderCommentMarkers()
   animateSeenComments()
@@ -1068,13 +1042,10 @@ function setTabState(newState) {
 
   // Show/hide waveform tracks in fullscreen mode
   const tracksEl  = document.getElementById('tracks-container')
-  const minimapEl = document.getElementById('minimap-container')
   if (newState === 'fullscreen') {
     tracksEl?.classList.add('tab-hidden')
-    minimapEl?.classList.add('tab-hidden')
   } else {
     tracksEl?.classList.remove('tab-hidden')
-    minimapEl?.classList.remove('tab-hidden')
   }
 
   const stateMap = { fullscreen: btnTabFullscreen, strip: btnTabStrip, collapsed: btnTabCollapse }
@@ -2421,7 +2392,6 @@ async function init() {
 
     initLoadBar(groove.tracks.length)
     tracksContainer.removeAttribute('hidden')
-    minimapContainer.removeAttribute('hidden')
     drawerEl.removeAttribute('hidden')
     initDrawer()
     btnDownloadAll.removeAttribute('hidden')

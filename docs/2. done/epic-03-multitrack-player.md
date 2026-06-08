@@ -19,9 +19,10 @@ Implémenter le player wavesurfer.js multipiste avec tous les plugins, les contr
 - Affichage de la règle temporelle au-dessus des waveforms
 - Timecode en mm:ss
 
-### 3.3 — Plugin Minimap
-- Vue d'ensemble condensée en bas du player
-- Même couleur que la piste principale
+### 3.3 — Plugin Minimap ~~(décommissionné)~~
+- ~~Vue d'ensemble condensée en bas du player~~
+- ~~Même couleur que la piste principale~~
+- **Retiré** : feature jugée peu utile en pratique, supprimée pour simplifier l'interface.
 
 ### 3.4 — Plugin Hover
 - Curseur vertical suivant la souris avec timecode au survol
