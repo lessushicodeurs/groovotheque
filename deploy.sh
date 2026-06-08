@@ -39,13 +39,18 @@ echo "=== Déploiement Groovotheque → $REMOTE:$REMOTE_DIR ==="
 # Pas de --delete : grooves/, cache/, .git/ éventuels sur le serveur doivent être préservés.
 rsync "${RSYNC_OPTS[@]}" \
   --exclude='.git' \
+  --exclude='.claude' \
   --exclude='.worktrees' \
   --exclude='grooves' \
   --exclude='grooves-tmp' \
   --exclude='cache' \
   --exclude='.auth' \
   --exclude='.env.deploy' \
+  --exclude='comments.json' \
   --exclude='docs' \
+  --exclude='tests' \
+  --exclude='playwright.config.js' \
+  --exclude='PRD.md' \
   "$SCRIPT_DIR/" \
   "$REMOTE:$REMOTE_DIR/"
 
