@@ -78,19 +78,29 @@ def groove_name(path: Path) -> str:
 # ── Construction du bloc markdown ─────────────────────────────────────────────
 
 def build_structure_block(sorted_markers, bpm=None):
+    labels = [m['label'] for m in sorted_markers]
+
     if bpm:
-        header = '| Section | Mesures |\n|---|---|\n'
-        rows = '\n'.join(
-            f"| {m['label']} | {measures(m['out'] - m['in'], bpm)}x |"
-            for m in sorted_markers
-        )
+        data_rows = [
+            ('Mesures', [str(measures(m['out'] - m['in'], bpm)) for m in sorted_markers]),
+        ]
     else:
-        header = '| Section | IN | OUT | Durée |\n|---|---|---|---|\n'
-        rows = '\n'.join(
-            f"| {m['label']} | {fmt_time(m['in'])} | {fmt_time(m['out'])} | {fmt_dur(m['out'] - m['in'])} |"
-            for m in sorted_markers
-        )
-    return '## Structure\n\n' + header + rows
+        data_rows = [
+            ('IN',    [fmt_time(m['in'])             for m in sorted_markers]),
+            ('OUT',   [fmt_time(m['out'])             for m in sorted_markers]),
+            ('Durée', [fmt_dur(m['out'] - m['in'])   for m in sorted_markers]),
+        ]
+
+    all_rows = [['Section'] + labels] + [[name] + vals for name, vals in data_rows]
+    widths   = [max(len(r[c]) for r in all_rows) for c in range(len(all_rows[0]))]
+    widths   = [max(w, 3) for w in widths]
+
+    def fmt_row(cells):
+        return '| ' + ' | '.join(f'{c:<{widths[i]}}' for i, c in enumerate(cells)) + ' |'
+
+    sep  = '|' + '|'.join('-' * (w + 2) for w in widths) + '|'
+    lines = [fmt_row(all_rows[0]), sep] + [fmt_row(r) for r in all_rows[1:]]
+    return '## Structure\n\n' + '\n'.join(lines) + '\n'
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
