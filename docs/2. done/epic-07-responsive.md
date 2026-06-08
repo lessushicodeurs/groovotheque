@@ -25,9 +25,10 @@ Rendre l'intégralité de l'interface utilisable sur mobile et tablette, avec un
 
 **Desktop** : layout horizontal
 ```
-[sidebar: nom + contrôles] [waveform pleine largeur] [minimap]
+[sidebar: nom + contrôles] [waveform pleine largeur]
 [transport bar en bas]
 ```
+> La minimap a été décommissionnée (feature peu utile en pratique).
 
 **Tablette** :
 ```
