@@ -61,7 +61,7 @@ declare -A TRACK_COMP_RATIO=()       # ratio
 declare -A TRACK_COMP_ATTACK=()      # attaque ms
 declare -A TRACK_COMP_RELEASE=()     # relâchement ms
 declare -A TRACK_COMP_KNEE=()        # knee dB
-declare -A TRACK_LOUDNORM=()         # I:LRA:TP pour loudnorm EBU R128
+declare -A TRACK_DYNAUDNORM=()       # peak:max_gain:frame pour dynaudnorm
 declare -A BLABLA_PANS=()            # pan par piste pour les segments blabla (-100..+100)
 
 load_config_python() {
@@ -120,11 +120,13 @@ for i, (name, settings) in enumerate(per_track.items()):
     print(f"PER_TRACK_{i}_COMP_ATTACK='{sh(c.get('attack_ms',''))}'")
     print(f"PER_TRACK_{i}_COMP_RELEASE='{sh(c.get('release_ms',''))}'")
     print(f"PER_TRACK_{i}_COMP_KNEE='{sh(c.get('knee_db',''))}'")
-    ln = s.get('loudnorm') or {}
-    print(f"PER_TRACK_{i}_LOUDNORM_I='{sh(ln.get('integrated_loudness',''))}'")
-    print(f"PER_TRACK_{i}_LOUDNORM_LRA='{sh(ln.get('loudness_range',11))}'")
-    print(f"PER_TRACK_{i}_LOUDNORM_TP='{sh(ln.get('true_peak',-1))}'")
-
+    has_dn = 'dynaudnorm' in s
+    dn = s.get('dynaudnorm') or {}
+    dn_flag = '1' if has_dn else ''
+    print(f"PER_TRACK_{i}_DYNAUDNORM='{dn_flag}'")
+    print(f"PER_TRACK_{i}_DYNAUDNORM_PEAK='{sh(dn.get('peak', 0.95))}'")
+    print(f"PER_TRACK_{i}_DYNAUDNORM_MAXGAIN='{sh(dn.get('max_gain', 3))}'")
+    print(f"PER_TRACK_{i}_DYNAUDNORM_FRAME='{sh(dn.get('frame_length_ms', 500))}'")
 blabla_pans = (cfg.get('blabla_mix') or {}).get('pans') or {}
 print(f"BLABLA_PANS_COUNT='{len(blabla_pans)}'")
 for i, (name, pan) in enumerate(blabla_pans.items()):
@@ -190,7 +192,7 @@ load_config() {
   TRACK_NORMALIZE_MODE=()
   TRACK_NORMALIZE_DB=()
   TRACK_GAIN_DB=()
-  TRACK_LOUDNORM=()
+  TRACK_DYNAUDNORM=()
   local ptc="${PER_TRACK_COUNT:-0}"
   for ((i=0; i<ptc; i++)); do
     local n_var="PER_TRACK_${i}_NAME"   m_var="PER_TRACK_${i}_MODE"
@@ -200,9 +202,10 @@ load_config() {
     local ca_var="PER_TRACK_${i}_COMP_ATTACK"
     local crl_var="PER_TRACK_${i}_COMP_RELEASE"
     local ck_var="PER_TRACK_${i}_COMP_KNEE"
-    local li_var="PER_TRACK_${i}_LOUDNORM_I"
-    local llra_var="PER_TRACK_${i}_LOUDNORM_LRA"
-    local ltp_var="PER_TRACK_${i}_LOUDNORM_TP"
+    local dn_var="PER_TRACK_${i}_DYNAUDNORM"
+    local dn_peak_var="PER_TRACK_${i}_DYNAUDNORM_PEAK"
+    local dn_maxgain_var="PER_TRACK_${i}_DYNAUDNORM_MAXGAIN"
+    local dn_frame_var="PER_TRACK_${i}_DYNAUDNORM_FRAME"
     local name="${!n_var}"
     TRACK_NORMALIZE_MODE["$name"]="${!m_var}"
     TRACK_NORMALIZE_DB["$name"]="${!d_var}"
@@ -212,7 +215,7 @@ load_config() {
     TRACK_COMP_ATTACK["$name"]="${!ca_var}"
     TRACK_COMP_RELEASE["$name"]="${!crl_var}"
     TRACK_COMP_KNEE["$name"]="${!ck_var}"
-    [[ -n "${!li_var}" ]] && TRACK_LOUDNORM["$name"]="${!li_var}:${!llra_var}:${!ltp_var}"
+    [[ -n "${!dn_var}" ]] && TRACK_DYNAUDNORM["$name"]="${!dn_peak_var}:${!dn_maxgain_var}:${!dn_frame_var}"
   done
 
   # Peupler la table de pans blabla
@@ -453,22 +456,6 @@ compress_normalize() {
         "$comp_src"
     fi
 
-    # Loudnorm : opt-in, court-circuite volumedetect+volume
-    if [[ -n "${TRACK_LOUDNORM[$name]:-}" ]]; then
-      local ln_i ln_lra ln_tp
-      IFS=':' read -r ln_i ln_lra ln_tp <<< "${TRACK_LOUDNORM[$name]}"
-      log "  Normalisation loudnorm : ${name} (I=${ln_i} LRA=${ln_lra} TP=${ln_tp})"
-      local extra_gain="${TRACK_GAIN_DB[$name]:-0}"
-      local af_chain="loudnorm=I=${ln_i}:LRA=${ln_lra}:TP=${ln_tp}"
-      [[ "${extra_gain}" != "0" ]] && af_chain="${af_chain},volume=${extra_gain}dB"
-      ffmpeg -y -hide_banner -loglevel warning \
-        -i "$comp_src" \
-        -af "$af_chain" \
-        "${WORK_DIR}/normalized/${name}.flac"
-      ok "  → ${name}.flac normalisé (mode=loudnorm)"
-      continue
-    fi
-
     # Détection des niveaux (peak + mean en une passe)
     local vol_out
     vol_out="$(ffmpeg -i "$comp_src" -af volumedetect -f null /dev/null 2>&1)"
@@ -497,6 +484,21 @@ compress_normalize() {
     # Gain total = normalisation + trim par piste
     local total_gain
     total_gain="$(echo "${norm_gain} + ${extra_gain}" | bc -l)"
+
+    # dynaudnorm : opt-in, court-circuite le limiteur de sécurité
+    if [[ -n "${TRACK_DYNAUDNORM[$name]:-}" ]]; then
+      local dn_peak dn_maxgain dn_frame
+      IFS=':' read -r dn_peak dn_maxgain dn_frame <<< "${TRACK_DYNAUDNORM[$name]}"
+      warn "Limiteur de sécurité désactivé (dynaudnorm actif) : ${name}"
+      local af_chain="volume=${norm_gain}dB,dynaudnorm=f=${dn_frame}:p=${dn_peak}:m=${dn_maxgain}"
+      [[ "${extra_gain}" != "0" ]] && af_chain="${af_chain},volume=${extra_gain}dB"
+      ffmpeg -y -hide_banner -loglevel warning \
+        -i "$comp_src" \
+        -af "$af_chain" \
+        "${WORK_DIR}/normalized/${name}.flac"
+      ok "  → ${name}.flac normalisé (mode=dynaudnorm)"
+      continue
+    fi
 
     # Limiteur safety : si le peak projeté dépasse -1 dBFS, réduire le gain
     local projected_peak
