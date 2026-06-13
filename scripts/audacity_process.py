@@ -2,7 +2,9 @@
 """Pilote Audacity via mod-script-pipe pour appliquer compressor → normalize → gain sur des fichiers FLAC."""
 
 import argparse
+import fcntl
 import os
+import select
 import subprocess
 import sys
 import time
@@ -60,47 +62,57 @@ MOD_SCRIPT_PIPE_HELP = (
 )
 
 
-def _audacity_is_running() -> bool:
+def _pipe_is_live(pipe_path: str) -> bool:
+    """Vérifie si Audacity lit activement le pipe (O_NONBLOCK échoue si aucun lecteur)."""
     try:
-        result = subprocess.run(["pgrep", "-x", "audacity"], capture_output=True)
-        return result.returncode == 0
-    except FileNotFoundError:
+        fd = os.open(pipe_path, os.O_WRONLY | os.O_NONBLOCK)
+        os.close(fd)
+        return True
+    except OSError:
         return False
 
 
 def _ensure_audacity_running():
     pipe = _pipe_path()
-    if os.path.exists(pipe):
+
+    # Pipe présent et Audacity actif → rien à faire
+    if os.path.exists(pipe) and _pipe_is_live(pipe):
         return
 
-    if _audacity_is_running():
-        print(
-            "Erreur : Audacity est ouvert mais le pipe mod-script-pipe est absent.\n"
-            + MOD_SCRIPT_PIPE_HELP,
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    # Pipe présent mais personne ne lit → FIFO stale (Audacity s'est fermé)
+    if os.path.exists(pipe) and not _pipe_is_live(pipe):
+        print("Pipe stale détecté (Audacity fermé) — redémarrage via Flatpak...", flush=True)
+    else:
+        print("Audacity non lancé — démarrage via Flatpak...", flush=True)
 
-    print("Audacity non lancé — démarrage via Flatpak...", flush=True)
     subprocess.Popen(
         ["flatpak", "run", "org.audacityteam.Audacity"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
 
+    # Attendre que le pipe soit créé ET actif (Audacity le lit)
     deadline = time.time() + PIPE_TIMEOUT
-    while not os.path.exists(pipe):
+    while True:
+        if os.path.exists(pipe) and _pipe_is_live(pipe):
+            break
         if time.time() > deadline:
-            print(
+            msg = (
                 f"Erreur : le pipe Audacity n'est pas apparu après {PIPE_TIMEOUT}s.\n"
-                + MOD_SCRIPT_PIPE_HELP,
-                file=sys.stderr,
+                + MOD_SCRIPT_PIPE_HELP
             )
+            if os.path.exists(pipe):
+                msg = (
+                    "Erreur : Audacity est lancé mais le pipe mod-script-pipe est absent.\n"
+                    + MOD_SCRIPT_PIPE_HELP
+                )
+            print(msg, file=sys.stderr)
             sys.exit(1)
         time.sleep(0.5)
 
-    # Laisser Audacity finir son initialisation
-    time.sleep(2)
+    # Laisser Audacity finir son initialisation (le pipe est live mais les commandes
+    # ne répondent pas encore pendant ~5s après que le pipe apparaît)
+    time.sleep(6)
     print("Audacity prêt.", flush=True)
 
 
@@ -111,22 +123,73 @@ class AudacityPipe:
         uid = os.getuid()
         self._to_path = f"/tmp/audacity_script_pipe.to.{uid}"
         self._from_path = f"/tmp/audacity_script_pipe.from.{uid}"
-        self._to = open(self._to_path, "w")
-        self._from = open(self._from_path, "r")
+        # Ouvrir en O_NONBLOCK puis repasser en mode bloquant pour les écritures
+        # évite le blocage indéfini si le pipe n'a pas de lecteur
+        fd = os.open(self._to_path, os.O_WRONLY | os.O_NONBLOCK)
+        fcntl.fcntl(fd, fcntl.F_SETFL, fcntl.fcntl(fd, fcntl.F_GETFL) & ~os.O_NONBLOCK)
+        # UTF-8 explicite pour les chemins avec accents (é, è, etc.)
+        self._to = os.fdopen(fd, "w", encoding="utf-8")
+        self._from = open(self._from_path, "r", encoding="utf-8")
+        # Vider les réponses résiduelles d'une session précédente
+        self._drain(timeout=1.0)
 
-    def send(self, command: str) -> str:
-        """Envoie une commande et retourne la réponse complète."""
+    def send(self, command: str, timeout: float = 60.0):
+        """Envoie une commande et retourne la réponse complète.
+
+        Attend "BatchCommand finished:" comme terminateur réel (pas la ligne vide
+        initiale qui est juste un ACK d'Audacity).
+        Retourne None si le timeout expire sans recevoir BatchCommand finished.
+        """
         self._to.write(command + "\n")
         self._to.flush()
-        lines = []
-        while True:
-            line = self._from.readline()
-            if line.endswith("\n"):
-                line = line.rstrip("\n")
-            if line == "":
+        result = ""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            rem = deadline - time.time()
+            if rem <= 0:
                 break
-            lines.append(line)
-        return "\n".join(lines)
+            ready = select.select([self._from], [], [], min(rem, 1.0))
+            if not ready[0]:
+                continue
+            line = self._from.readline()
+            result += line
+            if "BatchCommand finished:" in line:
+                # Drainer le \n final
+                if select.select([self._from], [], [], 0.5)[0]:
+                    self._from.readline()
+                return result.strip()
+        # Timeout sans BatchCommand finished : tenter de resynchroniser
+        self._drain_until_batch_finished()
+        return None
+
+    def send_nowait(self, command: str):
+        """Envoie une commande sans attendre la réponse.
+
+        À utiliser pour SelectAll: (pas de réponse sur projet vide) et Import2:
+        (ne retourne jamais BatchCommand finished).
+        """
+        self._to.write(command + "\n")
+        self._to.flush()
+
+    def _drain(self, timeout: float = 2.0):
+        """Consomme tous les octets disponibles dans le pipe de lecture."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if not select.select([self._from], [], [], 0.3)[0]:
+                break
+            self._from.readline()
+
+    def _drain_until_batch_finished(self, timeout: float = 60.0):
+        """Consomme une réponse complète du pipe pour maintenir la synchro après timeout."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if not select.select([self._from], [], [], 2.0)[0]:
+                break
+            line = self._from.readline()
+            if "BatchCommand finished:" in line:
+                if select.select([self._from], [], [], 0.3)[0]:
+                    self._from.readline()
+                break
 
     def close(self):
         self._to.close()
@@ -135,14 +198,21 @@ class AudacityPipe:
 
 # ─────────────────────────── Traitement ────────────────────────
 
+def _is_failed(resp) -> bool:
+    """Retourne True si la réponse indique un échec ou un timeout."""
+    if resp is None:
+        return True
+    return "finished: failed" in resp.lower()
+
+
 def _wait_for_tracks(pipe: AudacityPipe, timeout: int = 30) -> bool:
     """Sonde GetInfo:Tracks jusqu'à ce qu'au moins une piste soit chargée."""
     deadline = time.time() + timeout
     while time.time() < deadline:
-        resp = pipe.send("GetInfo: Type=Tracks Format=JSON")
+        resp = pipe.send("GetInfo: Type=Tracks Format=JSON", timeout=5.0)
         # La réponse contient du JSON + "BatchCommand finished: OK"
         # Si des pistes sont présentes le JSON contiendra au moins "{"
-        if "{" in resp:
+        if resp and "{" in resp:
             return True
         time.sleep(0.3)
     return False
@@ -151,7 +221,7 @@ def _wait_for_tracks(pipe: AudacityPipe, timeout: int = 30) -> bool:
 def _compressor_command(params: dict) -> str:
     """Construit la commande Audacity DRC Compressor depuis un dict de paramètres."""
     return (
-        f"DynamicRangeProcessor: "
+        f"DynamicRangeCompressor: "
         f"compressorThreshold={params['threshold']} "
         f"compressorRatio={params['ratio']} "
         f"compressorAttackTime={params['attack']} "
@@ -164,56 +234,69 @@ def _compressor_command(params: dict) -> str:
 
 
 def process_file(pipe: AudacityPipe, filepath: str, comp_params: dict | None,
-                 normalize_db: float, gain_db: float):
-    """Applique compressor → normalize → gain sur un fichier FLAC via le pipe."""
+                 normalize_db: float, gain_db: float, multi_pass: int = 1):
+    """Applique (compressor → normalize) × multi_pass → gain sur un fichier FLAC via le pipe."""
     abs_path = os.path.abspath(filepath)
     print(f"  Traitement : {os.path.basename(filepath)}", flush=True)
 
-    # Ouvrir le fichier (OpenFiles est asynchrone — attendre le chargement)
-    resp = pipe.send(f"OpenFiles: Filename={abs_path}")
-    if "error" in resp.lower():
-        print(f"    Erreur à l'ouverture : {resp}", file=sys.stderr)
-        return
+    # Nettoyer d'éventuelles pistes résiduelles avant de commencer.
+    # SelectAll sur projet vide n'envoie pas BatchCommand finished → send_nowait.
+    pipe.send_nowait("SelectAll:")
+    pipe.send("RemoveTracks:")
+
+    # Import2 ne retourne pas BatchCommand finished — fire-and-forget puis polling.
+    pipe.send_nowait(f'Import2: Filename="{abs_path}"')
 
     if not _wait_for_tracks(pipe):
         print(f"    Timeout : la piste n'a pas été chargée dans Audacity", file=sys.stderr)
-        pipe.send("Close: SaveChanges=No")
+        pipe.send_nowait("SelectAll:")
+        pipe.send("RemoveTracks:")
         return
 
-    # Sélectionner tout
-    pipe.send("SelectAll:")
+    # À partir d'ici les pistes sont chargées → SelectAll répond toujours avec
+    # BatchCommand finished: OK. On utilise send() synchrone pour maintenir la
+    # synchro du pipe, surtout critique sur plusieurs passes.
+    for pass_idx in range(max(1, multi_pass)):
+        pass_label = f" (passe {pass_idx + 1}/{multi_pass})" if multi_pass > 1 else ""
 
-    # Compression (optionnel)
-    if comp_params is not None:
-        print(f"    Compression ({comp_params})", flush=True)
-        cmd = _compressor_command(comp_params)
-        resp = pipe.send(cmd)
-        if "error" in resp.lower():
-            print(f"    Avertissement compresseur : {resp}", file=sys.stderr)
+        # Compression (optionnel)
+        if comp_params is not None:
+            print(f"    Compression{pass_label} ({comp_params})", flush=True)
+            pipe.send("SelectAll:")
+            resp = pipe.send(_compressor_command(comp_params))
+            if _is_failed(resp):
+                print(f"    Avertissement compresseur : {resp}", file=sys.stderr)
 
-    # Normalisation (toujours)
-    print(f"    Normalize: peak {normalize_db} dBFS", flush=True)
-    pipe.send("SelectAll:")
-    resp = pipe.send(f"Normalize: PeakLevel={normalize_db} ApplyGain=True RemoveDcOffset=False StereoIndependent=False")
-    if "error" in resp.lower():
-        print(f"    Avertissement normalize : {resp}", file=sys.stderr)
+        # Normalisation (toujours)
+        print(f"    Normalize{pass_label}: peak {normalize_db} dBFS", flush=True)
+        pipe.send("SelectAll:")
+        resp = pipe.send(f"Normalize: PeakLevel={normalize_db} ApplyGain=True RemoveDcOffset=False StereoIndependent=False")
+        if _is_failed(resp):
+            print(f"    Avertissement normalize : {resp}", file=sys.stderr)
 
-    # Gain additionnel (optionnel)
+    # Gain additionnel (optionnel, une seule fois après toutes les passes)
     if gain_db != 0.0:
         gain_factor = 10 ** (gain_db / 20)
         print(f"    Gain : {gain_db:+.1f} dB (ratio={gain_factor:.4f})", flush=True)
         pipe.send("SelectAll:")
         resp = pipe.send(f"Amplify: Ratio={gain_factor} AllowClipping=False")
-        if "error" in resp.lower():
+        if _is_failed(resp):
             print(f"    Avertissement gain : {resp}", file=sys.stderr)
 
-    # Export sur place (FLAC)
-    resp = pipe.send(f"Export2: Filename={abs_path} NumChannels=1")
-    if "error" in resp.lower():
+    # DRC émet une notification différée ~500ms après son traitement (via le pipe Audacity).
+    # Elle arrive typiquement juste après Normalize. On la draine avant l'export pour
+    # éviter qu'elle soit lue comme réponse à Export2.
+    if comp_params is not None:
+        pipe._drain(timeout=0.5)
+
+    # Export sur place (FLAC) — guillemets pour les chemins avec espaces
+    resp = pipe.send(f'Export2: Filename="{abs_path}" NumChannels=1')
+    if _is_failed(resp):
         print(f"    Avertissement export : {resp}", file=sys.stderr)
 
-    # Fermer sans sauvegarder le projet Audacity
-    pipe.send("Close: SaveChanges=No")
+    # Vider le projet pour le prochain fichier (sans fermer Audacity)
+    pipe.send("SelectAll:")
+    pipe.send("RemoveTracks:")
     print(f"    ✓ {os.path.basename(filepath)}", flush=True)
 
 
@@ -232,6 +315,9 @@ def parse_args():
     parser.add_argument("--knee",     type=float, help="Knee (dB)")
     parser.add_argument("--lookahead", type=float, help="Lookahead (ms)")
     parser.add_argument("--makeup",   type=float, help="Makeup gain (dB)")
+    # Multi-pass
+    parser.add_argument("--multi-pass", type=int, default=1,
+                        help="Nombre de passes compressor+normalize (défaut 1)")
     # Normalisation
     parser.add_argument("--normalize", type=float, default=-1.0,
                         help="Niveau peak cible (dBFS, défaut -1)")
@@ -280,11 +366,29 @@ def main():
 
     pipe = AudacityPipe()
     try:
+        # Ping de réactivité avec retry — GetInfo répond toujours sur projet vide.
+        # On réessaie jusqu'à 30s car le scripting thread peut être lent au premier
+        # démarrage (chargement des plugins, etc.).
+        resp = None
+        for _ in range(6):
+            resp = pipe.send("GetInfo: Type=Tracks Format=JSON", timeout=5.0)
+            if resp is not None:
+                break
+            time.sleep(1)
+        if resp is None:
+            print(
+                "Erreur : Audacity ne répond pas dans les 30s.\n"
+                "  → Si un dialogue s'affiche dans Audacity (récupération de projet, etc.),\n"
+                "    cliquez 'Passer' ou fermez-le, puis relancez le script.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
         for filepath in args.files:
             if not os.path.isfile(filepath):
                 print(f"Fichier introuvable : {filepath}", file=sys.stderr)
                 continue
-            process_file(pipe, filepath, comp_params, args.normalize, args.gain)
+            process_file(pipe, filepath, comp_params, args.normalize, args.gain, args.multi_pass)
     finally:
         pipe.close()
 

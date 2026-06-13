@@ -62,6 +62,7 @@ declare -A TRACK_NORMALIZE_DB=()     # normalize_peak_db par piste (surcharge le
 declare -A TRACK_GAIN_DB=()          # gain additionnel après normalisation
 declare -A TRACK_COMP_PRESET=()      # nom du preset de compression Audacity (vide = pas de compression)
 declare -A TRACK_COMP_PARAMS=()      # paramètres directs "threshold:ratio:attack:release:knee:lookahead:makeup"
+declare -A TRACK_COMP_MULTI_PASS=()  # nombre de passes compressor+normalize (défaut 1)
 declare -A BLABLA_PANS=()            # pan par piste pour les segments blabla (-100..+100)
 
 load_config_python() {
@@ -122,6 +123,8 @@ for i, (name, settings) in enumerate(per_track.items()):
     has_direct = not preset and any(str(v) != '' for v in [thr, rat, atk, rel, kne])
     params_str = f"{thr}:{rat}:{atk}:{rel}:{kne}:{lkh}:{mkp}" if has_direct else ''
     print(f"PER_TRACK_{i}_COMP_PARAMS='{sh(params_str)}'")
+    multi_pass = s.get('multi_pass', 1)
+    print(f"PER_TRACK_{i}_COMP_MULTI_PASS='{sh(multi_pass)}'")
 blabla_pans = (cfg.get('blabla_mix') or {}).get('pans') or {}
 print(f"BLABLA_PANS_COUNT='{len(blabla_pans)}'")
 for i, (name, pan) in enumerate(blabla_pans.items()):
@@ -183,6 +186,7 @@ load_config() {
   TRACK_GAIN_DB=()
   TRACK_COMP_PRESET=()
   TRACK_COMP_PARAMS=()
+  TRACK_COMP_MULTI_PASS=()
   local ptc="${PER_TRACK_COUNT:-0}"
   for ((i=0; i<ptc; i++)); do
     local n_var="PER_TRACK_${i}_NAME"
@@ -190,11 +194,13 @@ load_config() {
     local nd_var="PER_TRACK_${i}_NORMALIZE_DB"
     local cp_var="PER_TRACK_${i}_COMP_PRESET"
     local cpa_var="PER_TRACK_${i}_COMP_PARAMS"
+    local cmp_var="PER_TRACK_${i}_COMP_MULTI_PASS"
     local name="${!n_var}"
     TRACK_GAIN_DB["$name"]="${!g_var}"
     TRACK_NORMALIZE_DB["$name"]="${!nd_var}"
     TRACK_COMP_PRESET["$name"]="${!cp_var}"
     TRACK_COMP_PARAMS["$name"]="${!cpa_var}"
+    TRACK_COMP_MULTI_PASS["$name"]="${!cmp_var}"
   done
 
   # Peupler la table de pans blabla
@@ -456,6 +462,12 @@ compress_normalize() {
     local extra_gain="${TRACK_GAIN_DB[$name]:-0}"
     if [[ "$extra_gain" != "0" && -n "$extra_gain" ]]; then
       py_args+=(--gain "$extra_gain")
+    fi
+
+    # Multi-pass (optionnel — 1 par défaut)
+    local multi_pass="${TRACK_COMP_MULTI_PASS[$name]:-1}"
+    if [[ -n "$multi_pass" && "$multi_pass" -gt 1 ]]; then
+      py_args+=(--multi-pass "$multi_pass")
     fi
 
     python3 "$SCRIPT_PY" "${py_args[@]}" "$dest"

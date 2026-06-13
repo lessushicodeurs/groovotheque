@@ -6,6 +6,7 @@ tracks:
   per_track:
 
     "01 BASS":
+      multi_pass: 2
       compression:
         preset: "Bass Guitar"
 
@@ -16,18 +17,23 @@ tracks:
       gain_db: -14
 
     "09 BACKING VOC":
+      multi_pass: 2
       compression:
         preset: "Lead Vocals"
 
-    "10 LEAD VOCAL":
+    "10 LEAD VOC":
+      multi_pass: 2
+      normalize_peak_db: -2
       compression:
         preset: "Lead Vocals"
 
     "11 DR KICK":
+      multi_pass: 2
       compression:
         preset: "Kick Drums"
 
     "12 DR HH SD":
+      multi_pass: 2
       compression:
         preset: "Modern"
 
@@ -63,5 +69,5 @@ blabla_mix:
     "02 GUIT MIX": 0
     "04 KEYS MIX": 0
     "09 BACKING VOC": 0
-    "10 LEAD VOCAL": 0
+    "10 LEAD VOC": 0
     "11 DRUMS MIX": 0
