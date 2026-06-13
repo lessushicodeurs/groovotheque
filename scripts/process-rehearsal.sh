@@ -119,7 +119,7 @@ for i, (name, settings) in enumerate(per_track.items()):
     kne  = c.get('knee',    c.get('knee_db', ''))
     lkh  = c.get('lookahead', '')
     mkp  = c.get('makeup', '')
-    has_direct = any(str(v) != '' for v in [thr, rat, atk, rel, kne] if not preset)
+    has_direct = not preset and any(str(v) != '' for v in [thr, rat, atk, rel, kne])
     params_str = f"{thr}:{rat}:{atk}:{rel}:{kne}:{lkh}:{mkp}" if has_direct else ''
     print(f"PER_TRACK_{i}_COMP_PARAMS='{sh(params_str)}'")
 blabla_pans = (cfg.get('blabla_mix') or {}).get('pans') or {}

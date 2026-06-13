@@ -2,7 +2,6 @@
 """Pilote Audacity via mod-script-pipe pour appliquer compressor → normalize → gain sur des fichiers FLAC."""
 
 import argparse
-import math
 import os
 import subprocess
 import sys
