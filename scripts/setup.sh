@@ -22,7 +22,7 @@ for pkg in "${PACKAGES[@]}"; do
     ffmpeg)       cmd=ffmpeg ;;
     bc)           cmd=bc ;;
     python3-yaml) cmd=python3 ;;
-    aubio-tools)  cmd=aubiotempo ;;
+    aubio-tools)  cmd=aubiotrack ;;
   esac
   command -v "$cmd" &>/dev/null && ok "$pkg ($cmd)" || warn "$pkg introuvable après installation"
 done

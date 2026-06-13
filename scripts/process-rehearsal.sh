@@ -35,10 +35,10 @@ check_deps() {
   else
     die "python3 (avec pyyaml) ou yq est requis pour lire la config YAML."
   fi
-  if command -v aubiotempo &>/dev/null; then
+  if command -v aubiotrack &>/dev/null; then
     HAS_AUBIO=true
   else
-    warn "aubiotempo introuvable — création des fiches .md désactivée"
+    warn "aubiotrack introuvable — création des fiches .md désactivée"
   fi
 }
 
@@ -721,7 +721,7 @@ create_md_sheets() {
   next_step "Création des fiches .md (BPM)"
 
   if [[ "$HAS_AUBIO" != "true" ]]; then
-    warn "aubiotempo introuvable — création des fiches .md désactivée"
+    warn "aubiotrack introuvable — création des fiches .md désactivée"
     return
   fi
 
@@ -737,20 +737,26 @@ create_md_sheets() {
       continue
     fi
 
-    # Collecter les BPM de chaque piste MP3
+    # Collecter les BPM de chaque piste MP3 via aubiotrack (timestamps → BPM)
     local bpm_values=()
     for mp3 in "$out_dir"/*.mp3; do
       [[ -f "$mp3" ]] || continue
-      local aubio_out
-      aubio_out="$(aubiotempo -i "$mp3" 2>/dev/null || true)"
       local bpm_raw
-      bpm_raw="$(echo "$aubio_out" | grep -oE '[0-9]+(\.[0-9]+)?' | LC_ALL=C awk '$1 >= 20 && $1 <= 400 { print; exit }')"
+      bpm_raw="$(aubiotrack -i "$mp3" 2>/dev/null | python3 -c "
+import sys, statistics
+times = [float(l) for l in sys.stdin if l.strip()]
+if len(times) >= 2:
+    diffs = [times[i+1]-times[i] for i in range(len(times)-1)]
+    bpm = round(60 / statistics.median(diffs))
+    if 20 <= bpm <= 400:
+        print(bpm)
+" 2>/dev/null || true)"
       [[ -n "$bpm_raw" ]] && bpm_values+=("$bpm_raw")
     done
 
     [[ ${#bpm_values[@]} -eq 0 ]] && continue
 
-    # Médiane arrondie à l'entier
+    # Médiane des BPM par piste, arrondie à l'entier
     local joined_bpms
     joined_bpms="$(IFS=','; echo "${bpm_values[*]}")"
     local bpm_median
