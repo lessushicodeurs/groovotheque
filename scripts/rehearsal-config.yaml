@@ -67,3 +67,12 @@ tracks:
   exclude:
 
     - "20 AMBIANCE"
+
+blabla_mix:
+  pans:
+    "01 BASS": 0
+    "02 GUIT MIX": 0
+    "04 KEYS MIX": 0
+    "09 BACKING VOC": 0
+    "10 LEAD VOCAL": 0
+    "11 DRUMS MIX": 0

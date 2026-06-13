@@ -17,6 +17,7 @@ err()  { echo -e "${RED}✗${RESET}  $*" >&2; }
 die()  { err "$*"; exit 1; }
 
 next_step() { STEP=$((STEP + 1)); echo; echo -e "${BOLD}── Étape ${STEP}/${TOTAL_STEPS} : $* ──${RESET}"; }
+trim()      { local s="$1"; s="${s#"${s%%[^[:space:]]*}"}"; s="${s%"${s##*[^[:space:]]}"}"; echo "$s"; }
 
 # ────────────────────────── Dépendances ──────────────────────
 
@@ -60,6 +61,7 @@ declare -A TRACK_COMP_RATIO=()       # ratio
 declare -A TRACK_COMP_ATTACK=()      # attaque ms
 declare -A TRACK_COMP_RELEASE=()     # relâchement ms
 declare -A TRACK_COMP_KNEE=()        # knee dB
+declare -A BLABLA_PANS=()            # pan par piste pour les segments blabla (-100..+100)
 
 load_config_python() {
   local cfg="$1"
@@ -117,6 +119,12 @@ for i, (name, settings) in enumerate(per_track.items()):
     print(f"PER_TRACK_{i}_COMP_ATTACK='{sh(c.get('attack_ms',''))}'")
     print(f"PER_TRACK_{i}_COMP_RELEASE='{sh(c.get('release_ms',''))}'")
     print(f"PER_TRACK_{i}_COMP_KNEE='{sh(c.get('knee_db',''))}'")
+
+blabla_pans = (cfg.get('blabla_mix') or {}).get('pans') or {}
+print(f"BLABLA_PANS_COUNT='{len(blabla_pans)}'")
+for i, (name, pan) in enumerate(blabla_pans.items()):
+    print(f"BLABLA_PANS_NAME_{i}='{sh(name)}'")
+    print(f"BLABLA_PANS_VAL_{i}='{sh(pan)}'")
 PYEOF
   )"
 }
@@ -145,6 +153,13 @@ load_config_yq() {
   for ((i=0; i<EXCLUDES_COUNT; i++)); do
     declare -g "EXCLUDE_${i}=$(yq e ".tracks.exclude[${i}]" "$cfg")"
   done
+  BLABLA_PANS_COUNT=0
+  while IFS='=' read -r key val; do
+    [[ -z "$key" ]] && continue
+    declare -g "BLABLA_PANS_NAME_${BLABLA_PANS_COUNT}=${key}"
+    declare -g "BLABLA_PANS_VAL_${BLABLA_PANS_COUNT}=${val}"
+    BLABLA_PANS_COUNT=$((BLABLA_PANS_COUNT + 1))
+  done < <(yq e '.blabla_mix.pans // {} | to_entries | .[] | .key + "=" + (.value | tostring)' "$cfg" 2>/dev/null || true)
 }
 
 load_config() {
@@ -188,6 +203,15 @@ load_config() {
     TRACK_COMP_ATTACK["$name"]="${!ca_var}"
     TRACK_COMP_RELEASE["$name"]="${!crl_var}"
     TRACK_COMP_KNEE["$name"]="${!ck_var}"
+  done
+
+  # Peupler la table de pans blabla
+  BLABLA_PANS=()
+  local bpc="${BLABLA_PANS_COUNT:-0}"
+  for ((i=0; i<bpc; i++)); do
+    local bn_var="BLABLA_PANS_NAME_${i}"
+    local bv_var="BLABLA_PANS_VAL_${i}"
+    BLABLA_PANS["${!bn_var}"]="${!bv_var}"
   done
 }
 
@@ -284,7 +308,7 @@ parse_labels() {
   for line in "${raw_lines[@]}"; do
     IFS=$'\t' read -r col1 _col2 col3 <<<"$line"
     SEGMENT_STARTS+=("$col1")
-    SEGMENT_LABELS+=("${col3:-}")
+    SEGMENT_LABELS+=("$(trim "${col3:-}")")
   done
 
   SEG_COUNT=${#SEGMENT_STARTS[@]}
@@ -476,6 +500,7 @@ compress_normalize() {
 split_segments() {
   next_step "Découpe en segments"
 
+  # Boucle par piste — segments blabla ignorés (traités dans le second bloc)
   for ((ti=0; ti<${#ALL_TRACK_NAMES[@]}; ti++)); do
     local name="${ALL_TRACK_NAMES[$ti]}"
     local normalized="${WORK_DIR}/normalized/${name}.flac"
@@ -487,6 +512,9 @@ split_segments() {
 
     local produced=0
     for ((si=0; si<SEG_COUNT; si++)); do
+      # Les segments blabla ne génèrent pas de pistes individuelles
+      [[ "${SEGMENT_LABELS[$si]}" == "blabla" ]] && continue
+
       local seg_num
       seg_num="$(printf '%02d' $((si+1)))"
       local start="${SEGMENT_STARTS[$si]}"
@@ -519,6 +547,66 @@ split_segments() {
     done
     ok "  ${name} → ${produced} segment(s) produit(s)"
   done
+
+  # Mix stéréo pour les segments blabla
+  for ((si=0; si<SEG_COUNT; si++)); do
+    [[ "${SEGMENT_LABELS[$si]}" != "blabla" ]] && continue
+
+    local seg_num
+    seg_num="$(printf '%02d' $((si+1)))"
+    local start="${SEGMENT_STARTS[$si]}"
+    local end
+    if [[ $((si+1)) -lt $SEG_COUNT ]]; then
+      end="${SEGMENT_STARTS[$((si+1))]}"
+    else
+      end="$TOTAL_DURATION"
+    fi
+
+    local inputs=() filter_parts=() amix_inputs=()
+    local n_mix=0
+
+    for ((ti=0; ti<${#ALL_TRACK_NAMES[@]}; ti++)); do
+      local name="${ALL_TRACK_NAMES[$ti]}"
+      local normalized="${WORK_DIR}/normalized/${name}.flac"
+      [[ -f "$normalized" ]] || continue
+
+      local track_dur
+      track_dur="$(ffprobe -v error -show_entries format=duration \
+        -of default=noprint_wrappers=1:nokey=1 "$normalized")"
+
+      [ "$(echo "$start >= $track_dur" | bc -l)" -eq 1 ] && continue
+
+      local actual_end="$end"
+      [ "$(echo "$actual_end > $track_dur" | bc -l)" -eq 1 ] && actual_end="$track_dur"
+
+      local pan="${BLABLA_PANS[$name]:-0}"
+      local gain_l gain_r
+      gain_l="$(python3 -c "print((100 - ${pan}) / 100)")"
+      gain_r="$(python3 -c "print((100 + ${pan}) / 100)")"
+
+      inputs+=(-ss "$start" -to "$actual_end" -i "$normalized")
+      filter_parts+=("[${n_mix}:a]aformat=channel_layouts=stereo,pan=stereo|c0=${gain_l}*c0|c1=${gain_r}*c1[a${n_mix}]")
+      amix_inputs+=("[a${n_mix}]")
+      n_mix=$((n_mix + 1))
+    done
+
+    if [[ $n_mix -eq 0 ]]; then
+      warn "  Segment blabla ${seg_num} : aucune piste disponible"
+      continue
+    fi
+
+    local fc
+    fc="$(IFS=';'; echo "${filter_parts[*]}");"
+    fc+="$(printf '%s' "${amix_inputs[@]}")amix=inputs=${n_mix}:normalize=0[out]"
+
+    log "  Mix blabla segment ${seg_num} (${n_mix} piste(s))"
+    ffmpeg -y -hide_banner -loglevel warning \
+      "${inputs[@]}" \
+      -filter_complex "$fc" \
+      -map "[out]" \
+      "${WORK_DIR}/segments/${seg_num}/blabla.flac"
+    ok "  → segments/${seg_num}/blabla.flac"
+  done
 }
 
 # ────────────────────────── Conversion MP3 + sortie ─────────
@@ -550,23 +638,38 @@ convert_output() {
     OUTPUT_DIRS+=("$out_dir")
 
     local mp3_count=0
-    for ((ti=0; ti<${#ALL_TRACK_NAMES[@]}; ti++)); do
-      local name="${ALL_TRACK_NAMES[$ti]}"
-      local seg_flac="${WORK_DIR}/segments/${seg_num}/${name}.flac"
 
-      # Le FLAC peut être absent si la piste a été ignorée (début > durée)
-      [[ -f "$seg_flac" ]] || continue
+    if [[ "$label" == "blabla" ]]; then
+      # Segment blabla : un seul fichier mix stéréo
+      local blabla_flac="${WORK_DIR}/segments/${seg_num}/blabla.flac"
+      if [[ -f "$blabla_flac" ]]; then
+        ffmpeg -y -hide_banner -loglevel warning \
+          -i "$blabla_flac" \
+          -b:a "$MP3_BITRATE" \
+          -map_metadata -1 \
+          "${out_dir}/blabla.mp3"
+        mp3_count=1
+      fi
+    else
+      # Segment normal : une piste par fichier
+      for ((ti=0; ti<${#ALL_TRACK_NAMES[@]}; ti++)); do
+        local name="${ALL_TRACK_NAMES[$ti]}"
+        local seg_flac="${WORK_DIR}/segments/${seg_num}/${name}.flac"
 
-      local out_name="${name/ MIX/}"
-      local out_mp3="${out_dir}/${out_name}.mp3"
+        # Le FLAC peut être absent si la piste a été ignorée (début > durée)
+        [[ -f "$seg_flac" ]] || continue
 
-      ffmpeg -y -hide_banner -loglevel warning \
-        -i "$seg_flac" \
-        -b:a "$MP3_BITRATE" \
-        -map_metadata -1 \
-        "$out_mp3"
-      mp3_count=$((mp3_count + 1))
-    done
+        local out_name="${name/ MIX/}"
+        local out_mp3="${out_dir}/${out_name}.mp3"
+
+        ffmpeg -y -hide_banner -loglevel warning \
+          -i "$seg_flac" \
+          -b:a "$MP3_BITRATE" \
+          -map_metadata -1 \
+          "$out_mp3"
+        mp3_count=$((mp3_count + 1))
+      done
+    fi
 
     if [[ $mp3_count -eq 0 ]]; then
       warn "Segment ${seg_num} ignoré : aucune piste dans ce segment"
