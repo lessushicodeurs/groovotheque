@@ -49,7 +49,6 @@ CONFIG_FILE="${SCRIPT_DIR}/rehearsal-config.yaml"
 
 # Variables remplies par load_config
 MP3_BITRATE="" NORMALIZE_PEAK_DB=""
-COMP_THRESHOLD="" COMP_RATIO="" COMP_ATTACK="" COMP_RELEASE="" COMP_KNEE=""
 MIXES_COUNT=0
 EXCLUDES_COUNT=0
 # MIX_<i>_OUTPUT, MIX_<i>_SRC_COUNT, MIX_<i>_SRC_<j>_FILE, MIX_<i>_SRC_<j>_PAN
@@ -59,15 +58,11 @@ EXCLUDES_COUNT=0
 MIX_ALL_SOURCES=()
 
 # Tables de réglages par piste (clé = nom de piste sans extension)
-declare -A TRACK_NORMALIZE_MODE=()   # peak | rms
-declare -A TRACK_NORMALIZE_DB=()     # cible dBFS (peak ou rms selon mode)
+declare -A TRACK_NORMALIZE_DB=()     # normalize_peak_db par piste (surcharge le global)
 declare -A TRACK_GAIN_DB=()          # gain additionnel après normalisation
-declare -A TRACK_COMP_THRESHOLD=()   # seuil compresseur en dBFS (override global)
-declare -A TRACK_COMP_RATIO=()       # ratio
-declare -A TRACK_COMP_ATTACK=()      # attaque ms
-declare -A TRACK_COMP_RELEASE=()     # relâchement ms
-declare -A TRACK_COMP_KNEE=()        # knee dB
-declare -A TRACK_DYNAUDNORM=()       # peak:max_gain:frame pour dynaudnorm
+declare -A TRACK_COMP_PRESET=()      # nom du preset de compression Audacity (vide = pas de compression)
+declare -A TRACK_COMP_PARAMS=()      # paramètres directs "threshold:ratio:attack:release:knee:lookahead:makeup"
+declare -A TRACK_COMP_MULTI_PASS=()  # nombre de passes compressor+normalize (défaut 1)
 declare -A BLABLA_PANS=()            # pan par piste pour les segments blabla (-100..+100)
 
 load_config_python() {
@@ -81,18 +76,12 @@ with open(cfg_path) as f:
     cfg = yaml.safe_load(f)
 
 audio = cfg.get('audio', {})
-comp  = audio.get('compression', {})
 
 def sh(val):
     return str(val).replace("'", "'\\''")
 
 print(f"MP3_BITRATE='{sh(audio.get('mp3_bitrate','320k'))}'")
 print(f"NORMALIZE_PEAK_DB='{sh(audio.get('normalize_peak_db',-1))}'")
-print(f"COMP_THRESHOLD='{sh(comp.get('threshold_db',-20))}'")
-print(f"COMP_RATIO='{sh(comp.get('ratio',3))}'")
-print(f"COMP_ATTACK='{sh(comp.get('attack_ms',20))}'")
-print(f"COMP_RELEASE='{sh(comp.get('release_ms',200))}'")
-print(f"COMP_KNEE='{sh(comp.get('knee_db',6))}'")
 
 tracks = cfg.get('tracks', {})
 mixes  = tracks.get('mixes', [])
@@ -118,21 +107,24 @@ for i, (name, settings) in enumerate(per_track.items()):
     s = settings or {}
     c = s.get('compression') or {}
     print(f"PER_TRACK_{i}_NAME='{sh(name)}'")
-    print(f"PER_TRACK_{i}_MODE='{sh(s.get('normalize_mode','peak'))}'")
-    print(f"PER_TRACK_{i}_DB='{sh(s.get('normalize_db',''))}'")
     print(f"PER_TRACK_{i}_GAIN='{sh(s.get('gain_db',0))}'")
-    print(f"PER_TRACK_{i}_COMP_THRESHOLD='{sh(c.get('threshold_db',''))}'")
-    print(f"PER_TRACK_{i}_COMP_RATIO='{sh(c.get('ratio',''))}'")
-    print(f"PER_TRACK_{i}_COMP_ATTACK='{sh(c.get('attack_ms',''))}'")
-    print(f"PER_TRACK_{i}_COMP_RELEASE='{sh(c.get('release_ms',''))}'")
-    print(f"PER_TRACK_{i}_COMP_KNEE='{sh(c.get('knee_db',''))}'")
-    has_dn = 'dynaudnorm' in s
-    dn = s.get('dynaudnorm') or {}
-    dn_flag = '1' if has_dn else ''
-    print(f"PER_TRACK_{i}_DYNAUDNORM='{dn_flag}'")
-    print(f"PER_TRACK_{i}_DYNAUDNORM_PEAK='{sh(dn.get('peak', 0.95))}'")
-    print(f"PER_TRACK_{i}_DYNAUDNORM_MAXGAIN='{sh(dn.get('max_gain', 3))}'")
-    print(f"PER_TRACK_{i}_DYNAUDNORM_FRAME='{sh(dn.get('frame_length_ms', 500))}'")
+    print(f"PER_TRACK_{i}_NORMALIZE_DB='{sh(s.get('normalize_peak_db',''))}'")
+    # Compression : preset ou paramètres directs
+    preset = c.get('preset', '')
+    print(f"PER_TRACK_{i}_COMP_PRESET='{sh(preset)}'")
+    # Paramètres directs (noms sans suffixe _db/_ms, accepte aussi les anciens noms)
+    thr  = c.get('threshold', c.get('threshold_db', ''))
+    rat  = c.get('ratio', '')
+    atk  = c.get('attack',  c.get('attack_ms', ''))
+    rel  = c.get('release', c.get('release_ms', ''))
+    kne  = c.get('knee',    c.get('knee_db', ''))
+    lkh  = c.get('lookahead', '')
+    mkp  = c.get('makeup', '')
+    has_direct = not preset and any(str(v) != '' for v in [thr, rat, atk, rel, kne])
+    params_str = f"{thr}:{rat}:{atk}:{rel}:{kne}:{lkh}:{mkp}" if has_direct else ''
+    print(f"PER_TRACK_{i}_COMP_PARAMS='{sh(params_str)}'")
+    multi_pass = s.get('multi_pass', 1)
+    print(f"PER_TRACK_{i}_COMP_MULTI_PASS='{sh(multi_pass)}'")
 blabla_pans = (cfg.get('blabla_mix') or {}).get('pans') or {}
 print(f"BLABLA_PANS_COUNT='{len(blabla_pans)}'")
 for i, (name, pan) in enumerate(blabla_pans.items()):
@@ -146,11 +138,6 @@ load_config_yq() {
   local cfg="$1"
   MP3_BITRATE="$(yq e '.audio.mp3_bitrate' "$cfg")"
   NORMALIZE_PEAK_DB="$(yq e '.audio.normalize_peak_db' "$cfg")"
-  COMP_THRESHOLD="$(yq e '.audio.compression.threshold_db' "$cfg")"
-  COMP_RATIO="$(yq e '.audio.compression.ratio' "$cfg")"
-  COMP_ATTACK="$(yq e '.audio.compression.attack_ms' "$cfg")"
-  COMP_RELEASE="$(yq e '.audio.compression.release_ms' "$cfg")"
-  COMP_KNEE="$(yq e '.audio.compression.knee_db' "$cfg")"
   MIXES_COUNT="$(yq e '.tracks.mixes | length' "$cfg")"
   for ((i=0; i<MIXES_COUNT; i++)); do
     declare -g "MIX_${i}_OUTPUT=$(yq e ".tracks.mixes[${i}].output" "$cfg")"
@@ -195,33 +182,25 @@ load_config() {
   done
 
   # Peupler les tables de réglages par piste
-  TRACK_NORMALIZE_MODE=()
   TRACK_NORMALIZE_DB=()
   TRACK_GAIN_DB=()
-  TRACK_DYNAUDNORM=()
+  TRACK_COMP_PRESET=()
+  TRACK_COMP_PARAMS=()
+  TRACK_COMP_MULTI_PASS=()
   local ptc="${PER_TRACK_COUNT:-0}"
   for ((i=0; i<ptc; i++)); do
-    local n_var="PER_TRACK_${i}_NAME"   m_var="PER_TRACK_${i}_MODE"
-    local d_var="PER_TRACK_${i}_DB"     g_var="PER_TRACK_${i}_GAIN"
-    local ct_var="PER_TRACK_${i}_COMP_THRESHOLD"
-    local cr_var="PER_TRACK_${i}_COMP_RATIO"
-    local ca_var="PER_TRACK_${i}_COMP_ATTACK"
-    local crl_var="PER_TRACK_${i}_COMP_RELEASE"
-    local ck_var="PER_TRACK_${i}_COMP_KNEE"
-    local dn_var="PER_TRACK_${i}_DYNAUDNORM"
-    local dn_peak_var="PER_TRACK_${i}_DYNAUDNORM_PEAK"
-    local dn_maxgain_var="PER_TRACK_${i}_DYNAUDNORM_MAXGAIN"
-    local dn_frame_var="PER_TRACK_${i}_DYNAUDNORM_FRAME"
+    local n_var="PER_TRACK_${i}_NAME"
+    local g_var="PER_TRACK_${i}_GAIN"
+    local nd_var="PER_TRACK_${i}_NORMALIZE_DB"
+    local cp_var="PER_TRACK_${i}_COMP_PRESET"
+    local cpa_var="PER_TRACK_${i}_COMP_PARAMS"
+    local cmp_var="PER_TRACK_${i}_COMP_MULTI_PASS"
     local name="${!n_var}"
-    TRACK_NORMALIZE_MODE["$name"]="${!m_var}"
-    TRACK_NORMALIZE_DB["$name"]="${!d_var}"
     TRACK_GAIN_DB["$name"]="${!g_var}"
-    TRACK_COMP_THRESHOLD["$name"]="${!ct_var}"
-    TRACK_COMP_RATIO["$name"]="${!cr_var}"
-    TRACK_COMP_ATTACK["$name"]="${!ca_var}"
-    TRACK_COMP_RELEASE["$name"]="${!crl_var}"
-    TRACK_COMP_KNEE["$name"]="${!ck_var}"
-    [[ -n "${!dn_var}" ]] && TRACK_DYNAUDNORM["$name"]="${!dn_peak_var}:${!dn_maxgain_var}:${!dn_frame_var}"
+    TRACK_NORMALIZE_DB["$name"]="${!nd_var}"
+    TRACK_COMP_PRESET["$name"]="${!cp_var}"
+    TRACK_COMP_PARAMS["$name"]="${!cpa_var}"
+    TRACK_COMP_MULTI_PASS["$name"]="${!cmp_var}"
   done
 
   # Peupler la table de pans blabla
@@ -346,7 +325,7 @@ setup_dirs() {
   WORK_DIR="${SOURCE_DIR}/_work"
 
   rm -rf "$WORK_DIR"
-  mkdir -p "${WORK_DIR}/compressed" "${WORK_DIR}/normalized"
+  mkdir -p "${WORK_DIR}/normalized"
   for ((i=0; i<SEG_COUNT; i++)); do
     mkdir -p "${WORK_DIR}/segments/$(printf '%02d' $((i+1)))"
   done
@@ -412,15 +391,18 @@ build_mixes() {
   done
 }
 
-# ────────────────────────── Compression + Normalisation ──────
+# ────────────────────────── Traitement Audacity ──────────────
 
 ALL_TRACK_PATHS=()
 ALL_TRACK_NAMES=()
 
 compress_normalize() {
-  next_step "Compression et normalisation"
+  next_step "Traitement Audacity (compressor → normalize → gain)"
 
-  # Toutes les pistes (hors exclus) sont normalisées, y compris les sources de mixes
+  local SCRIPT_PY="${SCRIPT_DIR}/audacity_process.py"
+  [[ -f "$SCRIPT_PY" ]] || die "Script introuvable : $SCRIPT_PY"
+
+  # Toutes les pistes (hors exclus) sont traitées, y compris les sources de mixes
   local all_sources=()
   local all_names=()
   for fpath in "${FLAC_FILES[@]}"; do
@@ -440,90 +422,56 @@ compress_normalize() {
   # Les pistes mixées seront ajoutées à ALL_TRACK_PATHS/NAMES par build_mixes()
 
   [[ ${#all_sources[@]} -gt 0 ]] || die "Aucune piste à traiter après filtrage."
-  ok "${#all_sources[@]} piste(s) à normaliser"
+  ok "${#all_sources[@]} piste(s) à traiter"
 
   for ((ti=0; ti<${#all_sources[@]}; ti++)); do
     local src="${all_sources[$ti]}"
     local name="${all_names[$ti]}"
 
-    # Compression : opt-in, seulement si un bloc compression est défini pour la piste
-    local comp_src="$src"
-    if [[ -n "${TRACK_COMP_THRESHOLD[$name]:-}" ]]; then
-      local c_thr="${TRACK_COMP_THRESHOLD[$name]}"
-      local c_rat="${TRACK_COMP_RATIO[$name]:-3}"
-      local c_atk="${TRACK_COMP_ATTACK[$name]:-20}"
-      local c_rel="${TRACK_COMP_RELEASE[$name]:-200}"
-      local c_kne="${TRACK_COMP_KNEE[$name]:-6}"
-      log "  Compression : ${name} [thr=${c_thr}dB ratio=${c_rat} atk=${c_atk}ms rel=${c_rel}ms]"
-      comp_src="${WORK_DIR}/compressed/${name}.flac"
-      ffmpeg -y -hide_banner -loglevel warning \
-        -i "$src" \
-        -af "acompressor=threshold=${c_thr}dB:ratio=${c_rat}:attack=${c_atk}:release=${c_rel}:knee=${c_kne}dB:makeup=1" \
-        "$comp_src"
+    # Copier la source vers le dossier normalized (audacity_process.py exporte sur place)
+    local dest="${WORK_DIR}/normalized/${name}.flac"
+    cp "$src" "$dest"
+
+    # Construire les arguments pour audacity_process.py
+    local py_args=()
+
+    # Compression (optionnel — preset ou paramètres directs)
+    local preset="${TRACK_COMP_PRESET[$name]:-}"
+    local params="${TRACK_COMP_PARAMS[$name]:-}"
+    if [[ -n "$preset" ]]; then
+      py_args+=(--preset "$preset")
+      log "  ${name} : compression preset='${preset}'"
+    elif [[ -n "$params" ]]; then
+      IFS=':' read -r p_thr p_rat p_atk p_rel p_kne p_lkh p_mkp <<< "$params"
+      [[ -n "$p_thr" ]] && py_args+=(--threshold "$p_thr")
+      [[ -n "$p_rat" ]] && py_args+=(--ratio     "$p_rat")
+      [[ -n "$p_atk" ]] && py_args+=(--attack    "$p_atk")
+      [[ -n "$p_rel" ]] && py_args+=(--release   "$p_rel")
+      [[ -n "$p_kne" ]] && py_args+=(--knee      "$p_kne")
+      [[ -n "$p_lkh" ]] && py_args+=(--lookahead "$p_lkh")
+      [[ -n "$p_mkp" ]] && py_args+=(--makeup    "$p_mkp")
+      log "  ${name} : compression directe [thr=${p_thr} rat=${p_rat}]"
     fi
 
-    # Détection des niveaux (peak + mean en une passe)
-    local vol_out
-    vol_out="$(ffmpeg -i "$comp_src" -af volumedetect -f null /dev/null 2>&1)"
-    local max_vol mean_vol
-    max_vol="$(echo "$vol_out" | grep max_volume  | awk '{print $5}')"
-    mean_vol="$(echo "$vol_out" | grep mean_volume | awk '{print $5}')"
+    # Normalisation (toujours — valeur globale ou surcharge par piste)
+    local norm_db="${TRACK_NORMALIZE_DB[$name]:-}"
+    [[ -z "$norm_db" ]] && norm_db="$NORMALIZE_PEAK_DB"
+    py_args+=(--normalize "$norm_db")
 
-    # Réglages par piste (avec fallback sur les valeurs globales)
-    local mode="${TRACK_NORMALIZE_MODE[$name]:-peak}"
-    local target_db="${TRACK_NORMALIZE_DB[$name]:-$NORMALIZE_PEAK_DB}"
+    # Gain additionnel (optionnel)
     local extra_gain="${TRACK_GAIN_DB[$name]:-0}"
-    [[ -z "$target_db" ]] && target_db="$NORMALIZE_PEAK_DB"
-
-    # Gain de normalisation selon le mode
-    local norm_gain ref_vol
-    if [[ "$mode" == "rms" ]]; then
-      ref_vol="$mean_vol"
-      norm_gain="$(echo "${target_db} - (${mean_vol})" | bc -l)"
-      log "  Normalisation RMS : ${name} (mean=${mean_vol}dB → cible=${target_db}dB)"
-    else
-      ref_vol="$max_vol"
-      norm_gain="$(echo "${target_db} - (${max_vol})" | bc -l)"
-      log "  Normalisation peak : ${name} (peak=${max_vol}dB → cible=${target_db}dB)"
+    if [[ "$extra_gain" != "0" && -n "$extra_gain" ]]; then
+      py_args+=(--gain "$extra_gain")
     fi
 
-    # Gain total = normalisation + trim par piste
-    local total_gain
-    total_gain="$(echo "${norm_gain} + ${extra_gain}" | bc -l)"
-
-    # dynaudnorm : opt-in, court-circuite le limiteur de sécurité
-    if [[ -n "${TRACK_DYNAUDNORM[$name]:-}" ]]; then
-      local dn_peak dn_maxgain dn_frame
-      IFS=':' read -r dn_peak dn_maxgain dn_frame <<< "${TRACK_DYNAUDNORM[$name]}"
-      warn "Limiteur de sécurité désactivé (dynaudnorm actif) : ${name}"
-      local af_chain="volume=${norm_gain}dB,dynaudnorm=f=${dn_frame}:p=${dn_peak}:m=${dn_maxgain}"
-      [[ "${extra_gain}" != "0" ]] && af_chain="${af_chain},volume=${extra_gain}dB"
-      ffmpeg -y -hide_banner -loglevel warning \
-        -i "$comp_src" \
-        -af "$af_chain" \
-        "${WORK_DIR}/normalized/${name}.flac"
-      ok "  → ${name}.flac normalisé (mode=dynaudnorm)"
-      continue
+    # Multi-pass (optionnel — 1 par défaut)
+    local multi_pass="${TRACK_COMP_MULTI_PASS[$name]:-1}"
+    if [[ -n "$multi_pass" && "$multi_pass" -gt 1 ]]; then
+      py_args+=(--multi-pass "$multi_pass")
     fi
 
-    # Limiteur safety : si le peak projeté dépasse -1 dBFS, réduire le gain
-    local projected_peak
-    projected_peak="$(echo "${max_vol} + ${total_gain}" | bc -l)"
-    if [ "$(echo "$projected_peak > -1" | bc -l)" -eq 1 ]; then
-      local reduction
-      reduction="$(echo "${projected_peak} + 1" | bc -l)"
-      total_gain="$(echo "${total_gain} - ${reduction}" | bc -l)"
-      warn "  ${name} : gain réduit de ${reduction}dB (limiteur safety -1 dBFS)"
-    fi
-
-    log "  gain total appliqué : ${total_gain}dB"
-    local normalized="${WORK_DIR}/normalized/${name}.flac"
-    ffmpeg -y -hide_banner -loglevel warning \
-      -i "$comp_src" \
-      -af "volume=${total_gain}dB" \
-      "$normalized"
-
-    ok "  → ${name}.flac normalisé (mode=${mode})"
+    python3 "$SCRIPT_PY" "${py_args[@]}" "$dest"
+    ok "  → ${name}.flac"
   done
 }
 
