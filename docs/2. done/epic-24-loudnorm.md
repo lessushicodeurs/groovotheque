@@ -1,13 +1,10 @@
-# Epic 24 — Normalisation loudnorm par piste
+# Epic 24 — Normalisation dynaudnorm par piste
 
 ## Objectif
 
-Le compresseur `acompressor` de FFmpeg avec les paramètres des presets Audacity ne produit
-pas les mêmes résultats qu'Audacity : il réduit seulement les pics (−3 dB) sans toucher
-la dynamique moyenne, là où Audacity utilise un compresseur RMS avec lookahead qui monte
-le niveau moyen de 10 à 14 dB. Résultat : les pistes compressées sonnent "thin" dans
-process-rehearsal. Remplacer la chaîne `acompressor → volumedetect → volume` par `loudnorm`
-permet d'obtenir le même crest factor que la référence Audacity (~18 dB pour la basse).
+Ajouter `dynaudnorm` (normaliseur dynamique FFmpeg) comme couche de normalisation
+opt-in par piste, appliquée **après** la normalisation peak/rms existante.
+Supprimer le support `loudnorm` ajouté en début d'epic (inefficace sur ce projet).
 
 ## Dépendances
 
@@ -18,52 +15,79 @@ permet d'obtenir le même crest factor que la référence Audacity (~18 dB pour 
 ## Décisions de conception
 
 | Sujet | Décision |
-|---|---|
-| Filtre de normalisation | `loudnorm` (EBU R128) remplace `acompressor` + peak norm pour les pistes concernées |
-| Paramètre de config | `lufs_target` par piste dans `rehearsal-config.yaml` (entier négatif, ex. `-18`) |
-| Fallback | Si `lufs_target` absent, comportement actuel conservé (peak -1 dBFS) |
-| True peak | Limité à `-1 dBTP` via `loudnorm TP=-1` |
-| LRA (loudness range) | `11 LU` par défaut — configurable globalement si besoin |
-| Suppression de `compression:` | Les blocs `compression:` par piste deviennent obsolètes une fois `lufs_target` défini ; les deux coexistent pendant la transition |
+| --- | --- |
+| Bloc de config | `dynaudnorm:` par piste dans `rehearsal-config.yaml` — bloc seul (sans paramètres) active avec les valeurs par défaut |
+| Paramètres exposés | `peak` (0–1), `max_gain`, `frame_length_ms` |
+| Valeurs par défaut | `peak: 0.95`, `max_gain: 3`, `frame_length_ms: 500` |
+| Position dans le pipeline | Après `volumedetect + volume=(norm_gain)`, avant `volume=(gain_db)` |
+| `gain_db` | Appliqué **après** dynaudnorm comme trim fin (séparé du norm_gain) |
+| Implémentation | Une seule passe FFmpeg : `volume=Xdb,dynaudnorm=...[,volume=YdB]` |
+| Limiteur de sécurité | **Supprimé** si dynaudnorm actif + `warn "Limiteur de sécurité désactivé (dynaudnorm actif) : ${name}"` |
+| Code `loudnorm` | Supprimé de `process-rehearsal.sh` |
+
+Pipeline complet quand dynaudnorm est défini :
+
+```
+compression (opt-in) → volumedetect → volume=(norm_gain) → dynaudnorm → volume=(gain_db)
+```
 
 ---
 
 ## Stories
 
-### 24.1 — Chargement de `lufs_target` par piste
+### 24.1 — Supprimer le support `loudnorm`
 
-Dans `load_config_python` (et `load_config_yq`) :
+Dans `process-rehearsal.sh` :
 
-- Lire `tracks.per_track.<name>.lufs_target` et l'exposer via `PER_TRACK_<i>_LUFS`
-- Peupler la table associative `TRACK_LUFS_TARGET` dans `load_config()`
+- Supprimer `declare -A TRACK_LOUDNORM`
+- Supprimer les variables `PER_TRACK_<i>_LOUDNORM_*` dans `load_config_python`
+- Supprimer la population de `TRACK_LOUDNORM` dans `load_config()`
+- Supprimer la branche `if [[ -n "${TRACK_LOUDNORM[$name]:-}" ]]` dans `compress_normalize`
 
-### 24.2 — Branche `loudnorm` dans `compress_normalize`
+### 24.2 — Chargement de `dynaudnorm` par piste
 
-Dans la boucle de traitement par piste :
+Dans `load_config_python` :
 
-- Si `TRACK_LUFS_TARGET[$name]` est défini : appliquer
-  `loudnorm=I=<target>:LRA=11:TP=-1` directement sur la source (ou sur le fichier
-  compressé si un bloc `compression:` est aussi défini)
-- Court-circuiter les étapes `volumedetect` + `volume=` pour cette piste
-- Logger : `Normalisation LUFS : ${name} (cible=${lufs})`
+- Lire `tracks.per_track.<name>.dynaudnorm` et exposer :
+  - `PER_TRACK_<i>_DYNAUDNORM` : `"1"` si le bloc est présent, `""` sinon
+  - `PER_TRACK_<i>_DYNAUDNORM_PEAK` (`peak`, défaut `0.95`)
+  - `PER_TRACK_<i>_DYNAUDNORM_MAXGAIN` (`max_gain`, défaut `3`)
+  - `PER_TRACK_<i>_DYNAUDNORM_FRAME` (`frame_length_ms`, défaut `500`)
+- Peupler `declare -A TRACK_DYNAUDNORM` (clé = nom de piste, valeur = `peak:max_gain:frame`) dans `load_config()`
 
-### 24.3 — Mise à jour de `rehearsal-config.yaml`
+### 24.3 — Branche `dynaudnorm` dans `compress_normalize`
 
-Remplacer les blocs `compression:` par des `lufs_target` sur les pistes concernées,
-en s'appuyant sur les mesures de crest factor établies en session :
+Dans la boucle de traitement par piste, après le calcul du `total_gain` :
 
-| Piste | `lufs_target` | Justification |
-|---|---|---|
-| `01 BASS` | `-18` | crest factor ~18 dB = référence Audacity Bass Guitar |
-| `09 BACKING VOC` | `-18` | idem |
-| `10 LEAD VOCAL` | `-20` | crest factor ~21 dB = référence Audacity Lead Vocals |
-| `11 DRUMS MIX` | `-18` | crest factor ~18 dB = référence Audacity Kick Drums |
+- Si `TRACK_DYNAUDNORM[$name]` est défini :
+  - Logger : `warn "Limiteur de sécurité désactivé (dynaudnorm actif) : ${name}"`
+  - Construire le filtre : `volume=${norm_gain}dB,dynaudnorm=f=${frame}:p=${peak}:m=${max_gain}`
+  - Si `extra_gain != 0` : ajouter `,volume=${extra_gain}dB` au filtre
+  - Appliquer en une passe FFmpeg vers `normalized/${name}.flac`
+  - Court-circuiter le limiteur de sécurité et le `volume= total_gain` classique
+
+### 24.4 — Mise à jour de `rehearsal-config.yaml`
+
+Ajouter `dynaudnorm:` sur les pistes suivantes (valeurs par défaut — bloc vide suffisant) :
+
+| Piste | `dynaudnorm:` ajouté |
+|---|---|
+| `01 BASS` | bloc complet pour documentation (peak=0.95, max_gain=3, frame=500ms) |
+| `09 BACKING VOC` | bloc vide |
+| `10 LEAD VOCAL` | bloc vide |
+| `11 DR KICK` | bloc vide |
+| `12 DR HH SD` | bloc vide |
+
+Les valeurs par défaut (`peak: 0.95`, `max_gain: 3`, `frame_length_ms: 500`) ne sont
+pas écrites dans le YAML si on ne dévie pas des défauts.
 
 ---
 
 ## Critères d'acceptance
 
-- [ ] Une piste avec `lufs_target: -18` produit un fichier avec peak ≈ −1 dBFS et mean ≈ −17 dB (±1 dB)
-- [ ] Une piste sans `lufs_target` continue à être traitée comme avant (peak -1 dBFS, mode peak/rms)
-- [ ] Le crest factor de la basse traitée est ≤ 19 dB (vs 27 dB avec l'ancienne approche)
-- [ ] La comparaison visuelle des formes d'ondes avec la référence Audacity montre des amplitudes similaires
+- [ ] Une piste avec `dynaudnorm:` (bloc vide) est traitée avec `peak=0.95 max_gain=3 frame=500ms`
+- [ ] Une piste avec `dynaudnorm:` produit un `warn` "Limiteur de sécurité désactivé" dans les logs
+- [ ] Une piste sans `dynaudnorm:` est traitée comme avant (limiteur de sécurité actif)
+- [ ] Le `gain_db` s'applique après dynaudnorm (un trim positif n'est pas compensé par dynaudnorm)
+- [ ] Une piste avec `compression:` ET `dynaudnorm:` applique bien les deux : compression → norm → dynaudnorm → gain_db
+- [ ] Aucune trace de `loudnorm` dans `process-rehearsal.sh`
