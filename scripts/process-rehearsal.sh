@@ -96,6 +96,7 @@ for i, m in enumerate(mixes):
     for j, s in enumerate(srcs):
         print(f"MIX_{i}_SRC_{j}_FILE='{sh(s['file'])}'")
         print(f"MIX_{i}_SRC_{j}_PAN='{sh(s['pan'])}'")
+        print(f"MIX_{i}_SRC_{j}_GAIN='{sh(s.get('gain_db', 0))}'")
 
 excludes = tracks.get('exclude', [])
 print(f"EXCLUDES_COUNT='{len(excludes)}'")
@@ -330,8 +331,10 @@ build_mixes() {
     for ((j=0; j<n_sources; j++)); do
       local fvar="MIX_${mi}_SRC_${j}_FILE"
       local pvar="MIX_${mi}_SRC_${j}_PAN"
+      local gvar="MIX_${mi}_SRC_${j}_GAIN"
       local fname="${!fvar}"
       local pan="${!pvar}"
+      local gain_db="${!gvar:-0}"
       local fpath="${SOURCE_DIR}/${fname}.flac"
 
       if [[ ! -f "$fpath" ]]; then
@@ -341,8 +344,8 @@ build_mixes() {
 
       inputs+=(-i "$fpath")
       local gain_l gain_r
-      gain_l="$(python3 -c "print((100 - ${pan}) / 100)")"
-      gain_r="$(python3 -c "print((100 + ${pan}) / 100)")"
+      gain_l="$(python3 -c "import math; g=10**(${gain_db}/20); print((100 - ${pan}) / 100 * g)")"
+      gain_r="$(python3 -c "import math; g=10**(${gain_db}/20); print((100 + ${pan}) / 100 * g)")"
       filter_parts+=("[${j}:a]pan=stereo|c0=${gain_l}*c0|c1=${gain_r}*c0[a${j}]")
       amix_inputs+=("[a${j}]")
     done
