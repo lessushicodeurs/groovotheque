@@ -1,4 +1,5 @@
 node_modules/
+.claude/commands/dev/
 grooves*
 grooves/
 cache/*
