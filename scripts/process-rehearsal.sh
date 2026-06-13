@@ -744,7 +744,7 @@ create_md_sheets() {
       local aubio_out
       aubio_out="$(aubiotempo -i "$mp3" 2>/dev/null || true)"
       local bpm_raw
-      bpm_raw="$(echo "$aubio_out" | grep -oE '[0-9]+(\.[0-9]+)?' | awk '$1 >= 20 && $1 <= 400 { print; exit }')"
+      bpm_raw="$(echo "$aubio_out" | grep -oE '[0-9]+(\.[0-9]+)?' | LC_ALL=C awk '$1 >= 20 && $1 <= 400 { print; exit }')"
       [[ -n "$bpm_raw" ]] && bpm_values+=("$bpm_raw")
     done
 
