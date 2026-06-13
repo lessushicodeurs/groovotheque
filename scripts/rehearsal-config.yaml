@@ -7,11 +7,11 @@ tracks:
 
     "01 BASS":
       compression:
-        threshold_db: -14
-        ratio: 4
-        attack_ms: 0.1
-        release_ms: 210
-        knee_db: 18
+        threshold_db: -13
+        ratio: 3
+        attack_ms: 1
+        release_ms: 50
+        knee_db: 2
 
     "02 GUIT MIX":
       gain_db: -8
@@ -21,26 +21,32 @@ tracks:
 
     "09 BACKING VOC":
       compression:
-        threshold_db: -20
-        ratio: 3
-        attack_ms: 20
-        release_ms: 200
-        knee_db: 6
+        threshold_db: -14
+        ratio: 5.2
+        attack_ms: 1
+        release_ms: 60
+        knee_db: 5.5
       gain_db: -4
 
     "10 LEAD VOCAL":
       compression:
-        threshold_db: -20
-        ratio: 3
-        attack_ms: 20
-        release_ms: 200
-        knee_db: 6
+        threshold_db: -14
+        ratio: 5.2
+        attack_ms: 1
+        release_ms: 60
+        knee_db: 5.5
       gain_db: 2
 
     "11 DRUMS MIX":
       normalize_mode: rms
       normalize_db: -12
       gain_db: 2
+      compression:
+        threshold_db: -14
+        ratio: 4
+        attack_ms: 30
+        release_ms: 120
+        knee_db: 0.5
 
   mixes:
     
