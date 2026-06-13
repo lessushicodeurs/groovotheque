@@ -8,7 +8,7 @@ set -euo pipefail
 RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
 
 STEP=0
-TOTAL_STEPS=7
+TOTAL_STEPS=8
 
 log()  { echo -e "${CYAN}[${STEP}/${TOTAL_STEPS}]${RESET} $*"; }
 ok()   { echo -e "${GREEN}✓${RESET} $*"; }
@@ -22,6 +22,7 @@ trim()      { local s="$1"; s="${s#"${s%%[^[:space:]]*}"}"; s="${s%"${s##*[^[:sp
 # ────────────────────────── Dépendances ──────────────────────
 
 YAML_PARSER=""
+HAS_AUBIO=false
 
 check_deps() {
   for cmd in ffmpeg ffprobe bc; do
@@ -33,6 +34,11 @@ check_deps() {
     YAML_PARSER="yq"
   else
     die "python3 (avec pyyaml) ou yq est requis pour lire la config YAML."
+  fi
+  if command -v aubiotrack &>/dev/null; then
+    HAS_AUBIO=true
+  else
+    warn "aubiotrack introuvable — création des fiches .md désactivée"
   fi
 }
 
@@ -638,6 +644,7 @@ split_segments() {
 # ────────────────────────── Conversion MP3 + sortie ─────────
 
 OUTPUT_DIRS=()
+declare -A SEG_BPM=()
 
 convert_output() {
   next_step "Conversion MP3 et dossiers de sortie"
@@ -708,6 +715,75 @@ convert_output() {
   done
 }
 
+# ────────────────────────── Fiches BPM ──────────────────────
+
+create_md_sheets() {
+  next_step "Création des fiches .md (BPM)"
+
+  if [[ "$HAS_AUBIO" != "true" ]]; then
+    warn "aubiotrack introuvable — création des fiches .md désactivée"
+    return
+  fi
+
+  for out_dir in "${OUTPUT_DIRS[@]}"; do
+    local out_dir_name
+    out_dir_name="$(basename "$out_dir")"
+
+    [[ "$out_dir_name" == *blabla* ]] && continue
+
+    local md_file="${out_dir}/${out_dir_name}.md"
+    if [[ -f "$md_file" ]]; then
+      warn "fiche existante, ignorée : ${out_dir_name}.md"
+      continue
+    fi
+
+    # Collecter les BPM de chaque piste MP3 via aubiotrack (timestamps → BPM)
+    local bpm_values=()
+    for mp3 in "$out_dir"/*.mp3; do
+      [[ -f "$mp3" ]] || continue
+      local bpm_raw
+      bpm_raw="$(aubiotrack -i "$mp3" 2>/dev/null | python3 -c "
+import sys, statistics
+times = [float(l) for l in sys.stdin if l.strip()]
+if len(times) >= 2:
+    diffs = [times[i+1]-times[i] for i in range(len(times)-1)]
+    bpm = round(60 / statistics.median(diffs))
+    if 20 <= bpm <= 400:
+        print(bpm)
+" 2>/dev/null || true)"
+      [[ -n "$bpm_raw" ]] && bpm_values+=("$bpm_raw")
+    done
+
+    [[ ${#bpm_values[@]} -eq 0 ]] && continue
+
+    # Médiane des BPM par piste, arrondie à l'entier
+    local joined_bpms
+    joined_bpms="$(IFS=','; echo "${bpm_values[*]}")"
+    local bpm_median
+    bpm_median="$(python3 -c "import statistics; print(round(statistics.median([${joined_bpms}])))")"
+
+    # Reconstruire seg_num et label depuis le nom du dossier
+    local remainder="${out_dir_name#*_-_}"
+    local seg_num="${remainder%%_-_*}"
+    local label_part=""
+    [[ "$remainder" == *"_-_"* ]] && label_part="${remainder#*_-_}"
+    local label="${label_part//_/ }"
+
+    local title
+    if [[ -n "$label_part" ]]; then
+      title="# ${seg_num} ${label}"
+    else
+      title="# ${seg_num}"
+    fi
+
+    printf -- '---\nbpm: %s\n---\n\n%s\n\n- %s bpm\n' \
+      "$bpm_median" "$title" "$bpm_median" > "$md_file"
+
+    SEG_BPM["$out_dir_name"]="$bpm_median"
+    ok "→ ${out_dir_name}.md (BPM : ${bpm_median})"
+  done
+}
+
 # ────────────────────────── Nettoyage ────────────────────────
 
 cleanup() {
@@ -731,7 +807,17 @@ print_summary() {
   echo -e "  Pistes/segment  : ${#ALL_TRACK_NAMES[@]}"
   echo -e "  Dossiers créés  :"
   for d in "${OUTPUT_DIRS[@]}"; do
-    echo -e "    • $(basename "$d")"
+    local dname
+    dname="$(basename "$d")"
+    echo -e "    • ${dname}"
+    if [[ -n "${SEG_BPM[$dname]:-}" ]]; then
+      local remainder="${dname#*_-_}"
+      local label_part=""
+      [[ "$remainder" == *"_-_"* ]] && label_part="${remainder#*_-_}"
+      local label="${label_part//_/ }"
+      [[ -z "$label" ]] && label="${remainder%%_-_*}"
+      echo -e "      BPM : ${label} → ${SEG_BPM[$dname]}"
+    fi
   done
   echo
 }
@@ -749,6 +835,7 @@ main() {
   build_mixes
   split_segments
   convert_output
+  create_md_sheets
   cleanup
   print_summary
 }

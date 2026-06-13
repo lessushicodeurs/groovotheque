@@ -9,11 +9,19 @@ Traite un dossier de répétition Soundcraft UI24R (FLAC multipistes + étiquett
 | `ffmpeg` + `ffprobe` | Traitement audio |
 | `bc` | Calculs flottants en bash |
 | `python3` + `pyyaml` | Lecture de la config YAML |
+| `aubio-tools` | Détection BPM automatique *(optionnel)* |
 
 Installation rapide (Ubuntu/Debian) :
 ```bash
-sudo apt install ffmpeg bc python3-yaml
+sudo ./scripts/setup.sh
 ```
+
+Ou manuellement :
+```bash
+sudo apt install ffmpeg bc python3-yaml aubio-tools
+```
+
+Si `aubio-tools` est absent, le pipeline se termine normalement — les fiches `.md` ne sont simplement pas générées.
 
 ## Usage
 
