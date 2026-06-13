@@ -17,6 +17,7 @@ err()  { echo -e "${RED}✗${RESET}  $*" >&2; }
 die()  { err "$*"; exit 1; }
 
 next_step() { STEP=$((STEP + 1)); echo; echo -e "${BOLD}── Étape ${STEP}/${TOTAL_STEPS} : $* ──${RESET}"; }
+trim()      { local s="$1"; s="${s#"${s%%[^[:space:]]*}"}"; s="${s%"${s##*[^[:space:]]}"}"; echo "$s"; }
 
 # ────────────────────────── Dépendances ──────────────────────
 
@@ -307,7 +308,7 @@ parse_labels() {
   for line in "${raw_lines[@]}"; do
     IFS=$'\t' read -r col1 _col2 col3 <<<"$line"
     SEGMENT_STARTS+=("$col1")
-    SEGMENT_LABELS+=("${col3:-}")
+    SEGMENT_LABELS+=("$(trim "${col3:-}")")
   done
 
   SEG_COUNT=${#SEGMENT_STARTS[@]}
