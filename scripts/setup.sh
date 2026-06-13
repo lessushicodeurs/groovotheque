@@ -26,3 +26,25 @@ for pkg in "${PACKAGES[@]}"; do
   esac
   command -v "$cmd" &>/dev/null && ok "$pkg ($cmd)" || warn "$pkg introuvable après installation"
 done
+
+# ── Flatpak + Audacity (requis pour le pipeline Audacity DRC) ──────────────────
+echo
+echo "Vérification de Flatpak et Audacity..."
+
+if ! command -v flatpak &>/dev/null; then
+  echo "Installation de flatpak..."
+  sudo apt-get install -y flatpak
+fi
+command -v flatpak &>/dev/null && ok "flatpak" || die "flatpak introuvable après installation."
+
+if ! flatpak list --app 2>/dev/null | grep -q "org.audacityteam.Audacity"; then
+  echo "Installation d'Audacity via Flatpak..."
+  flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+  flatpak install -y flathub org.audacityteam.Audacity
+fi
+flatpak list --app 2>/dev/null | grep -q "org.audacityteam.Audacity" \
+  && ok "Audacity Flatpak (org.audacityteam.Audacity)" \
+  || warn "Audacity Flatpak introuvable après installation"
+
+echo
+warn "Activer mod-script-pipe dans Audacity : Edit → Preferences → Modules → mod-script-pipe: Enabled → redémarrer Audacity"
