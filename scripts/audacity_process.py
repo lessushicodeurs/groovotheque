@@ -54,12 +54,34 @@ def _pipe_path():
     return f"/tmp/audacity_script_pipe.to.{uid}"
 
 
+MOD_SCRIPT_PIPE_HELP = (
+    "  → Activer mod-script-pipe dans Audacity :\n"
+    "      Edit → Preferences → Modules → mod-script-pipe : Enabled → redémarrer Audacity"
+)
+
+
+def _audacity_is_running() -> bool:
+    try:
+        result = subprocess.run(["pgrep", "-x", "audacity"], capture_output=True)
+        return result.returncode == 0
+    except FileNotFoundError:
+        return False
+
+
 def _ensure_audacity_running():
     pipe = _pipe_path()
     if os.path.exists(pipe):
         return
 
-    print("Audacity non détecté — démarrage via Flatpak...", flush=True)
+    if _audacity_is_running():
+        print(
+            "Erreur : Audacity est ouvert mais le pipe mod-script-pipe est absent.\n"
+            + MOD_SCRIPT_PIPE_HELP,
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    print("Audacity non lancé — démarrage via Flatpak...", flush=True)
     subprocess.Popen(
         ["flatpak", "run", "org.audacityteam.Audacity"],
         stdout=subprocess.DEVNULL,
@@ -71,8 +93,7 @@ def _ensure_audacity_running():
         if time.time() > deadline:
             print(
                 f"Erreur : le pipe Audacity n'est pas apparu après {PIPE_TIMEOUT}s.\n"
-                "Vérifiez que mod-script-pipe est activé :\n"
-                "  Edit → Preferences → Modules → mod-script-pipe: Enabled → redémarrer Audacity",
+                + MOD_SCRIPT_PIPE_HELP,
                 file=sys.stderr,
             )
             sys.exit(1)
