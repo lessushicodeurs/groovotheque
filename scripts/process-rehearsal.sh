@@ -359,10 +359,10 @@ build_mixes() {
       local fname="${!fvar}"
       local pan="${!pvar}"
       local gain_db="${!gvar:-0}"
-      local fpath="${SOURCE_DIR}/${fname}.flac"
+      local fpath="${WORK_DIR}/normalized/${fname}.flac"
 
       if [[ ! -f "$fpath" ]]; then
-        warn "Source absente pour le mix '${output_name}' : ${fname}.flac — mix ignoré"
+        warn "Source normalisée absente pour le mix '${output_name}' : ${fname}.flac — mix ignoré"
         all_present=false; break
       fi
 
@@ -380,7 +380,7 @@ build_mixes() {
     fc="$(IFS=';'; echo "${filter_parts[*]}");"
     fc+="$(printf '%s' "${amix_inputs[@]}")amix=inputs=${n_sources}:normalize=0[out]"
 
-    local out_path="${WORK_DIR}/${output_name}.flac"
+    local out_path="${WORK_DIR}/normalized/${output_name}.flac"
     log "Mix : ${output_name}"
     ffmpeg -y -hide_banner -loglevel warning \
       "${inputs[@]}" \
@@ -388,8 +388,8 @@ build_mixes() {
       -map "[out]" "$out_path"
     ok "→ ${output_name}.flac"
 
-    MIX_OUTPUT_PATHS+=("$out_path")
-    MIX_OUTPUT_NAMES+=("$output_name")
+    ALL_TRACK_PATHS+=("$out_path")
+    ALL_TRACK_NAMES+=("$output_name")
   done
 }
 
@@ -401,7 +401,9 @@ ALL_TRACK_NAMES=()
 compress_normalize() {
   next_step "Compression et normalisation"
 
-  # Pistes FLAC source (hors exclus, hors sources-mix)
+  # Toutes les pistes (hors exclus) sont normalisées, y compris les sources de mixes
+  local all_sources=()
+  local all_names=()
   for fpath in "${FLAC_FILES[@]}"; do
     local fname_no_ext
     fname_no_ext="$(basename "${fpath%.flac}")"
@@ -409,25 +411,21 @@ compress_normalize() {
       warn "Piste exclue : ${fname_no_ext}"
       continue
     fi
-    if is_mix_source "$fname_no_ext"; then
-      continue  # traitée dans un mix
+    all_sources+=("$fpath")
+    all_names+=("$fname_no_ext")
+    if ! is_mix_source "$fname_no_ext"; then
+      ALL_TRACK_PATHS+=("$fpath")
+      ALL_TRACK_NAMES+=("$fname_no_ext")
     fi
-    ALL_TRACK_PATHS+=("$fpath")
-    ALL_TRACK_NAMES+=("$fname_no_ext")
   done
+  # Les pistes mixées seront ajoutées à ALL_TRACK_PATHS/NAMES par build_mixes()
 
-  # Pistes mixées
-  for ((i=0; i<${#MIX_OUTPUT_PATHS[@]}; i++)); do
-    ALL_TRACK_PATHS+=("${MIX_OUTPUT_PATHS[$i]}")
-    ALL_TRACK_NAMES+=("${MIX_OUTPUT_NAMES[$i]}")
-  done
+  [[ ${#all_sources[@]} -gt 0 ]] || die "Aucune piste à traiter après filtrage."
+  ok "${#all_sources[@]} piste(s) à normaliser"
 
-  [[ ${#ALL_TRACK_PATHS[@]} -gt 0 ]] || die "Aucune piste à traiter après filtrage."
-  ok "${#ALL_TRACK_PATHS[@]} piste(s) à traiter"
-
-  for ((ti=0; ti<${#ALL_TRACK_PATHS[@]}; ti++)); do
-    local src="${ALL_TRACK_PATHS[$ti]}"
-    local name="${ALL_TRACK_NAMES[$ti]}"
+  for ((ti=0; ti<${#all_sources[@]}; ti++)); do
+    local src="${all_sources[$ti]}"
+    local name="${all_names[$ti]}"
 
     # Compression : opt-in, seulement si un bloc compression est défini pour la piste
     local comp_src="$src"
@@ -623,10 +621,11 @@ convert_output() {
 
     local out_dir_name
     if [[ -n "$label" ]]; then
-      out_dir_name="${SOURCE_NAME} - ${seg_num} - ${label}"
+      out_dir_name="${SOURCE_NAME}_-_${seg_num}_-_${label}"
     else
-      out_dir_name="${SOURCE_NAME} - ${seg_num}"
+      out_dir_name="${SOURCE_NAME}_-_${seg_num}"
     fi
+    out_dir_name="${out_dir_name// /_}"
 
     local out_dir="${GROOVES_DIR}/${out_dir_name}"
 
@@ -718,8 +717,8 @@ main() {
   validate_input
   parse_labels
   setup_dirs
-  build_mixes
   compress_normalize
+  build_mixes
   split_segments
   convert_output
   cleanup
