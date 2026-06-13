@@ -1,41 +1,67 @@
 audio:
   mp3_bitrate: "320k"
-  normalize_peak_db: -1
 
 tracks:
   per_track:
 
     "01 BASS":
-      multi_pass: 2
-      compression:
-        preset: "Bass Guitar"
+      effects:
+        - type: compress
+          preset: "Bass Guitar"
+        - type: normalize
+        - type: compress
+          preset: "Bass Guitar"
+        - type: normalize
 
     "02 GUIT MIX":
-      gain_db: -8
+      effects:
+        - type: normalize
+        - type: gain
+          db: -8
 
     "04 KEYS MIX":
-      gain_db: -14
+      effects:
+        - type: normalize
+        - type: gain
+          db: -14
 
     "09 BACKING VOC":
-      multi_pass: 2
-      compression:
-        preset: "Lead Vocals"
+      effects:
+        - type: compress
+          preset: "Lead Vocals"
+        - type: normalize
+        - type: compress
+          preset: "Lead Vocals"
+        - type: normalize
 
     "10 LEAD VOC":
-      multi_pass: 2
-      normalize_peak_db: -2
-      compression:
-        preset: "Lead Vocals"
+      effects:
+        - type: compress
+          preset: "Lead Vocals"
+        - type: normalize
+          target_db: -2
+        - type: compress
+          preset: "Lead Vocals"
+        - type: normalize
+          target_db: -2
 
     "11 DR KICK":
-      multi_pass: 2
-      compression:
-        preset: "Kick Drums"
+      effects:
+        - type: compress
+          preset: "Kick Drums"
+        - type: normalize
+        - type: compress
+          preset: "Kick Drums"
+        - type: normalize
 
     "12 DR HH SD":
-      multi_pass: 2
-      compression:
-        preset: "Modern"
+      effects:
+        - type: compress
+          preset: "Modern"
+        - type: normalize
+        - type: compress
+          preset: "Modern"
+        - type: normalize
 
   mixes:
 
