@@ -177,8 +177,6 @@ load_config_yq() {
   local ptc
   ptc="$(yq e '.tracks.per_track | keys | length' "$cfg")"
   declare -g "PER_TRACK_COUNT=${ptc}"
-  local names_json
-  names_json="$(yq e '.tracks.per_track | keys' -o=json "$cfg")"
   for ((i=0; i<ptc; i++)); do
     local name
     name="$(yq e ".tracks.per_track | keys | .[${i}]" "$cfg")"
@@ -380,7 +378,6 @@ apply_effects_chain() {
   local effects_json="${TRACK_EFFECTS_JSON[$name]:-[]}"
 
   if [[ "$effects_json" == "[]" ]]; then
-    warn "  [WARN] Piste '${name}' : pas de chaîne d'effets — passthrough silencieux"
     return
   fi
 
