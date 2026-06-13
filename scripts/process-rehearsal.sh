@@ -368,8 +368,96 @@ setup_dirs() {
   done
 }
 
+# ────────────────────────── Moteur d'effets ──────────────────
+
+# Applique la chaîne d'effets d'une piste sur un fichier FLAC.
+# Entrée : fichier courant ; sortie : même fichier modifié in-place.
+# Les steps compress et normalize passent par Audacity (audacity_process.py --step).
+# Les steps gain et pan passent directement par ffmpeg.
+apply_effects_chain() {
+  local name="$1"
+  local filepath="$2"   # fichier FLAC de travail (sera modifié in-place)
+  local effects_json="${TRACK_EFFECTS_JSON[$name]:-[]}"
+
+  if [[ "$effects_json" == "[]" ]]; then
+    warn "  [WARN] Piste '${name}' : pas de chaîne d'effets — passthrough silencieux"
+    return
+  fi
+
+  local step_count
+  step_count="$(python3 -c "import json,sys; print(len(json.loads(sys.argv[1])))" "$effects_json")"
+
+  local SCRIPT_PY="${SCRIPT_DIR}/audacity_process.py"
+
+  for ((si=0; si<step_count; si++)); do
+    local step_json
+    step_json="$(python3 -c "import json,sys; print(json.dumps(json.loads(sys.argv[1])[int(sys.argv[2])]))" "$effects_json" "$si")"
+
+    local step_type
+    step_type="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['type'])" "$step_json")"
+
+    log "    [${name}] step $((si+1))/${step_count} : ${step_type}"
+
+    case "$step_type" in
+
+      compress)
+        # Lire preset et overrides inline
+        local preset
+        preset="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('preset',''))" "$step_json")"
+        local py_args=(--step compress)
+        [[ -n "$preset" ]] && py_args+=(--preset "$preset")
+        # Overrides inline
+        for param in threshold ratio attack release knee lookahead makeup; do
+          local val
+          val="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get(sys.argv[2],''))" "$step_json" "$param")"
+          [[ -n "$val" ]] && py_args+=(--"$param" "$val")
+        done
+        [[ -f "$SCRIPT_PY" ]] || die "Script introuvable : $SCRIPT_PY"
+        python3 "$SCRIPT_PY" "${py_args[@]}" "$filepath"
+        ;;
+
+      normalize)
+        local target_db
+        target_db="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('target_db', -1))" "$step_json")"
+        [[ -f "$SCRIPT_PY" ]] || die "Script introuvable : $SCRIPT_PY"
+        python3 "$SCRIPT_PY" --step normalize --normalize "$target_db" "$filepath"
+        ;;
+
+      gain)
+        local db
+        db="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d['db'])" "$step_json")"
+        local tmp_flac="${filepath%.flac}_gain_tmp.flac"
+        ffmpeg -y -hide_banner -loglevel warning \
+          -i "$filepath" \
+          -af "volume=${db}dB" \
+          "$tmp_flac"
+        mv "$tmp_flac" "$filepath"
+        ok "    → gain ${db} dB appliqué"
+        ;;
+
+      pan)
+        local position
+        position="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d['position'])" "$step_json")"
+        local gain_l gain_r
+        gain_l="$(python3 -c "print((100 - ${position}) / 100)")"
+        gain_r="$(python3 -c "print((100 + ${position}) / 100)")"
+        local tmp_flac="${filepath%.flac}_pan_tmp.flac"
+        ffmpeg -y -hide_banner -loglevel warning \
+          -i "$filepath" \
+          -af "aformat=channel_layouts=stereo,pan=stereo|c0=${gain_l}*c0|c1=${gain_r}*c0" \
+          "$tmp_flac"
+        mv "$tmp_flac" "$filepath"
+        ok "    → pan ${position} appliqué"
+        ;;
+
+      *)
+        die "Erreur fatale : type d'effet inconnu '${step_type}' (piste '${name}'). Types supportés : compress, normalize, gain, pan."
+        ;;
+    esac
+  done
+}
+
 # ────────────────────────── Traitement des pistes ────────────
-# (moteur d'effets — story 28.3 — à implémenter dans le commit suivant)
 
 ALL_TRACK_PATHS=()
 ALL_TRACK_NAMES=()
@@ -407,11 +495,8 @@ compress_normalize() {
     local dest="${WORK_DIR}/normalized/${name}.flac"
     cp "$src" "$dest"
 
-    local effects_json="${TRACK_EFFECTS_JSON[$name]:-[]}"
-    if [[ "$effects_json" == "[]" ]]; then
-      warn "  [WARN] Piste '${name}' : pas de chaîne d'effets — passthrough silencieux"
-    fi
-    # Moteur d'effets à implémenter (story 28.3)
+    # Appliquer la chaîne d'effets
+    apply_effects_chain "$name" "$dest"
 
     ok "  → ${name}.flac"
   done
@@ -471,6 +556,9 @@ build_mixes() {
       -filter_complex "$fc" \
       -map "[out]" "$out_path"
     ok "→ ${output_name}.flac"
+
+    # Appliquer la chaîne d'effets du mix (si définie)
+    apply_effects_chain "$output_name" "$out_path"
 
     ALL_TRACK_PATHS+=("$out_path")
     ALL_TRACK_NAMES+=("$output_name")
