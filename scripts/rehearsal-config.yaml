@@ -6,8 +6,16 @@ tracks:
   per_track:
 
     "01 BASS":
-      loudnorm:
-        integrated_loudness: -18
+      compression:
+        threshold_db: -13
+        ratio: 3
+        attack_ms: 1
+        release_ms: 50
+        knee_db: 2
+      dynaudnorm:
+        peak: 0.95
+        max_gain: 3
+        frame_length_ms: 500
 
     "02 GUIT MIX":
       gain_db: -8
@@ -16,15 +24,45 @@ tracks:
       gain_db: -14
 
     "09 BACKING VOC":
-      loudnorm:
-        integrated_loudness: -18
+      compression:
+        threshold_db: -14
+        ratio: 5.2
+        attack_ms: 1
+        release_ms: 60
+        knee_db: 5.5
+      gain_db: -4
+      dynaudnorm:
 
     "10 LEAD VOCAL":
-      loudnorm:
-        integrated_loudness: -20
+      compression:
+        threshold_db: -14
+        ratio: 5.2
+        attack_ms: 1
+        release_ms: 60
+        knee_db: 5.5
+      gain_db: 2
+      dynaudnorm:
+
+    "11 DR KICK":
+      compression:
+        threshold_db: -14
+        ratio: 4
+        attack_ms: 30
+        release_ms: 120
+        knee_db: 0.5
+      dynaudnorm:
+
+    "12 DR HH SD":
+      compression:
+        threshold_db: -14
+        ratio: 4
+        attack_ms: 0.2
+        release_ms: 210
+        knee_db: 18
+      dynaudnorm:
 
   mixes:
-    
+
     - output: "02 GUIT MIX"
       sources:
         - file: "02 GUIT DI"
