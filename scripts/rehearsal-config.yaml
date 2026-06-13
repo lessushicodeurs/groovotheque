@@ -23,10 +23,6 @@ tracks:
       loudnorm:
         integrated_loudness: -20
 
-    "11 DRUMS MIX":
-      loudnorm:
-        integrated_loudness: -18
-
   mixes:
     
     - output: "02 GUIT MIX"
