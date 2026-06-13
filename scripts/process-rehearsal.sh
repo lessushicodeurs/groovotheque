@@ -61,6 +61,7 @@ declare -A TRACK_COMP_RATIO=()       # ratio
 declare -A TRACK_COMP_ATTACK=()      # attaque ms
 declare -A TRACK_COMP_RELEASE=()     # relâchement ms
 declare -A TRACK_COMP_KNEE=()        # knee dB
+declare -A TRACK_LOUDNORM=()         # I:LRA:TP pour loudnorm EBU R128
 declare -A BLABLA_PANS=()            # pan par piste pour les segments blabla (-100..+100)
 
 load_config_python() {
@@ -119,6 +120,10 @@ for i, (name, settings) in enumerate(per_track.items()):
     print(f"PER_TRACK_{i}_COMP_ATTACK='{sh(c.get('attack_ms',''))}'")
     print(f"PER_TRACK_{i}_COMP_RELEASE='{sh(c.get('release_ms',''))}'")
     print(f"PER_TRACK_{i}_COMP_KNEE='{sh(c.get('knee_db',''))}'")
+    ln = s.get('loudnorm') or {}
+    print(f"PER_TRACK_{i}_LOUDNORM_I='{sh(ln.get('integrated_loudness',''))}'")
+    print(f"PER_TRACK_{i}_LOUDNORM_LRA='{sh(ln.get('loudness_range',11))}'")
+    print(f"PER_TRACK_{i}_LOUDNORM_TP='{sh(ln.get('true_peak',-1))}'")
 
 blabla_pans = (cfg.get('blabla_mix') or {}).get('pans') or {}
 print(f"BLABLA_PANS_COUNT='{len(blabla_pans)}'")
@@ -185,6 +190,7 @@ load_config() {
   TRACK_NORMALIZE_MODE=()
   TRACK_NORMALIZE_DB=()
   TRACK_GAIN_DB=()
+  TRACK_LOUDNORM=()
   local ptc="${PER_TRACK_COUNT:-0}"
   for ((i=0; i<ptc; i++)); do
     local n_var="PER_TRACK_${i}_NAME"   m_var="PER_TRACK_${i}_MODE"
@@ -194,6 +200,9 @@ load_config() {
     local ca_var="PER_TRACK_${i}_COMP_ATTACK"
     local crl_var="PER_TRACK_${i}_COMP_RELEASE"
     local ck_var="PER_TRACK_${i}_COMP_KNEE"
+    local li_var="PER_TRACK_${i}_LOUDNORM_I"
+    local llra_var="PER_TRACK_${i}_LOUDNORM_LRA"
+    local ltp_var="PER_TRACK_${i}_LOUDNORM_TP"
     local name="${!n_var}"
     TRACK_NORMALIZE_MODE["$name"]="${!m_var}"
     TRACK_NORMALIZE_DB["$name"]="${!d_var}"
@@ -203,6 +212,7 @@ load_config() {
     TRACK_COMP_ATTACK["$name"]="${!ca_var}"
     TRACK_COMP_RELEASE["$name"]="${!crl_var}"
     TRACK_COMP_KNEE["$name"]="${!ck_var}"
+    [[ -n "${!li_var}" ]] && TRACK_LOUDNORM["$name"]="${!li_var}:${!llra_var}:${!ltp_var}"
   done
 
   # Peupler la table de pans blabla
@@ -441,6 +451,22 @@ compress_normalize() {
         -i "$src" \
         -af "acompressor=threshold=${c_thr}dB:ratio=${c_rat}:attack=${c_atk}:release=${c_rel}:knee=${c_kne}dB:makeup=1" \
         "$comp_src"
+    fi
+
+    # Loudnorm : opt-in, court-circuite volumedetect+volume
+    if [[ -n "${TRACK_LOUDNORM[$name]:-}" ]]; then
+      local ln_i ln_lra ln_tp
+      IFS=':' read -r ln_i ln_lra ln_tp <<< "${TRACK_LOUDNORM[$name]}"
+      log "  Normalisation loudnorm : ${name} (I=${ln_i} LRA=${ln_lra} TP=${ln_tp})"
+      local extra_gain="${TRACK_GAIN_DB[$name]:-0}"
+      local af_chain="loudnorm=I=${ln_i}:LRA=${ln_lra}:TP=${ln_tp}"
+      [[ "${extra_gain}" != "0" ]] && af_chain="${af_chain},volume=${extra_gain}dB"
+      ffmpeg -y -hide_banner -loglevel warning \
+        -i "$comp_src" \
+        -af "$af_chain" \
+        "${WORK_DIR}/normalized/${name}.flac"
+      ok "  → ${name}.flac normalisé (mode=loudnorm)"
+      continue
     fi
 
     # Détection des niveaux (peak + mean en une passe)
