@@ -135,6 +135,19 @@ class AudacityPipe:
 
 # ─────────────────────────── Traitement ────────────────────────
 
+def _wait_for_tracks(pipe: AudacityPipe, timeout: int = 30) -> bool:
+    """Sonde GetInfo:Tracks jusqu'à ce qu'au moins une piste soit chargée."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        resp = pipe.send("GetInfo: Type=Tracks Format=JSON")
+        # La réponse contient du JSON + "BatchCommand finished: OK"
+        # Si des pistes sont présentes le JSON contiendra au moins "{"
+        if "{" in resp:
+            return True
+        time.sleep(0.3)
+    return False
+
+
 def _compressor_command(params: dict) -> str:
     """Construit la commande Audacity DRC Compressor depuis un dict de paramètres."""
     return (
@@ -156,10 +169,15 @@ def process_file(pipe: AudacityPipe, filepath: str, comp_params: dict | None,
     abs_path = os.path.abspath(filepath)
     print(f"  Traitement : {os.path.basename(filepath)}", flush=True)
 
-    # Ouvrir le fichier
+    # Ouvrir le fichier (OpenFiles est asynchrone — attendre le chargement)
     resp = pipe.send(f"OpenFiles: Filename={abs_path}")
     if "error" in resp.lower():
         print(f"    Erreur à l'ouverture : {resp}", file=sys.stderr)
+        return
+
+    if not _wait_for_tracks(pipe):
+        print(f"    Timeout : la piste n'a pas été chargée dans Audacity", file=sys.stderr)
+        pipe.send("Close: SaveChanges=No")
         return
 
     # Sélectionner tout
