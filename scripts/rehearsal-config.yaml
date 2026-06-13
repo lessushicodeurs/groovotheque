@@ -63,6 +63,12 @@ tracks:
           preset: "Modern"
         - type: normalize
 
+    "11 DRUMS MIX":
+      effects:
+        - type: pan
+          label: center
+          position: 0
+
   mixes:
 
     - output: "02 GUIT MIX"
