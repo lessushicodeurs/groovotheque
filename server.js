@@ -301,21 +301,44 @@ app.get('/api/grooves/*', async (req, res) => {
   }
 });
 
-// 20.4 — Mix lecture/écriture : chemin multi-segments
+// 30.1 / 30.2 — Mix lecture (tracks uniquement) avec fallback parent
 app.get('/api/mix/*', async (req, res) => {
   const groovePath = req.params[0];
   const grooveDir = resolveGrooveDir(groovePath, res);
   if (!grooveDir) return;
-  const mixPath = path.join(grooveDir, 'mix.json');
+
+  // Cherche mix.json dans le groove, puis dans le parent (un seul niveau)
+  const mixPathLocal = path.join(grooveDir, 'mix.json');
+  let data = null;
+  let source = 'none';
+
   try {
-    const data = await fs.promises.readFile(mixPath, 'utf8');
-    res.json(JSON.parse(data));
+    data = JSON.parse(await fs.promises.readFile(mixPathLocal, 'utf8'));
+    source = 'groove';
   } catch (err) {
-    if (err.code === 'ENOENT') return res.json({});
-    res.status(500).json({ error: err.message });
+    if (err.code !== 'ENOENT') return res.status(500).json({ error: err.message });
+    // Fallback : lire dans le dossier parent immédiat
+    // Le parent doit être dans GROOVES_DIR (incluant GROOVES_DIR lui-même)
+    const parentDir = path.dirname(grooveDir);
+    if (parentDir === GROOVES_DIR || parentDir.startsWith(GROOVES_DIR + path.sep)) {
+      const mixPathParent = path.join(parentDir, 'mix.json');
+      try {
+        data = JSON.parse(await fs.promises.readFile(mixPathParent, 'utf8'));
+        source = 'parent';
+      } catch (e2) {
+        if (e2.code !== 'ENOENT') return res.status(500).json({ error: e2.message });
+      }
+    }
   }
+
+  if (!data) return res.json({ _source: 'none' });
+
+  // Ne renvoyer que les tracks (pas loop/markers qui ont leurs propres endpoints)
+  const tracks = data.tracks ?? null;
+  res.json({ tracks, _source: source });
 });
 
+// 30.1 — Mix écriture (tracks uniquement) — ne touche jamais au parent
 app.post('/api/mix/*', async (req, res) => {
   if (req.auth?.user !== 'admin') return res.status(403).json({ error: 'Réservé à l\'admin' });
   const groovePath = req.params[0];
@@ -323,11 +346,70 @@ app.post('/api/mix/*', async (req, res) => {
   if (!grooveDir) return;
   const mixPath = path.join(grooveDir, 'mix.json');
   try {
-    const mix = req.body;
-    if (Array.isArray(mix.markers)) {
-      mix.markers.sort((a, b) => a.in - b.in);
-    }
-    await fs.promises.writeFile(mixPath, JSON.stringify(mix, null, 2), 'utf8');
+    const { tracks } = req.body;
+    await fs.promises.writeFile(mixPath, JSON.stringify({ tracks }, null, 2), 'utf8');
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 30.1 — Loop lecture/écriture (groove-level uniquement, pas de fallback)
+app.get('/api/loop/*', async (req, res) => {
+  const groovePath = req.params[0];
+  const grooveDir = resolveGrooveDir(groovePath, res);
+  if (!grooveDir) return;
+  const loopPath = path.join(grooveDir, 'loop.json');
+  try {
+    const data = await fs.promises.readFile(loopPath, 'utf8');
+    res.json(JSON.parse(data));
+  } catch (err) {
+    if (err.code === 'ENOENT') return res.json({});
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/loop/*', async (req, res) => {
+  if (req.auth?.user !== 'admin') return res.status(403).json({ error: 'Réservé à l\'admin' });
+  const groovePath = req.params[0];
+  const grooveDir = resolveGrooveDir(groovePath, res);
+  if (!grooveDir) return;
+  const loopPath = path.join(grooveDir, 'loop.json');
+  try {
+    const { in: loopIn, out: loopOut } = req.body;
+    await fs.promises.writeFile(loopPath, JSON.stringify({ in: loopIn, out: loopOut }, null, 2), 'utf8');
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 30.1 — Markers lecture/écriture (groove-level uniquement, pas de fallback)
+app.get('/api/markers/*', async (req, res) => {
+  const groovePath = req.params[0];
+  const grooveDir = resolveGrooveDir(groovePath, res);
+  if (!grooveDir) return;
+  const markersPath = path.join(grooveDir, 'markers.json');
+  try {
+    const data = await fs.promises.readFile(markersPath, 'utf8');
+    res.json(JSON.parse(data));
+  } catch (err) {
+    if (err.code === 'ENOENT') return res.json([]);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/markers/*', async (req, res) => {
+  if (req.auth?.user !== 'admin') return res.status(403).json({ error: 'Réservé à l\'admin' });
+  const groovePath = req.params[0];
+  const grooveDir = resolveGrooveDir(groovePath, res);
+  if (!grooveDir) return;
+  const markersPath = path.join(grooveDir, 'markers.json');
+  try {
+    let markersData = req.body;
+    if (!Array.isArray(markersData)) markersData = [];
+    markersData.sort((a, b) => a.in - b.in);
+    await fs.promises.writeFile(markersPath, JSON.stringify(markersData, null, 2), 'utf8');
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
