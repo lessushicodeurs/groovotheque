@@ -87,6 +87,8 @@ function processDir(dir) {
           const loopFile = path.join(dir, 'loop.json');
           if (dryRun) {
             console.log(`  ✎ loop.json    → { in: ${data.loop.in}, out: ${data.loop.out} }`);
+          } else if (fs.existsSync(loopFile)) {
+            console.warn(`  ⚠ loop.json existe déjà — ignoré (supprimez-le manuellement si nécessaire)`);
           } else {
             fs.writeFileSync(loopFile, JSON.stringify({ in: data.loop.in, out: data.loop.out }, null, 2), 'utf8');
             console.log(`  ✓ loop.json créé`);
@@ -100,9 +102,45 @@ function processDir(dir) {
           markersData.sort((a, b) => a.in - b.in);
           if (dryRun) {
             console.log(`  ✎ markers.json → [ ${markersData.length} marqueur(s) ]`);
+          } else if (fs.existsSync(markersFile)) {
+            console.warn(`  ⚠ markers.json existe déjà — ignoré (supprimez-le manuellement si nécessaire)`);
           } else {
             fs.writeFileSync(markersFile, JSON.stringify(markersData, null, 2), 'utf8');
             console.log(`  ✓ markers.json créé (${markersData.length} marqueur(s))`);
+          }
+        }
+
+        // CA9 — Vérification round-trip (hors dry-run uniquement)
+        if (!dryRun) {
+          try {
+            const writtenMix     = JSON.parse(fs.readFileSync(mixFile, 'utf8'));
+            const writtenLoop    = hasLoop    ? JSON.parse(fs.readFileSync(path.join(dir, 'loop.json'), 'utf8'))    : null;
+            const writtenMarkers = hasMarkers ? JSON.parse(fs.readFileSync(path.join(dir, 'markers.json'), 'utf8')) : null;
+
+            let mismatch = false;
+            // tracks
+            if (JSON.stringify(writtenMix.tracks) !== JSON.stringify(data.tracks ?? null)) mismatch = true;
+            // loop
+            if (hasLoop && writtenLoop) {
+              if (writtenLoop.in !== data.loop.in || writtenLoop.out !== data.loop.out) mismatch = true;
+            }
+            // markers (lon compare seulement les clés in/out/label écrites)
+            if (hasMarkers && writtenMarkers) {
+              const srcNorm = data.markers
+                .map(m => ({ in: m.in, out: m.out, label: m.label ?? '' }))
+                .sort((a, b) => a.in - b.in);
+              if (JSON.stringify(writtenMarkers) !== JSON.stringify(srcNorm)) mismatch = true;
+            }
+
+            if (mismatch) {
+              console.warn(`  ⚠ Round-trip mismatch : les fichiers écrits diffèrent de la source. mix.json source conservé.`);
+              // Restaurer le mix.json source pour ne pas perdre les données
+              fs.writeFileSync(mixFile, JSON.stringify(data, null, 2), 'utf8');
+            } else {
+              console.log(`  ✓ Round-trip OK`);
+            }
+          } catch (e) {
+            console.warn(`  ⚠ Impossible de vérifier le round-trip : ${e.message}`);
           }
         }
       }
