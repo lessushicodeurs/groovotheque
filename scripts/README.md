@@ -58,19 +58,22 @@ Si `aubio-tools` est absent, le pipeline se termine normalement — les fiches `
 ## Usage
 
 ```bash
-./scripts/process-rehearsal.sh [--keep-work] [--only-track "NOM"] "path/to/dossier"
+./scripts/process-rehearsal.sh [--keep-work] [--only-track "NOM"] [--verify-effects] "path/to/dossier"
 ```
 
 | Option | Description |
 |--------|-------------|
 | `--keep-work` | Conserve le dossier `_work/` après traitement (utile pour déboguer les FLAC intermédiaires) |
 | `--only-track "NOM"` | Retraite uniquement la piste nommée (tous les steps de sa chaîne `effects:`). Si la piste est source d'un mix, retraite aussi toutes les sources de ce mix et reconstruit le mix. Erreur fatale si le nom est inconnu. |
+| `--verify-effects` | Ajoute un Export2 intermédiaire après chaque step Audacity sauf le dernier du groupe. Visible dans les logs, sans re-import. Utile pour diagnostiquer l'ordre d'application des effets. L'audio produit est identique sans ce flag. |
 
 **Exemple :**
 ```bash
 ./scripts/process-rehearsal.sh "grooves/2026-06-06 Répétition"
 ./scripts/process-rehearsal.sh --keep-work "grooves/2026-06-06 Répétition"
 ./scripts/process-rehearsal.sh --only-track "01 BASS" "grooves/2026-06-06 Répétition"
+./scripts/process-rehearsal.sh --verify-effects "grooves/2026-06-06 Répétition"
+./scripts/process-rehearsal.sh --only-track "01 BASS" --verify-effects "grooves/2026-06-06 Répétition"
 ```
 
 Le dossier source doit contenir :

@@ -281,6 +281,7 @@ is_mix_source() {
 KEEP_WORK=false
 SOURCE_DIR=""
 ONLY_TRACK=""
+VERIFY_EFFECTS=false
 
 parse_args() {
   while [[ $# -gt 0 ]]; do
@@ -289,13 +290,14 @@ parse_args() {
       --only-track)
         [[ -z "${2:-}" ]] && die "--only-track attend un nom de piste."
         ONLY_TRACK="$2"; shift 2 ;;
+      --verify-effects) VERIFY_EFFECTS=true; shift ;;
       -*) die "Option inconnue : $1" ;;
       *)
         [[ -n "$SOURCE_DIR" ]] && die "Un seul dossier source attendu."
         SOURCE_DIR="$1"; shift ;;
     esac
   done
-  [[ -z "$SOURCE_DIR" ]] && die "Usage: $0 [--keep-work] [--only-track \"NOM\"] \"path/to/dossier\""
+  [[ -z "$SOURCE_DIR" ]] && die "Usage: $0 [--keep-work] [--only-track \"NOM\"] [--verify-effects] \"path/to/dossier\""
   SOURCE_DIR="$(cd "$SOURCE_DIR" 2>/dev/null && pwd)" || die "Dossier introuvable : $SOURCE_DIR"
 }
 
@@ -385,8 +387,9 @@ setup_dirs() {
 
 # Applique la chaîne d'effets d'une piste sur un fichier FLAC.
 # Entrée : fichier courant ; sortie : même fichier modifié in-place.
-# Les steps compress et normalize passent par Audacity (audacity_process.py --step).
-# Les steps gain et pan passent directement par ffmpeg.
+# Les steps compress et normalize sont groupés en un seul appel Audacity
+# (audacity_process.py --chain). Les steps gain et pan passent par ffmpeg
+# et servent de coupure naturelle entre les groupes Audacity.
 apply_effects_chain() {
   local name="$1"
   local filepath="$2"   # fichier FLAC de travail (sera modifié in-place)
@@ -401,6 +404,26 @@ apply_effects_chain() {
 
   local SCRIPT_PY="${SCRIPT_DIR}/audacity_process.py"
 
+  # Tableau (simulé par JSON accumulé) des steps Audacity en attente de flush
+  local audacity_run_json="[]"
+
+  # Flush le groupe Audacity accumulé vers audacity_process.py --chain
+  _flush_audacity_run() {
+    local run_json="$1"
+    local fp="$2"
+    [[ "$run_json" == "[]" ]] && return 0
+    local run_count
+    run_count="$(python3 -c "import json,sys; print(len(json.loads(sys.argv[1])))" "$run_json")"
+    if [[ "$run_count" -eq 0 ]]; then
+      return
+    fi
+    log "    [${name}] chaîne Audacity : ${run_count} step(s) groupé(s)"
+    [[ -f "$SCRIPT_PY" ]] || die "Script introuvable : $SCRIPT_PY"
+    local py_args=(--chain "$run_json")
+    [[ "${VERIFY_EFFECTS:-false}" == "true" ]] && py_args+=(--verify)
+    python3 "$SCRIPT_PY" "${py_args[@]}" "$fp"
+  }
+
   for ((si=0; si<step_count; si++)); do
     local step_json
     step_json="$(python3 -c "import json,sys; print(json.dumps(json.loads(sys.argv[1])[int(sys.argv[2])]))" "$effects_json" "$si")"
@@ -412,30 +435,22 @@ apply_effects_chain() {
 
     case "$step_type" in
 
-      compress)
-        # Lire preset et overrides inline
-        local preset
-        preset="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('preset',''))" "$step_json")"
-        local py_args=(--step compress)
-        [[ -n "$preset" ]] && py_args+=(--preset "$preset")
-        # Overrides inline
-        for param in threshold ratio attack release knee lookahead makeup; do
-          local val
-          val="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get(sys.argv[2],''))" "$step_json" "$param")"
-          [[ -n "$val" ]] && py_args+=(--"$param" "$val")
-        done
-        [[ -f "$SCRIPT_PY" ]] || die "Script introuvable : $SCRIPT_PY"
-        python3 "$SCRIPT_PY" "${py_args[@]}" "$filepath"
-        ;;
-
-      normalize)
-        local target_db
-        target_db="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('target_db', -1))" "$step_json")"
-        [[ -f "$SCRIPT_PY" ]] || die "Script introuvable : $SCRIPT_PY"
-        python3 "$SCRIPT_PY" --step normalize --normalize "$target_db" "$filepath"
+      compress|normalize)
+        # Accumuler dans le groupe Audacity courant
+        audacity_run_json="$(python3 -c "
+import json, sys
+run = json.loads(sys.argv[1])
+step = json.loads(sys.argv[2])
+run.append(step)
+print(json.dumps(run))
+" "$audacity_run_json" "$step_json")"
         ;;
 
       gain)
+        # Step ffmpeg — flusher le groupe Audacity en cours si non vide
+        _flush_audacity_run "$audacity_run_json" "$filepath"
+        audacity_run_json="[]"
+
         local db
         db="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d['db'])" "$step_json")"
         local tmp_flac="${filepath%.flac}_gain_tmp.flac"
@@ -448,6 +463,10 @@ apply_effects_chain() {
         ;;
 
       pan)
+        # Step ffmpeg — flusher le groupe Audacity en cours si non vide
+        _flush_audacity_run "$audacity_run_json" "$filepath"
+        audacity_run_json="[]"
+
         local position
         position="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d['position'])" "$step_json")"
         local gain_l gain_r
@@ -467,6 +486,10 @@ apply_effects_chain() {
         ;;
     esac
   done
+
+  # Flusher le dernier groupe Audacity restant (s'il y en a un)
+  _flush_audacity_run "$audacity_run_json" "$filepath"
+  audacity_run_json="[]"
 }
 
 # ────────────────────────── Filtre --only-track ──────────────

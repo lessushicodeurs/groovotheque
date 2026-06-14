@@ -3,6 +3,7 @@
 
 import argparse
 import fcntl
+import json
 import os
 import select
 import subprocess
@@ -339,6 +340,115 @@ def apply_normalize_step(pipe: AudacityPipe, filepath: str, target_db: float):
     pipe.send("RemoveTracks:")
 
 
+def _apply_effect(pipe: AudacityPipe, step: dict):
+    """Dispatche un step vers la commande Audacity correspondante.
+
+    step["type"] supporte : "compress", "normalize".
+    Envoie SelectAll: avant l'effet.
+    """
+    step_type = step.get("type")
+    if step_type == "compress":
+        preset = step.get("preset")
+        overrides = {k: step.get(k) for k in ("threshold", "ratio", "attack", "release", "knee", "lookahead", "makeup")}
+        params = resolve_comp_params(preset, overrides)
+        if params is None:
+            print("Erreur : step compress sans preset ni paramètres.", file=sys.stderr)
+            sys.exit(1)
+        print(f"    [chain] Compress ({params})", flush=True)
+        pipe.send("SelectAll:")
+        resp = pipe.send(_compressor_command(params), timeout=600.0)
+        if _is_failed(resp):
+            print(f"    Avertissement compresseur : {resp}", file=sys.stderr)
+        # Barrière de synchronisation post-DRC
+        pipe.send("GetInfo: Type=Tracks Format=JSON", timeout=120.0)
+    elif step_type == "normalize":
+        target_db = step.get("target_db", -1.0)
+        print(f"    [chain] Normalize: peak {target_db} dBFS", flush=True)
+        pipe.send("SelectAll:")
+        resp = pipe.send(
+            f"Normalize: PeakLevel={target_db} ApplyGain=True RemoveDcOffset=False StereoIndependent=False"
+        )
+        if _is_failed(resp):
+            print(f"    Avertissement normalize : {resp}", file=sys.stderr)
+    else:
+        print(f"Erreur fatale : type de step inconnu '{step_type}' dans la chaîne.", file=sys.stderr)
+        sys.exit(1)
+
+
+def apply_audacity_chain(pipe: AudacityPipe, filepath: str, steps: list, verify: bool = False):
+    """Applique une chaîne de N steps Audacity en un seul cycle import → effets → export.
+
+    Algorithme :
+      Import2(filepath)
+      wait_for_tracks()
+      drain()
+
+      for each step in steps:
+          SelectAll()
+          apply_effect(step)
+
+          if verify AND not last_step:
+              SelectAll()
+              Export2(filepath)      ← export intermédiaire visible dans les logs
+              check mtime changed
+              # PAS de re-import — la piste reste chargée
+
+      SelectAll()
+      Export2(filepath)              ← export final (toujours)
+      check mtime changed
+      SelectAll()
+      RemoveTracks()
+    """
+    abs_path = os.path.abspath(filepath)
+    print(f"  [chain] Import : {os.path.basename(filepath)} ({len(steps)} step(s))", flush=True)
+
+    pipe.send_nowait("SelectAll:")
+    pipe.send("RemoveTracks:")
+    pipe.send_nowait(f'Import2: Filename="{abs_path}"')
+
+    if not _wait_for_tracks(pipe):
+        print(f"    Timeout : la piste n'a pas été chargée dans Audacity", file=sys.stderr)
+        pipe.send_nowait("SelectAll:")
+        pipe.send("RemoveTracks:")
+        sys.exit(1)
+
+    # Drainer les réponses résiduelles des polls GetInfo de _wait_for_tracks.
+    pipe._drain(timeout=1.0)
+
+    n_steps = len(steps)
+    for i, step in enumerate(steps):
+        _apply_effect(pipe, step)
+
+        is_last = (i == n_steps - 1)
+        if verify and not is_last:
+            mtime_before = os.stat(abs_path).st_mtime_ns
+            pipe.send("SelectAll:")
+            resp = pipe.send(f'Export2: Filename="{abs_path}" NumChannels=1')
+            if _is_failed(resp):
+                print(f"    Avertissement export intermédiaire : {resp}", file=sys.stderr)
+            time.sleep(0.1)
+            if os.stat(abs_path).st_mtime_ns <= mtime_before:
+                print(
+                    f"    ERREUR : export intermédiaire échoué — fichier inchangé sur disque",
+                    file=sys.stderr,
+                )
+            print(f"    [chain] Export intermédiaire après step {i + 1}/{n_steps}", flush=True)
+
+    # Export final
+    mtime_before = os.stat(abs_path).st_mtime_ns
+    pipe.send("SelectAll:")
+    resp = pipe.send(f'Export2: Filename="{abs_path}" NumChannels=1')
+    if _is_failed(resp):
+        print(f"    Avertissement export final : {resp}", file=sys.stderr)
+    time.sleep(0.1)
+    if os.stat(abs_path).st_mtime_ns <= mtime_before:
+        print(f"    ERREUR : export final échoué — fichier inchangé sur disque", file=sys.stderr)
+
+    print(f"  [chain] Export final : {os.path.basename(filepath)}", flush=True)
+    pipe.send("SelectAll:")
+    pipe.send("RemoveTracks:")
+
+
 def process_file(pipe: AudacityPipe, filepath: str, comp_params: dict | None,
                  normalize_db: float, gain_db: float, multi_pass: int = 1):
     """[LEGACY] Applique (compressor → normalize) × multi_pass → gain sur un fichier FLAC via le pipe."""
@@ -406,6 +516,47 @@ def process_file(pipe: AudacityPipe, filepath: str, comp_params: dict | None,
     print(f"    ✓ {os.path.basename(filepath)}", flush=True)
 
 
+# ─────────────────────────── Mode chain ────────────────────────
+
+def run_chain_mode(args):
+    """Mode chain : applique une liste de steps Audacity en un seul Import/Export."""
+    try:
+        steps = json.loads(args.chain)
+    except json.JSONDecodeError as e:
+        print(f"Erreur : JSON invalide pour --chain : {e}", file=sys.stderr)
+        sys.exit(1)
+    if not isinstance(steps, list) or len(steps) == 0:
+        print("Erreur : --chain attend un tableau JSON non vide.", file=sys.stderr)
+        sys.exit(1)
+
+    _ensure_audacity_running()
+    pipe = AudacityPipe()
+    try:
+        resp = None
+        for _ in range(6):
+            resp = pipe.send("GetInfo: Type=Tracks Format=JSON", timeout=5.0)
+            if resp is not None:
+                break
+            time.sleep(1)
+        if resp is None:
+            print(
+                "Erreur : Audacity ne répond pas dans les 30s.\n"
+                "  → Si un dialogue s'affiche dans Audacity (récupération de projet, etc.),\n"
+                "    cliquez 'Passer' ou fermez-le, puis relancez le script.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        for filepath in args.files:
+            if not os.path.isfile(filepath):
+                print(f"Fichier introuvable : {filepath}", file=sys.stderr)
+                sys.exit(1)
+            apply_audacity_chain(pipe, filepath, steps, verify=args.verify)
+            print(f"    ✓ {os.path.basename(filepath)}", flush=True)
+    finally:
+        pipe.close()
+
+
 # ─────────────────────────── Mode step ─────────────────────────
 
 def run_step_mode(args):
@@ -471,6 +622,11 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Applique des effets audio via Audacity mod-script-pipe."
     )
+    # Mode chain : liste de steps JSON
+    parser.add_argument("--chain", metavar="JSON",
+                        help="Applique une chaîne de steps Audacity en un seul Import/Export (JSON array)")
+    parser.add_argument("--verify", action="store_true", default=False,
+                        help="En mode --chain : exporte après chaque step (sauf le dernier) pour vérification")
     # Mode step (nouveau)
     parser.add_argument("--step", choices=["compress", "normalize"],
                         help="Applique un unique step (compress ou normalize)")
@@ -529,12 +685,19 @@ def resolve_compression(args) -> dict | None:
 def main():
     args = parse_args()
 
+    # Mode chain : applique une liste de steps en un seul Import/Export
+    if args.chain:
+        run_chain_mode(args)
+        return
+
     # Mode step : applique un unique effet
     if args.step:
         run_step_mode(args)
         return
 
     # Mode legacy : compressor → normalize → gain (multi-pass)
+    if args.verify:
+        print("[verify] --verify ignoré sans --chain", file=sys.stderr)
     comp_params = resolve_compression(args)
 
     _ensure_audacity_running()
