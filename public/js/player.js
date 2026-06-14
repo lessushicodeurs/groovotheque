@@ -1569,13 +1569,16 @@ async function saveMixTracks() {
 }
 
 // 30.3 — Sauvegarde du loop courant
+// Si le loop est absent (null), envoie {} pour effacer le loop.json existant
 async function saveLoop() {
-  if (activeLoopIn === null || activeLoopOut === null) return true
+  const body = (activeLoopIn === null || activeLoopOut === null)
+    ? {}
+    : { in: activeLoopIn, out: activeLoopOut }
   try {
     const res = await fetch(`/api/loop/${encodePath(grooveSlug)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ in: activeLoopIn, out: activeLoopOut }),
+      body: JSON.stringify(body),
     })
     return res.ok
   } catch {
