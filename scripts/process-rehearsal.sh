@@ -407,11 +407,9 @@ apply_effects_chain() {
         preset="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('preset',''))" "$step_json")"
         local py_args=(--step compress)
         [[ -n "$preset" ]] && py_args+=(--preset "$preset")
-        # Overrides inline (threshold_db accepté comme alias de threshold)
-        local val
-        val="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('threshold_db', d.get('threshold','')))" "$step_json")"
-        [[ -n "$val" ]] && py_args+=(--threshold "$val")
-        for param in ratio attack release knee lookahead makeup; do
+        # Overrides inline
+        for param in threshold ratio attack release knee lookahead makeup; do
+          local val
           val="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get(sys.argv[2],''))" "$step_json" "$param")"
           [[ -n "$val" ]] && py_args+=(--"$param" "$val")
         done

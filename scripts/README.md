@@ -167,7 +167,7 @@ Active la compression dynamique via Audacity. Un `preset:` nommé est obligatoir
   preset: "Bass Guitar"   # preset Audacity (obligatoire)
   label: "description"    # optionnel, ignoré par le script
   # Overrides optionnels (écrasent la valeur du preset) :
-  threshold_db: -15       # seuil en dBFS  (aussi accepté : threshold)
+  threshold: -15          # seuil en dBFS
   ratio: 6                # ratio de compression
   attack: 1               # attaque en ms
   release: 60             # relâchement en ms
