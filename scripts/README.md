@@ -1,3 +1,35 @@
+# Scripts
+
+---
+
+## strip-parent-prefix — nettoyage de noms de sous-dossiers
+
+Supprime le préfixe redondant qu'un sous-dossier hérite de son parent.
+
+```bash
+./scripts/strip-parent-prefix.sh [--dry-run] <dossier>
+```
+
+| Option | Description |
+|--------|-------------|
+| `--dry-run` | Affiche les renommages sans les effectuer |
+
+**Exemple :**
+```bash
+./scripts/strip-parent-prefix.sh --dry-run grooves/Shook_Shook/260612-Répé-Set-1
+./scripts/strip-parent-prefix.sh grooves/Shook_Shook/260612-Répé-Set-1
+```
+
+Résultat :
+```
+260612-Répé-Set-1_-_01_-_Intro_+_Superstition  →  01_-_Intro_+_Superstition
+260612-Répé-Set-1_-_02_-_Some_Song             →  02_-_Some_Song
+```
+
+Le script détecte automatiquement le séparateur (`_-_`, `_` ou `-`). Les sous-dossiers dont le nom ne commence pas par le nom du parent sont ignorés avec un avertissement. N'agit qu'un niveau de profondeur.
+
+---
+
 # process-rehearsal — pipeline d'import de répétitions
 
 Traite un dossier de répétition Soundcraft UI24R (FLAC multipistes + étiquettes Audacity) et produit des dossiers de grooves prêts à être consommés par la groovothèque.
