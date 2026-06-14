@@ -688,7 +688,8 @@ split_segments() {
     ok "  ${name} → ${produced} segment(s) produit(s)"
   done
 
-  # Mix stéréo pour les segments blabla
+  # Mix stéréo pour les segments blabla (ignoré en mode --only-track)
+  [[ -n "$ONLY_TRACK" ]] && return 0
   for ((si=0; si<SEG_COUNT; si++)); do
     [[ "${SEGMENT_LABELS[$si]}" != "blabla" ]] && continue
 
@@ -761,6 +762,8 @@ convert_output() {
     local seg_num
     seg_num="$(printf '%02d' $((si+1)))"
     local label="${SEGMENT_LABELS[$si]}"
+
+    if [[ -n "$ONLY_TRACK" ]] && [[ "$label" == "blabla" ]]; then continue; fi
 
     local out_dir_name
     if [[ -n "$label" ]]; then
