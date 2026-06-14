@@ -1453,12 +1453,16 @@ function renderPlayerBreadcrumb() {
   })
 }
 
-// 11.3 / 15.5 — Chargement silencieux du mix sauvegardé
-async function loadMix(tracks) {
+// 30.3 — Chargement du mix (tracks uniquement) avec indicateur de source
+async function loadMixTracks(tracks) {
   try {
     const res = await fetch(`/api/mix/${encodePath(grooveSlug)}`)
     if (!res.ok) return
     const mix = await res.json()
+
+    // Indicateur discret si le mix vient du parent
+    showMixSourceIndicator(mix._source)
+
     if (mix.tracks && typeof mix.tracks === 'object') {
       tracks.forEach((track, i) => {
         const entry = mix.tracks[track.filename]
@@ -1481,17 +1485,35 @@ async function loadMix(tracks) {
       })
       applyVolumes()
     }
-    if (mix.loop && typeof mix.loop.in === 'number' && typeof mix.loop.out === 'number') {
-      pendingLoop = { in: mix.loop.in, out: mix.loop.out }
-      // Si toutes les waveforms sont déjà prêtes avant que le fetch mix revienne
+  } catch { /* chargement silencieux */ }
+}
+
+// 30.3 — Chargement du loop (groove-level uniquement)
+async function loadLoop() {
+  try {
+    const res = await fetch(`/api/loop/${encodePath(grooveSlug)}`)
+    if (!res.ok) return
+    const loop = await res.json()
+    if (loop && typeof loop.in === 'number' && typeof loop.out === 'number') {
+      pendingLoop = { in: loop.in, out: loop.out }
+      // Si toutes les waveforms sont déjà prêtes avant que le fetch revienne
       if (wavesurfers.length > 0 && trackDurations.filter(d => d > 0).length === wavesurfers.length) {
         syncRegionToAll(pendingLoop.in, pendingLoop.out)
         pendingLoop = null
       }
     }
+  } catch { /* chargement silencieux */ }
+}
+
+// 30.3 — Chargement des marqueurs (groove-level uniquement)
+async function loadMarkers() {
+  try {
+    const res = await fetch(`/api/markers/${encodePath(grooveSlug)}`)
+    if (!res.ok) return
+    const data = await res.json()
     // Epic 17 — charger les marqueurs (rendu différé dans adjustTrackWidths)
-    if (Array.isArray(mix.markers) && mix.markers.length > 0) {
-      markers = mix.markers
+    if (Array.isArray(data) && data.length > 0) {
+      markers = data
         .filter(m => typeof m.in === 'number' && typeof m.out === 'number' && m.out > m.in)
         .map(m => ({
           id:    nextMarkerId(),
@@ -1503,8 +1525,30 @@ async function loadMix(tracks) {
   } catch { /* chargement silencieux */ }
 }
 
-// 11.4 / 15.5 — Sauvegarde du mix courant (admin uniquement)
-async function saveMix() {
+// 30.3 — Charge mix + loop + markers en parallèle
+async function loadMix(tracks) {
+  await Promise.all([
+    loadMixTracks(tracks),
+    loadLoop(),
+    loadMarkers(),
+  ])
+}
+
+// 30.3 — Indicateur discret "mix hérité du parent"
+function showMixSourceIndicator(source) {
+  const existing = document.getElementById('mix-source-indicator')
+  if (existing) existing.remove()
+  if (source !== 'parent') return
+  const el = document.createElement('span')
+  el.id = 'mix-source-indicator'
+  el.className = 'mix-source-indicator'
+  el.title = 'Mix hérité du dossier parent'
+  el.textContent = '↑ mix parent'
+  btnSaveMix.parentNode.insertBefore(el, btnSaveMix)
+}
+
+// 30.3 — Sauvegarde du mix courant (tracks uniquement) — ne touche jamais au parent
+async function saveMixTracks() {
   const mixData = { tracks: {} }
   currentTracks.forEach((track, i) => {
     mixData.tracks[track.filename] = {
@@ -1512,13 +1556,6 @@ async function saveMix() {
       pan:    Math.round((panKnobs[i]?.getValue() ?? 0) * 100) / 100,
     }
   })
-  if (activeLoopIn !== null && activeLoopOut !== null) {
-    mixData.loop = { in: activeLoopIn, out: activeLoopOut }
-  }
-  // Epic 17 — sauvegarder les marqueurs
-  if (markers.length > 0) {
-    mixData.markers = markers.map(({ start, end, label }) => ({ in: start, out: end, label }))
-  }
   try {
     const res = await fetch(`/api/mix/${encodePath(grooveSlug)}`, {
       method: 'POST',
@@ -1529,6 +1566,50 @@ async function saveMix() {
   } catch {
     return false
   }
+}
+
+// 30.3 — Sauvegarde du loop courant
+async function saveLoop() {
+  if (activeLoopIn === null || activeLoopOut === null) return true
+  try {
+    const res = await fetch(`/api/loop/${encodePath(grooveSlug)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ in: activeLoopIn, out: activeLoopOut }),
+    })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
+// 30.3 — Sauvegarde des marqueurs courants
+async function saveMarkers() {
+  const markersData = markers.map(({ start, end, label }) => ({ in: start, out: end, label }))
+  try {
+    const res = await fetch(`/api/markers/${encodePath(grooveSlug)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(markersData),
+    })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
+// 30.3 — Sauvegarde complète : mix + loop + markers en parallèle
+// Crée un mix.json local dans le groove (le parent n'est jamais modifié)
+async function saveMix() {
+  const results = await Promise.all([
+    saveMixTracks(),
+    saveLoop(),
+    saveMarkers(),
+  ])
+  const ok = results.every(Boolean)
+  // Effacer l'indicateur "hérité du parent" car il y a maintenant un mix local
+  if (ok) showMixSourceIndicator('groove')
+  return ok
 }
 
 // 20.8 — Voisins restreints au dossier courant du groove
