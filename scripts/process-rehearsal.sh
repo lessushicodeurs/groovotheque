@@ -3,6 +3,8 @@
 # Usage: ./scripts/process-rehearsal.sh [--keep-work] "path/to/dossier"
 set -euo pipefail
 
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
 # ────────────────────────── Helpers ──────────────────────────
 
 RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
@@ -18,6 +20,15 @@ die()  { err "$*"; exit 1; }
 
 next_step() { STEP=$((STEP + 1)); echo; echo -e "${BOLD}── Étape ${STEP}/${TOTAL_STEPS} : $* ──${RESET}"; }
 trim()      { local s="$1"; s="${s#"${s%%[^[:space:]]*}"}"; s="${s%"${s##*[^[:space:]]}"}"; echo "$s"; }
+
+_clear_peaks_cache() {
+  local out_dir_abs out_name groove_relpath peaks
+  out_dir_abs="$(realpath "$1")"
+  out_name="$2"
+  groove_relpath="${out_dir_abs#${PROJECT_ROOT}/grooves/}"
+  peaks="${PROJECT_ROOT}/cache/${groove_relpath}/${out_name}.mp3.peaks.json"
+  rm -f "$peaks"
+}
 
 # ────────────────────────── Dépendances ──────────────────────
 
@@ -801,6 +812,7 @@ convert_output() {
           -b:a "$MP3_BITRATE" \
           -map_metadata -1 \
           "${out_dir}/blabla.mp3"
+        _clear_peaks_cache "$out_dir" "blabla"
         mp3_count=1
       fi
     else
@@ -820,6 +832,7 @@ convert_output() {
           -b:a "$MP3_BITRATE" \
           -map_metadata -1 \
           "$out_mp3"
+        _clear_peaks_cache "$out_dir" "$out_name"
         mp3_count=$((mp3_count + 1))
       done
     fi
