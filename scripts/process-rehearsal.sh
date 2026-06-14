@@ -281,6 +281,7 @@ is_mix_source() {
 KEEP_WORK=false
 SOURCE_DIR=""
 ONLY_TRACK=""
+VERIFY_EFFECTS=false
 
 parse_args() {
   while [[ $# -gt 0 ]]; do
@@ -289,13 +290,14 @@ parse_args() {
       --only-track)
         [[ -z "${2:-}" ]] && die "--only-track attend un nom de piste."
         ONLY_TRACK="$2"; shift 2 ;;
+      --verify-effects) VERIFY_EFFECTS=true; shift ;;
       -*) die "Option inconnue : $1" ;;
       *)
         [[ -n "$SOURCE_DIR" ]] && die "Un seul dossier source attendu."
         SOURCE_DIR="$1"; shift ;;
     esac
   done
-  [[ -z "$SOURCE_DIR" ]] && die "Usage: $0 [--keep-work] [--only-track \"NOM\"] \"path/to/dossier\""
+  [[ -z "$SOURCE_DIR" ]] && die "Usage: $0 [--keep-work] [--only-track \"NOM\"] [--verify-effects] \"path/to/dossier\""
   SOURCE_DIR="$(cd "$SOURCE_DIR" 2>/dev/null && pwd)" || die "Dossier introuvable : $SOURCE_DIR"
 }
 
