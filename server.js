@@ -68,7 +68,7 @@ const AUDIO_EXTENSIONS     = new Set(['.mp3', '.wav', '.flac', '.ogg']);
 const GP_EXTENSIONS        = new Set(['.gp', '.gpx', '.gp5', '.gp4', '.gp8']);
 const ALL_MEDIA_EXTENSIONS = new Set([...AUDIO_EXTENSIONS, ...GP_EXTENSIONS]);
 
-const GROOVES_DIR = path.resolve(__dirname, 'grooves');
+const GROOVES_DIR = path.normalize(path.resolve(__dirname, 'grooves'));
 
 function getTrackDisplayName(filename) {
   const withoutExt = filename.replace(/\.[^.]+$/, '');
@@ -335,6 +335,12 @@ app.get('/api/mix/*', async (req, res) => {
 
   // Ne renvoyer que les tracks (pas loop/markers qui ont leurs propres endpoints)
   const tracks = data.tracks ?? null;
+
+  // Si le fallback parent a été déclenché mais que le mix.json parent ne contient
+  // pas de clé tracks (format corrompu ou monolithique non restructuré), on
+  // retourne _source:'none' pour éviter un indicateur "↑ mix parent" trompeur.
+  if (source === 'parent' && !tracks) return res.json({ _source: 'none' });
+
   res.json({ tracks, _source: source });
 });
 
@@ -377,7 +383,12 @@ app.post('/api/loop/*', async (req, res) => {
   const loopPath = path.join(grooveDir, 'loop.json');
   try {
     const { in: loopIn, out: loopOut } = req.body;
-    await fs.promises.writeFile(loopPath, JSON.stringify({ in: loopIn, out: loopOut }, null, 2), 'utf8');
+    // Si aucune borne fournie (loop effacé côté client), écrire {} pour
+    // représenter "pas de loop" et écraser un éventuel loop.json existant.
+    const loopData = (typeof loopIn === 'number' && typeof loopOut === 'number')
+      ? { in: loopIn, out: loopOut }
+      : {};
+    await fs.promises.writeFile(loopPath, JSON.stringify(loopData, null, 2), 'utf8');
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
