@@ -411,6 +411,7 @@ apply_effects_chain() {
   _flush_audacity_run() {
     local run_json="$1"
     local fp="$2"
+    [[ "$run_json" == "[]" ]] && return 0
     local run_count
     run_count="$(python3 -c "import json,sys; print(len(json.loads(sys.argv[1])))" "$run_json")"
     if [[ "$run_count" -eq 0 ]]; then
@@ -488,6 +489,7 @@ print(json.dumps(run))
 
   # Flusher le dernier groupe Audacity restant (s'il y en a un)
   _flush_audacity_run "$audacity_run_json" "$filepath"
+  audacity_run_json="[]"
 }
 
 # ────────────────────────── Filtre --only-track ──────────────
