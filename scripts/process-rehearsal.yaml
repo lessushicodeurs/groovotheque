@@ -6,20 +6,40 @@ tracks:
 
     "01 BASS":
       effects:
+        - type: normalize
         - type: compress
-          preset: "Bass Guitar"
+          preset: "Brick Wall Master"
+          threshold: -13
+          label: "Ecrête les mutes un peu trop sonores"
         - type: normalize
         - type: compress
           preset: "Bass Guitar"
+          label: "Donne du corps"
         - type: normalize
 
-    "02 GUIT MIX":
+    "02 GUIT DI":
       effects:
         - type: normalize
+        - type: compress
+          preset: "Gentle"
         - type: gain
           db: -8
 
-    "04 KEYS MIX":
+    "03 GUIT MIC":
+      effects:
+        - type: normalize
+        - type: compress
+          preset: "Gentle"
+        - type: gain
+          db: -14
+
+    "04 KEYS L":
+      effects:
+        - type: normalize
+        - type: gain
+          db: -14
+
+    "05 KEYS R":
       effects:
         - type: normalize
         - type: gain
@@ -27,8 +47,11 @@ tracks:
 
     "09 BACKING VOC":
       effects:
+        - type: normalize
         - type: compress
-          preset: "Lead Vocals"
+          preset: "Brick Wall Master"
+          threshold: -13
+          label: "Ecrête les bruits de micros qu'on enlève de la pince"
         - type: normalize
         - type: compress
           preset: "Lead Vocals"
@@ -36,19 +59,18 @@ tracks:
 
     "10 LEAD VOC":
       effects:
+        - type: normalize
+        - type: compress
+          preset: "Brick Wall Master"
+          threshold: -13
+          label: "Ecrête les bruits de micros qu'on enlève de la pince"
+        - type: normalize
         - type: compress
           preset: "Lead Vocals"
         - type: normalize
-          target_db: -2
-        - type: compress
-          preset: "Lead Vocals"
-        - type: normalize
-          target_db: -2
 
     "11 DR KICK":
       effects:
-        - type: compress
-          preset: "Kick Drums"
         - type: normalize
         - type: compress
           preset: "Kick Drums"
@@ -56,18 +78,10 @@ tracks:
 
     "12 DR HH SD":
       effects:
-        - type: compress
-          preset: "Modern"
         - type: normalize
         - type: compress
           preset: "Modern"
         - type: normalize
-
-    "11 DRUMS MIX":
-      effects:
-        - type: pan
-          label: center
-          position: 0
 
   mixes:
 
