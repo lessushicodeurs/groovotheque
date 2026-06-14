@@ -994,10 +994,24 @@ function adjustTrackWidths() {
       const row     = el.parentElement
       const sidebar = row?.querySelector('.track-sidebar')
       if (row && sidebar) {
+        // En layout colonne (tablet/mobile), la sidebar est empilée au-dessus
+        // de la waveform : sidebarW ≈ rowW donc availW ≈ 0. Laisser le CSS
+        // (flex: 1 / width: 100%) gérer la largeur dans ce cas.
+        const rowStyle = window.getComputedStyle(row)
+        if (rowStyle.flexDirection === 'column') {
+          el.style.width = ''
+          return
+        }
         const rowW     = row.getBoundingClientRect().width
         const sidebarW = sidebar.getBoundingClientRect().width
         const availW   = rowW - sidebarW
-        el.style.width = `${(ratio * availW).toFixed(2)}px`
+        if (availW > 0) {
+          el.style.width = `${(ratio * availW).toFixed(2)}px`
+        } else {
+          // DOM masqué ou onglet inactif : getBoundingClientRect() peut
+          // retourner 0. Fallback sur le calc CSS desktop.
+          el.style.width = `calc(${ratio.toFixed(6)} * (100% - 176px))`
+        }
       } else {
         // Fallback: CSS calc with desktop constant
         el.style.width = `calc(${ratio.toFixed(6)} * (100% - 176px))`
