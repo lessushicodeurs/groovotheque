@@ -1,7 +1,4 @@
-import { marked } from '/vendor/marked.esm.js';
-
-const listEl    = document.getElementById('groove-list');
-const tooltipEl = document.getElementById('tooltip');
+const listEl = document.getElementById('groove-list');
 
 // ── Epic 22 — Badges commentaires sur l'index ───────────────────────────
 
@@ -52,96 +49,6 @@ function getCurrentPath() {
   return new URLSearchParams(location.search).get('path') || '';
 }
 
-// ── Tooltip ────────────────────────────────────────────────────────────────
-
-const mdCache = new Map();
-let activeCard = null;
-
-function sanitizeHtml(html) {
-  const tmp = document.createElement('div');
-  tmp.innerHTML = html;
-  tmp.querySelectorAll('script, style, iframe, object, embed').forEach(el => el.remove());
-  for (const el of tmp.querySelectorAll('*')) {
-    for (const { name } of [...el.attributes]) {
-      if (name.startsWith('on') || (name === 'href' && el.getAttribute(name).startsWith('javascript:'))) {
-        el.removeAttribute(name);
-      }
-    }
-  }
-  return tmp.innerHTML;
-}
-
-async function loadMd(groovePath) {
-  if (mdCache.has(groovePath)) return mdCache.get(groovePath);
-  const res = await fetch(`/api/grooves/${encodePath(groovePath)}/md`);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = await res.json();
-  const raw = data.mdContent ? sanitizeHtml(marked.parse(data.mdContent)) : null;
-  const html = raw ? raw.replace(/<table>/g, '<div class="table-wrap"><table>').replace(/<\/table>/g, '</table></div>') : null;
-  mdCache.set(groovePath, html);
-  return html;
-}
-
-function positionTooltip(card) {
-  const rect = card.getBoundingClientRect();
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-  const gap = 12;
-
-  if (vw < 768) {
-    tooltipEl.style.width = `${vw - 2 * gap}px`;
-    tooltipEl.style.left = `${gap}px`;
-    const below = rect.bottom + gap;
-    tooltipEl.style.top = `${below + tooltipEl.offsetHeight <= vh - gap
-      ? below
-      : Math.max(gap, rect.top - tooltipEl.offsetHeight - gap)}px`;
-    return;
-  }
-
-  tooltipEl.style.width = '';
-  let left = rect.right + gap;
-  let top = rect.top;
-
-  if (left + tooltipEl.offsetWidth > vw - gap) {
-    left = rect.left - tooltipEl.offsetWidth - gap;
-  }
-  left = Math.max(gap, Math.min(left, vw - tooltipEl.offsetWidth - gap));
-  if (top + tooltipEl.offsetHeight > vh - gap) {
-    top = vh - tooltipEl.offsetHeight - gap;
-  }
-  top = Math.max(gap, top);
-
-  tooltipEl.style.left = `${left}px`;
-  tooltipEl.style.top = `${top}px`;
-}
-
-async function showTooltip(card, groovePath) {
-  try {
-    const html = await loadMd(groovePath);
-    if (!html || activeCard !== card) return;
-    tooltipEl.innerHTML = html;
-    tooltipEl.style.left = '-9999px';
-    tooltipEl.style.top = '-9999px';
-    tooltipEl.removeAttribute('hidden');
-    tooltipEl.setAttribute('aria-hidden', 'false');
-    positionTooltip(card);
-  } catch {
-    // Erreur transitoire : pas de mise en cache
-  }
-}
-
-function hideTooltip() {
-  activeCard = null;
-  tooltipEl.setAttribute('hidden', '');
-  tooltipEl.setAttribute('aria-hidden', 'true');
-}
-
-document.addEventListener('touchstart', (e) => {
-  if (activeCard && !activeCard.contains(e.target)) hideTooltip();
-}, { passive: true });
-
-document.addEventListener('scroll', hideTooltip, { passive: true });
-
 // ── Cartes ─────────────────────────────────────────────────────────────────
 
 function createGrooveCard(groove) {
@@ -163,30 +70,6 @@ function createGrooveCard(groove) {
   name.className = 'groove-card-name';
   name.textContent = groove.displayName;
   body.appendChild(name);
-
-  if (groove.hasMd) {
-    const note = document.createElement('p');
-    note.className = 'groove-card-note';
-    note.textContent = 'notes disponibles';
-    body.appendChild(note);
-
-    card.addEventListener('mouseenter', () => {
-      activeCard = card;
-      showTooltip(card, groove.path);
-    });
-    card.addEventListener('mouseleave', () => {
-      if (activeCard === card) hideTooltip();
-    });
-
-    card.addEventListener('touchend', (e) => {
-      const tooltipVisible = !tooltipEl.hasAttribute('hidden') && activeCard === card;
-      if (!tooltipVisible) {
-        e.preventDefault();
-        activeCard = card;
-        showTooltip(card, groove.path);
-      }
-    }, { passive: false });
-  }
 
   return card;
 }

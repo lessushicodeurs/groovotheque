@@ -242,98 +242,6 @@ body {
   color: #f0f0f0;
 }
 
-.groove-card-note {
-  margin: 0.35rem 0 0;
-  font-size: 0.75rem;
-  color: #555;
-}
-
-/* ── Tooltip ─────────────────────────────── */
-
-.tooltip {
-  position: fixed;
-  max-width: min(90vw, 680px);
-  background: rgba(16, 16, 16, 0.96);
-  border: 1px solid #2e2e2e;
-  border-radius: 8px;
-  padding: 0.875rem 1rem;
-  color: #ccc;
-  font-size: 0.83rem;
-  line-height: 1.65;
-  pointer-events: none;
-  z-index: 50;
-  backdrop-filter: blur(6px);
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.6);
-}
-
-.tooltip[hidden] {
-  display: none;
-}
-
-.tooltip h1,
-.tooltip h2,
-.tooltip h3 {
-  margin: 0 0 0.5rem;
-  font-size: 0.9rem;
-  font-weight: 700;
-  color: #fff;
-}
-
-.tooltip p {
-  margin: 0.3rem 0;
-}
-
-.tooltip ul,
-.tooltip ol {
-  margin: 0.3rem 0;
-  padding-left: 1.2rem;
-}
-
-.tooltip li {
-  margin: 0.1rem 0;
-}
-
-.tooltip code {
-  background: #222;
-  border-radius: 3px;
-  padding: 0.1em 0.35em;
-  font-size: 0.9em;
-}
-
-.tooltip .table-wrap {
-  overflow-x: auto;
-  width: 100%;
-  margin: 0.4rem 0;
-  scrollbar-width: thin;
-  scrollbar-color: #333 transparent;
-}
-
-.tooltip table {
-  border-collapse: collapse;
-  font-size: 0.78rem;
-  white-space: nowrap;
-  min-width: 100%;
-}
-
-.tooltip th,
-.tooltip td {
-  padding: 0.2rem 0.55rem;
-  border: 1px solid #2e2e2e;
-  text-align: left;
-  vertical-align: top;
-  color: #ccc;
-}
-
-.tooltip th {
-  background: #1a1a1a;
-  color: #e0e0e0;
-  font-weight: 600;
-}
-
-.tooltip tr:nth-child(even) td {
-  background: #181818;
-}
-
 /* ── Player header ───────────────────────── */
 
 .player-header {
@@ -1231,11 +1139,6 @@ body.tab-no-scroll { overflow: hidden; }
 
   .groove-card-name {
     font-size: 1.05rem;
-  }
-
-  /* Tooltip: full width, positioned below card */
-  .tooltip {
-    max-width: calc(100vw - 24px);
   }
 
   /* Player header: hide secondary actions */
