@@ -219,17 +219,21 @@ def _wait_for_tracks(pipe: AudacityPipe, timeout: int = 30) -> bool:
 
 
 def _compressor_command(params: dict) -> str:
-    """Construit la commande Audacity DRC Compressor depuis un dict de paramètres."""
+    """Construit la commande Audacity Compressor depuis un dict de paramètres.
+
+    Noms de paramètres issus de GetInfo: Type=Commands Format=JSON (Audacity 3.x).
+    L'ancien nom DynamicRangeCompressor: n'existe pas — Audacity répond "OK" mais
+    n'applique aucun effet. La commande correcte est Compressor:.
+    """
     return (
-        f"DynamicRangeCompressor: "
-        f"compressorThreshold={params['threshold']} "
-        f"compressorRatio={params['ratio']} "
-        f"compressorAttackTime={params['attack']} "
-        f"compressorReleaseTime={params['release']} "
-        f"compressorKneeWidth={params['knee']} "
+        f"Compressor: "
+        f"thresholdDb={params['threshold']} "
+        f"compressionRatio={params['ratio']} "
+        f"attackMs={params['attack']} "
+        f"releaseMs={params['release']} "
+        f"kneeWidthDb={params['knee']} "
         f"makeupGainDb={params['makeup']} "
-        f"lookaheadMs={params['lookahead']} "
-        f"processorType=0"
+        f"lookaheadMs={params['lookahead']}"
     )
 
 
