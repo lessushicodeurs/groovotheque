@@ -269,22 +269,28 @@ def apply_compress_step(pipe: AudacityPipe, filepath: str, comp_params: dict):
         pipe.send("RemoveTracks:")
         sys.exit(1)
 
+    # Drainer les réponses résiduelles des polls GetInfo de _wait_for_tracks.
+    # Le polling envoie plusieurs GetInfo et peut laisser des réponses non consommées
+    # dans le pipe, décalant la lecture des commandes suivantes.
+    pipe._drain(timeout=1.0)
+
     print(f"    Compress ({comp_params})", flush=True)
     pipe.send("SelectAll:")
-    resp = pipe.send(_compressor_command(comp_params))
+    # DRC sur un long fichier peut prendre plusieurs minutes — timeout 600s (10min).
+    resp = pipe.send(_compressor_command(comp_params), timeout=600.0)
     if _is_failed(resp):
         print(f"    Avertissement compresseur : {resp}", file=sys.stderr)
 
     # Barrière de synchronisation : GetInfo force Audacity à terminer le DRC avant de continuer.
     # Audacity exécute les commandes en séquence — GetInfo ne sera traité qu'une fois DRC
-    # vraiment terminé (y compris son traitement asynchrone interne). Cela remplace
-    # _drain_until_batch_finished qui sortait sur un timeout de 2s, insuffisant si DRC
-    # prenait plus longtemps pour finaliser son traitement.
-    pipe.send("GetInfo: Type=Tracks Format=JSON", timeout=30.0)
+    # vraiment terminé (y compris son traitement asynchrone interne). Timeout 120s : GetInfo
+    # répond normalement en <1s, mais on donne de la marge au cas où DRC a encore des effets
+    # post-traitement (notifications, etc.).
+    pipe.send("GetInfo: Type=Tracks Format=JSON", timeout=120.0)
 
     mtime_before = os.stat(abs_path).st_mtime_ns
 
-    pipe.send_nowait("SelectAll:")
+    pipe.send("SelectAll:")
     resp = pipe.send(f'Export2: Filename="{abs_path}" NumChannels=1')
     if _is_failed(resp):
         print(f"    Avertissement export : {resp}", file=sys.stderr)
@@ -311,6 +317,9 @@ def apply_normalize_step(pipe: AudacityPipe, filepath: str, target_db: float):
         pipe.send_nowait("SelectAll:")
         pipe.send("RemoveTracks:")
         sys.exit(1)
+
+    # Drainer les réponses résiduelles des polls GetInfo de _wait_for_tracks.
+    pipe._drain(timeout=1.0)
 
     print(f"    Normalize: peak {target_db} dBFS", flush=True)
     pipe.send("SelectAll:")
