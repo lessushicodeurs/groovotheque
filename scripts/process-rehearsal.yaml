@@ -4,116 +4,18 @@ audio:
 tracks:
   per_track:
 
-    "01 BASS":
-      effects:
-        - type: normalize
-        - type: compress
-          preset: "Brick Wall Master"
-          threshold: -13
-          label: "Ecrête les mutes un peu trop sonores"
-        - type: normalize
-        - type: compress
-          preset: "Bass Guitar"
-          label: "Donne du corps"
-        - type: normalize
-
-    "02 GUIT DI":
-      effects:
-        - type: normalize
-        - type: compress
-          preset: "Gentle"
-        - type: gain
-          db: -8
-
-    "03 GUIT MIC":
-      effects:
-        - type: normalize
-        - type: compress
-          preset: "Gentle"
-        - type: gain
-          db: -14
-
-    "04 KEYS L":
-      effects:
-        - type: normalize
-        - type: gain
-          db: -14
-
-    "05 KEYS R":
-      effects:
-        - type: normalize
-        - type: gain
-          db: -14
-
-    "09 BACKING VOC":
-      effects:
-        - type: normalize
-        - type: compress
-          preset: "Brick Wall Master"
-          threshold: -13
-          label: "Ecrête les bruits de micros qu'on enlève de la pince"
-        - type: normalize
-        - type: compress
-          preset: "Lead Vocals"
-        - type: normalize
-
-    "10 LEAD VOC":
-      effects:
-        - type: normalize
-        - type: compress
-          preset: "Brick Wall Master"
-          threshold: -13
-          label: "Ecrête les bruits de micros qu'on enlève de la pince"
-        - type: normalize
-        - type: compress
-          preset: "Lead Vocals"
-        - type: normalize
-
-    "11 DR KICK":
-      effects:
-        - type: normalize
-        - type: compress
-          preset: "Kick Drums"
-        - type: normalize
-
-    "12 DR HH SD":
-      effects:
-        - type: normalize
-        - type: compress
-          preset: "Modern"
-        - type: normalize
-
   mixes:
 
-    - output: "02 GUIT MIX"
+    - output: "03 KEYS MIX"
       sources:
-        - file: "02 GUIT DI"
-          pan: 10
-        - file: "03 GUIT MIC"
-          pan: -5
-          gain_db: -15
-    - output: "04 KEYS MIX"
-      sources:
-        - file: "04 KEYS L"
+        - file: "03 KEY L"
           pan: -100
-        - file: "05 KEYS R"
+        - file: "04 KEY R"
           pan: 100
     - output: "11 DRUMS MIX"
       sources:
-        - file: "11 DR KICK"
+        - file: "11 BD"
           pan: 20
-        - file: "12 DR HH SD"
+        - file: "12 SD  HH"
           pan: -20
 
-  exclude:
-
-    - "20 AMBIANCE"
-
-blabla_mix:
-  pans:
-    "01 BASS": 0
-    "02 GUIT MIX": 0
-    "04 KEYS MIX": 0
-    "09 BACKING VOC": 0
-    "10 LEAD VOC": 0
-    "11 DRUMS MIX": 0
