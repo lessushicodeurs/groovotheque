@@ -982,15 +982,40 @@ function adjustTrackWidths() {
     wavesurfers[0]?.emit('redraw')
   }
 
-  // sidebar width is fixed at 176px (matches .track-sidebar { width: 176px })
-  const SIDEBAR_W = 176
-
   waveEls.forEach((el, i) => {
     const ratio = (trackDurations[i] ?? maxDur) / maxDur
     if (ratio < 1) {
       el.style.flex = 'none'
-      // calc uses 100% = track-row width, dynamically correct on resize
-      el.style.width = `calc(${ratio.toFixed(6)} * (100% - ${SIDEBAR_W}px))`
+      // Measure the actual available width at runtime so the calc remains
+      // correct on all screen sizes (desktop sidebar = 176px fixed, but on
+      // tablet/mobile the sidebar becomes a full-width strip and must not be
+      // subtracted).  getBoundingClientRect() reflects the live CSS geometry
+      // after media-query reflows.
+      const row     = el.parentElement
+      const sidebar = row?.querySelector('.track-sidebar')
+      if (row && sidebar) {
+        // En layout colonne (tablet/mobile), la sidebar est empilée au-dessus
+        // de la waveform : sidebarW ≈ rowW donc availW ≈ 0. Laisser le CSS
+        // (flex: 1 / width: 100%) gérer la largeur dans ce cas.
+        const rowStyle = window.getComputedStyle(row)
+        if (rowStyle.flexDirection === 'column') {
+          el.style.width = ''
+          return
+        }
+        const rowW     = row.getBoundingClientRect().width
+        const sidebarW = sidebar.getBoundingClientRect().width
+        const availW   = rowW - sidebarW
+        if (availW > 0) {
+          el.style.width = `${(ratio * availW).toFixed(2)}px`
+        } else {
+          // DOM masqué ou onglet inactif : getBoundingClientRect() peut
+          // retourner 0. Fallback sur le calc CSS desktop.
+          el.style.width = `calc(${ratio.toFixed(6)} * (100% - 176px))`
+        }
+      } else {
+        // Fallback: CSS calc with desktop constant
+        el.style.width = `calc(${ratio.toFixed(6)} * (100% - 176px))`
+      }
     }
   })
 
@@ -2595,5 +2620,16 @@ async function init() {
     showFatalError(`Erreur de chargement : ${err.message}`)
   }
 }
+
+// ── Responsive track widths on resize ─────────────────────────────────────
+// adjustTrackWidths() now measures pixel geometry at runtime, so it must be
+// called again whenever the layout changes (window resize, orientation change).
+;(function initResizeHandler() {
+  let resizeTimer
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer)
+    resizeTimer = setTimeout(adjustTrackWidths, 150)
+  }, { passive: true })
+})()
 
 init()
