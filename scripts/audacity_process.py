@@ -275,17 +275,23 @@ def apply_compress_step(pipe: AudacityPipe, filepath: str, comp_params: dict):
     if _is_failed(resp):
         print(f"    Avertissement compresseur : {resp}", file=sys.stderr)
 
-    # DRC émet une notification différée (jusqu'à ~2s) — on attend le BatchCommand finished
-    # plutôt qu'un simple drain à durée fixe, pour éviter que Export2 lise cette notification.
-    pipe._drain_until_batch_finished(timeout=10.0)
+    # Barrière de synchronisation : GetInfo force Audacity à terminer le DRC avant de continuer.
+    # Audacity exécute les commandes en séquence — GetInfo ne sera traité qu'une fois DRC
+    # vraiment terminé (y compris son traitement asynchrone interne). Cela remplace
+    # _drain_until_batch_finished qui sortait sur un timeout de 2s, insuffisant si DRC
+    # prenait plus longtemps pour finaliser son traitement.
+    pipe.send("GetInfo: Type=Tracks Format=JSON", timeout=30.0)
 
-    mtime_before = os.path.getmtime(abs_path)
+    mtime_before = os.stat(abs_path).st_mtime_ns
 
+    pipe.send_nowait("SelectAll:")
     resp = pipe.send(f'Export2: Filename="{abs_path}" NumChannels=1')
     if _is_failed(resp):
         print(f"    Avertissement export : {resp}", file=sys.stderr)
 
-    if os.path.getmtime(abs_path) <= mtime_before:
+    # Laisser le flush filesystem se propager avant de lire le mtime
+    time.sleep(0.1)
+    if os.stat(abs_path).st_mtime_ns <= mtime_before:
         print(f"    ERREUR : export compress échoué — fichier inchangé sur disque", file=sys.stderr)
 
     pipe.send("SelectAll:")
