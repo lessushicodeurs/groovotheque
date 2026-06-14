@@ -1485,9 +1485,6 @@ async function loadMixTracks(tracks) {
     if (!res.ok) return
     const mix = await res.json()
 
-    // Indicateur discret si le mix vient du parent
-    showMixSourceIndicator(mix._source)
-
     if (mix.tracks && typeof mix.tracks === 'object') {
       tracks.forEach((track, i) => {
         const entry = mix.tracks[track.filename]
@@ -1559,19 +1556,6 @@ async function loadMix(tracks) {
   ])
 }
 
-// 30.3 — Indicateur discret "mix hérité du parent"
-function showMixSourceIndicator(source) {
-  const existing = document.getElementById('mix-source-indicator')
-  if (existing) existing.remove()
-  if (source !== 'parent') return
-  const el = document.createElement('span')
-  el.id = 'mix-source-indicator'
-  el.className = 'mix-source-indicator'
-  el.title = 'Mix hérité du dossier parent'
-  el.textContent = '↑ mix parent'
-  btnSaveMix.parentNode.insertBefore(el, btnSaveMix)
-}
-
 // 30.3 — Sauvegarde du mix courant (tracks uniquement) — ne touche jamais au parent
 async function saveMixTracks() {
   const mixData = { tracks: {} }
@@ -1635,8 +1619,6 @@ async function saveMix() {
     saveMarkers(),
   ])
   const ok = results.every(Boolean)
-  // Effacer l'indicateur "hérité du parent" car il y a maintenant un mix local
-  if (ok) showMixSourceIndicator('groove')
   return ok
 }
 
