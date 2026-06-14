@@ -81,7 +81,7 @@ Entrées FLAC  →  Mix stéréo  →  [Compression]  →  Normalisation  →  D
 
 ---
 
-## Référence de configuration — `rehearsal-config.yaml`
+## Référence de configuration — `process-rehearsal.yaml`
 
 ### Section `audio`
 

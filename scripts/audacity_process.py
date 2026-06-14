@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pilote Audacity via mod-script-pipe pour appliquer compressor → normalize → gain sur des fichiers FLAC."""
+"""Pilote Audacity via mod-script-pipe pour appliquer des effets audio sur des fichiers FLAC."""
 
 import argparse
 import fcntl
@@ -219,23 +219,129 @@ def _wait_for_tracks(pipe: AudacityPipe, timeout: int = 30) -> bool:
 
 
 def _compressor_command(params: dict) -> str:
-    """Construit la commande Audacity DRC Compressor depuis un dict de paramètres."""
+    """Construit la commande Audacity Compressor depuis un dict de paramètres.
+
+    Noms de paramètres issus de GetInfo: Type=Commands Format=JSON (Audacity 3.x).
+    L'ancien nom DynamicRangeCompressor: n'existe pas — Audacity répond "OK" mais
+    n'applique aucun effet. La commande correcte est Compressor:.
+    """
     return (
-        f"DynamicRangeCompressor: "
-        f"compressorThreshold={params['threshold']} "
-        f"compressorRatio={params['ratio']} "
-        f"compressorAttackTime={params['attack']} "
-        f"compressorReleaseTime={params['release']} "
-        f"compressorKneeWidth={params['knee']} "
+        f"Compressor: "
+        f"thresholdDb={params['threshold']} "
+        f"compressionRatio={params['ratio']} "
+        f"attackMs={params['attack']} "
+        f"releaseMs={params['release']} "
+        f"kneeWidthDb={params['knee']} "
         f"makeupGainDb={params['makeup']} "
-        f"lookaheadMs={params['lookahead']} "
-        f"processorType=0"
+        f"lookaheadMs={params['lookahead']}"
     )
+
+
+def resolve_comp_params(preset: str | None, overrides: dict) -> dict | None:
+    """Résout les paramètres de compression depuis un preset + overrides inline."""
+    if preset:
+        if preset not in PRESETS:
+            print(f"Erreur : preset inconnu '{preset}'.\nPresets disponibles :", file=sys.stderr)
+            for name in sorted(PRESETS):
+                print(f"  - {name}", file=sys.stderr)
+            sys.exit(1)
+        params = dict(PRESETS[preset])
+        params.update({k: v for k, v in overrides.items() if v is not None})
+        return params
+
+    provided = {k: v for k, v in overrides.items() if v is not None}
+    if not provided:
+        return None  # Pas de compression
+
+    # Valeurs par défaut si paramètres partiels
+    defaults = {"threshold": -20, "ratio": 3, "attack": 20,
+                "release": 200, "knee": 6, "lookahead": 1, "makeup": 0}
+    return {**defaults, **provided}
+
+
+def apply_compress_step(pipe: AudacityPipe, filepath: str, comp_params: dict):
+    """Applique un step compress via Audacity sur le fichier (in-place)."""
+    abs_path = os.path.abspath(filepath)
+
+    pipe.send_nowait("SelectAll:")
+    pipe.send("RemoveTracks:")
+    pipe.send_nowait(f'Import2: Filename="{abs_path}"')
+
+    if not _wait_for_tracks(pipe):
+        print(f"    Timeout : la piste n'a pas été chargée dans Audacity", file=sys.stderr)
+        pipe.send_nowait("SelectAll:")
+        pipe.send("RemoveTracks:")
+        sys.exit(1)
+
+    # Drainer les réponses résiduelles des polls GetInfo de _wait_for_tracks.
+    # Le polling envoie plusieurs GetInfo et peut laisser des réponses non consommées
+    # dans le pipe, décalant la lecture des commandes suivantes.
+    pipe._drain(timeout=1.0)
+
+    print(f"    Compress ({comp_params})", flush=True)
+    pipe.send("SelectAll:")
+    # DRC sur un long fichier peut prendre plusieurs minutes — timeout 600s (10min).
+    resp = pipe.send(_compressor_command(comp_params), timeout=600.0)
+    if _is_failed(resp):
+        print(f"    Avertissement compresseur : {resp}", file=sys.stderr)
+
+    # Barrière de synchronisation : GetInfo force Audacity à terminer le DRC avant de continuer.
+    # Audacity exécute les commandes en séquence — GetInfo ne sera traité qu'une fois DRC
+    # vraiment terminé (y compris son traitement asynchrone interne). Timeout 120s : GetInfo
+    # répond normalement en <1s, mais on donne de la marge au cas où DRC a encore des effets
+    # post-traitement (notifications, etc.).
+    pipe.send("GetInfo: Type=Tracks Format=JSON", timeout=120.0)
+
+    mtime_before = os.stat(abs_path).st_mtime_ns
+
+    pipe.send("SelectAll:")
+    resp = pipe.send(f'Export2: Filename="{abs_path}" NumChannels=1')
+    if _is_failed(resp):
+        print(f"    Avertissement export : {resp}", file=sys.stderr)
+
+    # Laisser le flush filesystem se propager avant de lire le mtime
+    time.sleep(0.1)
+    if os.stat(abs_path).st_mtime_ns <= mtime_before:
+        print(f"    ERREUR : export compress échoué — fichier inchangé sur disque", file=sys.stderr)
+
+    pipe.send("SelectAll:")
+    pipe.send("RemoveTracks:")
+
+
+def apply_normalize_step(pipe: AudacityPipe, filepath: str, target_db: float):
+    """Applique un step normalize via Audacity sur le fichier (in-place)."""
+    abs_path = os.path.abspath(filepath)
+
+    pipe.send_nowait("SelectAll:")
+    pipe.send("RemoveTracks:")
+    pipe.send_nowait(f'Import2: Filename="{abs_path}"')
+
+    if not _wait_for_tracks(pipe):
+        print(f"    Timeout : la piste n'a pas été chargée dans Audacity", file=sys.stderr)
+        pipe.send_nowait("SelectAll:")
+        pipe.send("RemoveTracks:")
+        sys.exit(1)
+
+    # Drainer les réponses résiduelles des polls GetInfo de _wait_for_tracks.
+    pipe._drain(timeout=1.0)
+
+    print(f"    Normalize: peak {target_db} dBFS", flush=True)
+    pipe.send("SelectAll:")
+    resp = pipe.send(f"Normalize: PeakLevel={target_db} ApplyGain=True RemoveDcOffset=False StereoIndependent=False")
+    if _is_failed(resp):
+        print(f"    Avertissement normalize : {resp}", file=sys.stderr)
+
+    resp = pipe.send(f'Export2: Filename="{abs_path}" NumChannels=1')
+    if _is_failed(resp):
+        print(f"    Avertissement export : {resp}", file=sys.stderr)
+
+    pipe.send("SelectAll:")
+    pipe.send("RemoveTracks:")
 
 
 def process_file(pipe: AudacityPipe, filepath: str, comp_params: dict | None,
                  normalize_db: float, gain_db: float, multi_pass: int = 1):
-    """Applique (compressor → normalize) × multi_pass → gain sur un fichier FLAC via le pipe."""
+    """[LEGACY] Applique (compressor → normalize) × multi_pass → gain sur un fichier FLAC via le pipe."""
     abs_path = os.path.abspath(filepath)
     print(f"  Traitement : {os.path.basename(filepath)}", flush=True)
 
@@ -300,13 +406,75 @@ def process_file(pipe: AudacityPipe, filepath: str, comp_params: dict | None,
     print(f"    ✓ {os.path.basename(filepath)}", flush=True)
 
 
+# ─────────────────────────── Mode step ─────────────────────────
+
+def run_step_mode(args):
+    """Mode step : applique un unique step (compress ou normalize) sur un fichier."""
+    step_type = args.step
+
+    if step_type == "compress":
+        overrides = {
+            "threshold": args.threshold,
+            "ratio":     args.ratio,
+            "attack":    args.attack,
+            "release":   args.release,
+            "knee":      args.knee,
+            "lookahead": args.lookahead,
+            "makeup":    args.makeup,
+        }
+        comp_params = resolve_comp_params(args.preset, overrides)
+        if comp_params is None:
+            print("Erreur : step compress sans preset ni paramètres.", file=sys.stderr)
+            sys.exit(1)
+    elif step_type == "normalize":
+        pass  # target_db déjà dans args.normalize
+    else:
+        print(f"Erreur fatale : type de step inconnu '{step_type}'.", file=sys.stderr)
+        sys.exit(1)
+
+    _ensure_audacity_running()
+    pipe = AudacityPipe()
+    try:
+        # Ping de réactivité avec retry
+        resp = None
+        for _ in range(6):
+            resp = pipe.send("GetInfo: Type=Tracks Format=JSON", timeout=5.0)
+            if resp is not None:
+                break
+            time.sleep(1)
+        if resp is None:
+            print(
+                "Erreur : Audacity ne répond pas dans les 30s.\n"
+                "  → Si un dialogue s'affiche dans Audacity (récupération de projet, etc.),\n"
+                "    cliquez 'Passer' ou fermez-le, puis relancez le script.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        for filepath in args.files:
+            if not os.path.isfile(filepath):
+                print(f"Fichier introuvable : {filepath}", file=sys.stderr)
+                sys.exit(1)
+            print(f"  [{step_type}] {os.path.basename(filepath)}", flush=True)
+            if step_type == "compress":
+                apply_compress_step(pipe, filepath, comp_params)
+            elif step_type == "normalize":
+                apply_normalize_step(pipe, filepath, args.normalize)
+            print(f"    ✓ {os.path.basename(filepath)}", flush=True)
+    finally:
+        pipe.close()
+
+
 # ─────────────────────────── CLI ───────────────────────────────
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Applique compressor → normalize → gain via Audacity mod-script-pipe."
+        description="Applique des effets audio via Audacity mod-script-pipe."
     )
-    # Preset ou paramètres directs
+    # Mode step (nouveau)
+    parser.add_argument("--step", choices=["compress", "normalize"],
+                        help="Applique un unique step (compress ou normalize)")
+    # Preset ou paramètres directs (compress)
     parser.add_argument("--preset", help="Nom du preset de compression Audacity")
     parser.add_argument("--threshold", type=float, help="Seuil (dBFS)")
     parser.add_argument("--ratio",    type=float, help="Ratio de compression")
@@ -315,22 +483,22 @@ def parse_args():
     parser.add_argument("--knee",     type=float, help="Knee (dB)")
     parser.add_argument("--lookahead", type=float, help="Lookahead (ms)")
     parser.add_argument("--makeup",   type=float, help="Makeup gain (dB)")
-    # Multi-pass
+    # Multi-pass (mode legacy)
     parser.add_argument("--multi-pass", type=int, default=1,
-                        help="Nombre de passes compressor+normalize (défaut 1)")
+                        help="Nombre de passes compressor+normalize (défaut 1) [mode legacy]")
     # Normalisation
     parser.add_argument("--normalize", type=float, default=-1.0,
                         help="Niveau peak cible (dBFS, défaut -1)")
-    # Gain additionnel
+    # Gain additionnel (mode legacy)
     parser.add_argument("--gain", type=float, default=0.0,
-                        help="Gain additionnel après normalisation (dB)")
+                        help="Gain additionnel après normalisation (dB) [mode legacy]")
     # Fichiers
     parser.add_argument("files", nargs="+", help="Fichiers FLAC à traiter")
     return parser.parse_args()
 
 
 def resolve_compression(args) -> dict | None:
-    """Résout les paramètres de compression depuis le preset ou les flags directs."""
+    """Résout les paramètres de compression depuis le preset ou les flags directs [mode legacy]."""
     if args.preset:
         if args.preset not in PRESETS:
             print(f"Erreur : preset inconnu '{args.preset}'.\nPresets disponibles :", file=sys.stderr)
@@ -360,6 +528,13 @@ def resolve_compression(args) -> dict | None:
 
 def main():
     args = parse_args()
+
+    # Mode step : applique un unique effet
+    if args.step:
+        run_step_mode(args)
+        return
+
+    # Mode legacy : compressor → normalize → gain (multi-pass)
     comp_params = resolve_compression(args)
 
     _ensure_audacity_running()

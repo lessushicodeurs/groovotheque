@@ -28,7 +28,7 @@ check_deps() {
   for cmd in ffmpeg ffprobe bc; do
     command -v "$cmd" &>/dev/null || die "$cmd est requis mais introuvable."
   done
-  if command -v python3 &>/dev/null && python3 -c "import yaml" &>/dev/null 2>&1; then
+  if command -v python3 &>/dev/null && python3 -c "import yaml, json" &>/dev/null 2>&1; then
     YAML_PARSER="python3"
   elif command -v yq &>/dev/null; then
     YAML_PARSER="yq"
@@ -45,31 +45,30 @@ check_deps() {
 # ────────────────────────── Config YAML ──────────────────────
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_FILE="${SCRIPT_DIR}/rehearsal-config.yaml"
+CONFIG_FILE="${SCRIPT_DIR}/process-rehearsal.yaml"
 
 # Variables remplies par load_config
-MP3_BITRATE="" NORMALIZE_PEAK_DB=""
+MP3_BITRATE=""
 MIXES_COUNT=0
 EXCLUDES_COUNT=0
-# MIX_<i>_OUTPUT, MIX_<i>_SRC_COUNT, MIX_<i>_SRC_<j>_FILE, MIX_<i>_SRC_<j>_PAN
+# MIX_<i>_OUTPUT, MIX_<i>_SRC_COUNT, MIX_<i>_SRC_<j>_FILE, MIX_<i>_SRC_<j>_PAN, MIX_<i>_SRC_<j>_GAIN
 # EXCLUDE_<i>
 # MIX_ALL_SOURCES : tableau plat de tous les fichiers sources des mixes
 
 MIX_ALL_SOURCES=()
 
 # Tables de réglages par piste (clé = nom de piste sans extension)
-declare -A TRACK_NORMALIZE_DB=()     # normalize_peak_db par piste (surcharge le global)
-declare -A TRACK_GAIN_DB=()          # gain additionnel après normalisation
-declare -A TRACK_COMP_PRESET=()      # nom du preset de compression Audacity (vide = pas de compression)
-declare -A TRACK_COMP_PARAMS=()      # paramètres directs "threshold:ratio:attack:release:knee:lookahead:makeup"
-declare -A TRACK_COMP_MULTI_PASS=()  # nombre de passes compressor+normalize (défaut 1)
-declare -A BLABLA_PANS=()            # pan par piste pour les segments blabla (-100..+100)
+# TRACK_EFFECTS_JSON[name] = JSON array des steps effects
+declare -A TRACK_EFFECTS_JSON=()
+declare -A BLABLA_PANS=()
 
 load_config_python() {
   local cfg="$1"
   # Un seul appel Python; toutes les sorties sont évaluées via eval
   eval "$(REHEARSAL_CONFIG="$cfg" python3 - <<'PYEOF'
-import yaml, os, sys
+import yaml, json, os, sys
+
+KNOWN_TYPES = {"compress", "normalize", "gain", "pan"}
 
 cfg_path = os.environ['REHEARSAL_CONFIG']
 with open(cfg_path) as f:
@@ -80,8 +79,11 @@ audio = cfg.get('audio', {})
 def sh(val):
     return str(val).replace("'", "'\\''")
 
+def json_sh(val):
+    """Sérialise en JSON et échappe pour le shell single-quote."""
+    return json.dumps(val).replace("'", "'\\''")
+
 print(f"MP3_BITRATE='{sh(audio.get('mp3_bitrate','320k'))}'")
-print(f"NORMALIZE_PEAK_DB='{sh(audio.get('normalize_peak_db',-1))}'")
 
 tracks = cfg.get('tracks', {})
 mixes  = tracks.get('mixes', [])
@@ -105,26 +107,44 @@ per_track = tracks.get('per_track') or {}
 print(f"PER_TRACK_COUNT='{len(per_track)}'")
 for i, (name, settings) in enumerate(per_track.items()):
     s = settings or {}
-    c = s.get('compression') or {}
+    effects = s.get('effects')
+
     print(f"PER_TRACK_{i}_NAME='{sh(name)}'")
-    print(f"PER_TRACK_{i}_GAIN='{sh(s.get('gain_db',0))}'")
-    print(f"PER_TRACK_{i}_NORMALIZE_DB='{sh(s.get('normalize_peak_db',''))}'")
-    # Compression : preset ou paramètres directs
-    preset = c.get('preset', '')
-    print(f"PER_TRACK_{i}_COMP_PRESET='{sh(preset)}'")
-    # Paramètres directs (noms sans suffixe _db/_ms, accepte aussi les anciens noms)
-    thr  = c.get('threshold', c.get('threshold_db', ''))
-    rat  = c.get('ratio', '')
-    atk  = c.get('attack',  c.get('attack_ms', ''))
-    rel  = c.get('release', c.get('release_ms', ''))
-    kne  = c.get('knee',    c.get('knee_db', ''))
-    lkh  = c.get('lookahead', '')
-    mkp  = c.get('makeup', '')
-    has_direct = not preset and any(str(v) != '' for v in [thr, rat, atk, rel, kne])
-    params_str = f"{thr}:{rat}:{atk}:{rel}:{kne}:{lkh}:{mkp}" if has_direct else ''
-    print(f"PER_TRACK_{i}_COMP_PARAMS='{sh(params_str)}'")
-    multi_pass = s.get('multi_pass', 1)
-    print(f"PER_TRACK_{i}_COMP_MULTI_PASS='{sh(multi_pass)}'")
+
+    if effects is None:
+        # Pas de bloc effects → warning sera émis par le shell, JSON vide
+        print(f"PER_TRACK_{i}_HAS_EFFECTS='false'")
+        print(f"PER_TRACK_{i}_EFFECTS_JSON='[]'")
+        continue
+
+    # Valider et normaliser chaque step
+    validated = []
+    for step_idx, step in enumerate(effects):
+        step_type = step.get('type')
+        if step_type not in KNOWN_TYPES:
+            print(f"FATAL_ERROR='type inconnu au step {step_idx + 1} de la piste {name}: \"{step_type}\". Types supportés : {sorted(KNOWN_TYPES)}'")
+            print(f"PER_TRACK_{i}_HAS_EFFECTS='false'")
+            print(f"PER_TRACK_{i}_EFFECTS_JSON='[]'")
+            break
+
+        if step_type == 'gain' and 'db' not in step:
+            print(f"FATAL_ERROR='step gain sans champ db obligatoire (piste {name}, step {step_idx + 1})'")
+            print(f"PER_TRACK_{i}_HAS_EFFECTS='false'")
+            print(f"PER_TRACK_{i}_EFFECTS_JSON='[]'")
+            break
+
+        if step_type == 'pan' and 'position' not in step:
+            print(f"FATAL_ERROR='step pan sans champ position obligatoire (piste {name}, step {step_idx + 1})'")
+            print(f"PER_TRACK_{i}_HAS_EFFECTS='false'")
+            print(f"PER_TRACK_{i}_EFFECTS_JSON='[]'")
+            break
+
+        validated.append(step)
+    else:
+        # Tous les steps sont valides
+        print(f"PER_TRACK_{i}_HAS_EFFECTS='true'")
+        print(f"PER_TRACK_{i}_EFFECTS_JSON='{json_sh(validated)}'")
+
 blabla_pans = (cfg.get('blabla_mix') or {}).get('pans') or {}
 print(f"BLABLA_PANS_COUNT='{len(blabla_pans)}'")
 for i, (name, pan) in enumerate(blabla_pans.items()):
@@ -137,7 +157,6 @@ PYEOF
 load_config_yq() {
   local cfg="$1"
   MP3_BITRATE="$(yq e '.audio.mp3_bitrate' "$cfg")"
-  NORMALIZE_PEAK_DB="$(yq e '.audio.normalize_peak_db' "$cfg")"
   MIXES_COUNT="$(yq e '.tracks.mixes | length' "$cfg")"
   for ((i=0; i<MIXES_COUNT; i++)); do
     declare -g "MIX_${i}_OUTPUT=$(yq e ".tracks.mixes[${i}].output" "$cfg")"
@@ -147,11 +166,29 @@ load_config_yq() {
     for ((j=0; j<sc; j++)); do
       declare -g "MIX_${i}_SRC_${j}_FILE=$(yq e ".tracks.mixes[${i}].sources[${j}].file" "$cfg")"
       declare -g "MIX_${i}_SRC_${j}_PAN=$(yq e ".tracks.mixes[${i}].sources[${j}].pan" "$cfg")"
+      declare -g "MIX_${i}_SRC_${j}_GAIN=$(yq e ".tracks.mixes[${i}].sources[${j}].gain_db // 0" "$cfg")"
     done
   done
   EXCLUDES_COUNT="$(yq e '.tracks.exclude | length' "$cfg")"
   for ((i=0; i<EXCLUDES_COUNT; i++)); do
     declare -g "EXCLUDE_${i}=$(yq e ".tracks.exclude[${i}]" "$cfg")"
+  done
+  # yq : lire effects par piste
+  local ptc
+  ptc="$(yq e '.tracks.per_track | keys | length' "$cfg")"
+  declare -g "PER_TRACK_COUNT=${ptc}"
+  for ((i=0; i<ptc; i++)); do
+    local name
+    name="$(yq e ".tracks.per_track | keys | .[${i}]" "$cfg")"
+    declare -g "PER_TRACK_${i}_NAME=${name}"
+    local effects_json
+    effects_json="$(yq e ".tracks.per_track.\"${name}\".effects // []" -o=json "$cfg")"
+    if [[ "$effects_json" == "[]" ]]; then
+      declare -g "PER_TRACK_${i}_HAS_EFFECTS=false"
+    else
+      declare -g "PER_TRACK_${i}_HAS_EFFECTS=true"
+    fi
+    declare -g "PER_TRACK_${i}_EFFECTS_JSON=${effects_json}"
   done
   BLABLA_PANS_COUNT=0
   while IFS='=' read -r key val; do
@@ -170,6 +207,11 @@ load_config() {
     load_config_yq "$CONFIG_FILE"
   fi
 
+  # Vérifier erreur fatale signalée par le parser Python
+  if [[ -n "${FATAL_ERROR:-}" ]]; then
+    die "Erreur fatale dans le config : ${FATAL_ERROR}"
+  fi
+
   # Construire MIX_ALL_SOURCES (fichiers sources consommés par les mixes)
   MIX_ALL_SOURCES=()
   for ((mi=0; mi<MIXES_COUNT; mi++)); do
@@ -182,25 +224,18 @@ load_config() {
   done
 
   # Peupler les tables de réglages par piste
-  TRACK_NORMALIZE_DB=()
-  TRACK_GAIN_DB=()
-  TRACK_COMP_PRESET=()
-  TRACK_COMP_PARAMS=()
-  TRACK_COMP_MULTI_PASS=()
+  TRACK_EFFECTS_JSON=()
   local ptc="${PER_TRACK_COUNT:-0}"
   for ((i=0; i<ptc; i++)); do
     local n_var="PER_TRACK_${i}_NAME"
-    local g_var="PER_TRACK_${i}_GAIN"
-    local nd_var="PER_TRACK_${i}_NORMALIZE_DB"
-    local cp_var="PER_TRACK_${i}_COMP_PRESET"
-    local cpa_var="PER_TRACK_${i}_COMP_PARAMS"
-    local cmp_var="PER_TRACK_${i}_COMP_MULTI_PASS"
+    local he_var="PER_TRACK_${i}_HAS_EFFECTS"
+    local ej_var="PER_TRACK_${i}_EFFECTS_JSON"
     local name="${!n_var}"
-    TRACK_GAIN_DB["$name"]="${!g_var}"
-    TRACK_NORMALIZE_DB["$name"]="${!nd_var}"
-    TRACK_COMP_PRESET["$name"]="${!cp_var}"
-    TRACK_COMP_PARAMS["$name"]="${!cpa_var}"
-    TRACK_COMP_MULTI_PASS["$name"]="${!cmp_var}"
+    local has_effects="${!he_var:-false}"
+    TRACK_EFFECTS_JSON["$name"]="${!ej_var:-[]}"
+    if [[ "$has_effects" != "true" ]]; then
+      warn "[WARN] Piste '${name}' sans bloc effects: — passthrough silencieux"
+    fi
   done
 
   # Peupler la table de pans blabla
@@ -331,6 +366,139 @@ setup_dirs() {
   done
 }
 
+# ────────────────────────── Moteur d'effets ──────────────────
+
+# Applique la chaîne d'effets d'une piste sur un fichier FLAC.
+# Entrée : fichier courant ; sortie : même fichier modifié in-place.
+# Les steps compress et normalize passent par Audacity (audacity_process.py --step).
+# Les steps gain et pan passent directement par ffmpeg.
+apply_effects_chain() {
+  local name="$1"
+  local filepath="$2"   # fichier FLAC de travail (sera modifié in-place)
+  local effects_json="${TRACK_EFFECTS_JSON[$name]:-[]}"
+
+  if [[ "$effects_json" == "[]" ]]; then
+    return
+  fi
+
+  local step_count
+  step_count="$(python3 -c "import json,sys; print(len(json.loads(sys.argv[1])))" "$effects_json")"
+
+  local SCRIPT_PY="${SCRIPT_DIR}/audacity_process.py"
+
+  for ((si=0; si<step_count; si++)); do
+    local step_json
+    step_json="$(python3 -c "import json,sys; print(json.dumps(json.loads(sys.argv[1])[int(sys.argv[2])]))" "$effects_json" "$si")"
+
+    local step_type
+    step_type="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['type'])" "$step_json")"
+
+    log "    [${name}] step $((si+1))/${step_count} : ${step_type}"
+
+    case "$step_type" in
+
+      compress)
+        # Lire preset et overrides inline
+        local preset
+        preset="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('preset',''))" "$step_json")"
+        local py_args=(--step compress)
+        [[ -n "$preset" ]] && py_args+=(--preset "$preset")
+        # Overrides inline
+        for param in threshold ratio attack release knee lookahead makeup; do
+          local val
+          val="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get(sys.argv[2],''))" "$step_json" "$param")"
+          [[ -n "$val" ]] && py_args+=(--"$param" "$val")
+        done
+        [[ -f "$SCRIPT_PY" ]] || die "Script introuvable : $SCRIPT_PY"
+        python3 "$SCRIPT_PY" "${py_args[@]}" "$filepath"
+        ;;
+
+      normalize)
+        local target_db
+        target_db="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('target_db', -1))" "$step_json")"
+        [[ -f "$SCRIPT_PY" ]] || die "Script introuvable : $SCRIPT_PY"
+        python3 "$SCRIPT_PY" --step normalize --normalize "$target_db" "$filepath"
+        ;;
+
+      gain)
+        local db
+        db="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d['db'])" "$step_json")"
+        local tmp_flac="${filepath%.flac}_gain_tmp.flac"
+        ffmpeg -y -hide_banner -loglevel warning \
+          -i "$filepath" \
+          -af "volume=${db}dB" \
+          "$tmp_flac"
+        mv "$tmp_flac" "$filepath"
+        ok "    → gain ${db} dB appliqué"
+        ;;
+
+      pan)
+        local position
+        position="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d['position'])" "$step_json")"
+        local gain_l gain_r
+        gain_l="$(python3 -c "print((100 - ${position}) / 100)")"
+        gain_r="$(python3 -c "print((100 + ${position}) / 100)")"
+        local tmp_flac="${filepath%.flac}_pan_tmp.flac"
+        ffmpeg -y -hide_banner -loglevel warning \
+          -i "$filepath" \
+          -af "aformat=channel_layouts=stereo,pan=stereo|c0=${gain_l}*c0|c1=${gain_r}*c0" \
+          "$tmp_flac"
+        mv "$tmp_flac" "$filepath"
+        ok "    → pan ${position} appliqué"
+        ;;
+
+      *)
+        die "Erreur fatale : type d'effet inconnu '${step_type}' (piste '${name}'). Types supportés : compress, normalize, gain, pan."
+        ;;
+    esac
+  done
+}
+
+# ────────────────────────── Traitement des pistes ────────────
+
+ALL_TRACK_PATHS=()
+ALL_TRACK_NAMES=()
+
+compress_normalize() {
+  next_step "Application de la chaîne d'effets"
+
+  # Toutes les pistes (hors exclus) sont traitées, y compris les sources de mixes
+  local all_sources=()
+  local all_names=()
+  for fpath in "${FLAC_FILES[@]}"; do
+    local fname_no_ext
+    fname_no_ext="$(basename "${fpath%.flac}")"
+    if is_excluded "$fname_no_ext"; then
+      warn "Piste exclue : ${fname_no_ext}"
+      continue
+    fi
+    all_sources+=("$fpath")
+    all_names+=("$fname_no_ext")
+    if ! is_mix_source "$fname_no_ext"; then
+      ALL_TRACK_PATHS+=("$fpath")
+      ALL_TRACK_NAMES+=("$fname_no_ext")
+    fi
+  done
+  # Les pistes mixées seront ajoutées à ALL_TRACK_PATHS/NAMES par build_mixes()
+
+  [[ ${#all_sources[@]} -gt 0 ]] || die "Aucune piste à traiter après filtrage."
+  ok "${#all_sources[@]} piste(s) à traiter"
+
+  for ((ti=0; ti<${#all_sources[@]}; ti++)); do
+    local src="${all_sources[$ti]}"
+    local name="${all_names[$ti]}"
+
+    # Copier la source vers le dossier normalized
+    local dest="${WORK_DIR}/normalized/${name}.flac"
+    cp "$src" "$dest"
+
+    # Appliquer la chaîne d'effets
+    apply_effects_chain "$name" "$dest"
+
+    ok "  → ${name}.flac"
+  done
+}
+
 # ────────────────────────── Mix stéréo ───────────────────────
 
 MIX_OUTPUT_PATHS=()
@@ -386,92 +554,11 @@ build_mixes() {
       -map "[out]" "$out_path"
     ok "→ ${output_name}.flac"
 
+    # Appliquer la chaîne d'effets du mix (si définie)
+    apply_effects_chain "$output_name" "$out_path"
+
     ALL_TRACK_PATHS+=("$out_path")
     ALL_TRACK_NAMES+=("$output_name")
-  done
-}
-
-# ────────────────────────── Traitement Audacity ──────────────
-
-ALL_TRACK_PATHS=()
-ALL_TRACK_NAMES=()
-
-compress_normalize() {
-  next_step "Traitement Audacity (compressor → normalize → gain)"
-
-  local SCRIPT_PY="${SCRIPT_DIR}/audacity_process.py"
-  [[ -f "$SCRIPT_PY" ]] || die "Script introuvable : $SCRIPT_PY"
-
-  # Toutes les pistes (hors exclus) sont traitées, y compris les sources de mixes
-  local all_sources=()
-  local all_names=()
-  for fpath in "${FLAC_FILES[@]}"; do
-    local fname_no_ext
-    fname_no_ext="$(basename "${fpath%.flac}")"
-    if is_excluded "$fname_no_ext"; then
-      warn "Piste exclue : ${fname_no_ext}"
-      continue
-    fi
-    all_sources+=("$fpath")
-    all_names+=("$fname_no_ext")
-    if ! is_mix_source "$fname_no_ext"; then
-      ALL_TRACK_PATHS+=("$fpath")
-      ALL_TRACK_NAMES+=("$fname_no_ext")
-    fi
-  done
-  # Les pistes mixées seront ajoutées à ALL_TRACK_PATHS/NAMES par build_mixes()
-
-  [[ ${#all_sources[@]} -gt 0 ]] || die "Aucune piste à traiter après filtrage."
-  ok "${#all_sources[@]} piste(s) à traiter"
-
-  for ((ti=0; ti<${#all_sources[@]}; ti++)); do
-    local src="${all_sources[$ti]}"
-    local name="${all_names[$ti]}"
-
-    # Copier la source vers le dossier normalized (audacity_process.py exporte sur place)
-    local dest="${WORK_DIR}/normalized/${name}.flac"
-    cp "$src" "$dest"
-
-    # Construire les arguments pour audacity_process.py
-    local py_args=()
-
-    # Compression (optionnel — preset ou paramètres directs)
-    local preset="${TRACK_COMP_PRESET[$name]:-}"
-    local params="${TRACK_COMP_PARAMS[$name]:-}"
-    if [[ -n "$preset" ]]; then
-      py_args+=(--preset "$preset")
-      log "  ${name} : compression preset='${preset}'"
-    elif [[ -n "$params" ]]; then
-      IFS=':' read -r p_thr p_rat p_atk p_rel p_kne p_lkh p_mkp <<< "$params"
-      [[ -n "$p_thr" ]] && py_args+=(--threshold "$p_thr")
-      [[ -n "$p_rat" ]] && py_args+=(--ratio     "$p_rat")
-      [[ -n "$p_atk" ]] && py_args+=(--attack    "$p_atk")
-      [[ -n "$p_rel" ]] && py_args+=(--release   "$p_rel")
-      [[ -n "$p_kne" ]] && py_args+=(--knee      "$p_kne")
-      [[ -n "$p_lkh" ]] && py_args+=(--lookahead "$p_lkh")
-      [[ -n "$p_mkp" ]] && py_args+=(--makeup    "$p_mkp")
-      log "  ${name} : compression directe [thr=${p_thr} rat=${p_rat}]"
-    fi
-
-    # Normalisation (toujours — valeur globale ou surcharge par piste)
-    local norm_db="${TRACK_NORMALIZE_DB[$name]:-}"
-    [[ -z "$norm_db" ]] && norm_db="$NORMALIZE_PEAK_DB"
-    py_args+=(--normalize "$norm_db")
-
-    # Gain additionnel (optionnel)
-    local extra_gain="${TRACK_GAIN_DB[$name]:-0}"
-    if [[ "$extra_gain" != "0" && -n "$extra_gain" ]]; then
-      py_args+=(--gain "$extra_gain")
-    fi
-
-    # Multi-pass (optionnel — 1 par défaut)
-    local multi_pass="${TRACK_COMP_MULTI_PASS[$name]:-1}"
-    if [[ -n "$multi_pass" && "$multi_pass" -gt 1 ]]; then
-      py_args+=(--multi-pass "$multi_pass")
-    fi
-
-    python3 "$SCRIPT_PY" "${py_args[@]}" "$dest"
-    ok "  → ${name}.flac"
   done
 }
 
