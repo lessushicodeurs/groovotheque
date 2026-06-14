@@ -269,18 +269,22 @@ is_mix_source() {
 
 KEEP_WORK=false
 SOURCE_DIR=""
+ONLY_TRACK=""
 
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --keep-work) KEEP_WORK=true; shift ;;
+      --only-track)
+        [[ -z "${2:-}" ]] && die "--only-track attend un nom de piste."
+        ONLY_TRACK="$2"; shift 2 ;;
       -*) die "Option inconnue : $1" ;;
       *)
         [[ -n "$SOURCE_DIR" ]] && die "Un seul dossier source attendu."
         SOURCE_DIR="$1"; shift ;;
     esac
   done
-  [[ -z "$SOURCE_DIR" ]] && die "Usage: $0 [--keep-work] \"path/to/dossier\""
+  [[ -z "$SOURCE_DIR" ]] && die "Usage: $0 [--keep-work] [--only-track \"NOM\"] \"path/to/dossier\""
   SOURCE_DIR="$(cd "$SOURCE_DIR" 2>/dev/null && pwd)" || die "Dossier introuvable : $SOURCE_DIR"
 }
 
@@ -403,9 +407,11 @@ apply_effects_chain() {
         preset="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('preset',''))" "$step_json")"
         local py_args=(--step compress)
         [[ -n "$preset" ]] && py_args+=(--preset "$preset")
-        # Overrides inline
-        for param in threshold ratio attack release knee lookahead makeup; do
-          local val
+        # Overrides inline (threshold_db accepté comme alias de threshold)
+        local val
+        val="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('threshold_db', d.get('threshold','')))" "$step_json")"
+        [[ -n "$val" ]] && py_args+=(--threshold "$val")
+        for param in ratio attack release knee lookahead makeup; do
           val="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get(sys.argv[2],''))" "$step_json" "$param")"
           [[ -n "$val" ]] && py_args+=(--"$param" "$val")
         done
@@ -454,6 +460,66 @@ apply_effects_chain() {
   done
 }
 
+# ────────────────────────── Filtre --only-track ──────────────
+
+declare -A TRACKS_TO_PROCESS=()   # vide = toutes les pistes
+declare -A MIXES_TO_PROCESS_SET=() # vide = tous les mixes
+
+resolve_only_track_scope() {
+  [[ -z "$ONLY_TRACK" ]] && return
+
+  # Chercher la piste dans per_track ET dans les sorties de mixes
+  local found=false
+
+  # 1. Piste per_track directe
+  for ((i=0; i<PER_TRACK_COUNT; i++)); do
+    local n_var="PER_TRACK_${i}_NAME"
+    if [[ "${!n_var}" == "$ONLY_TRACK" ]]; then found=true; break; fi
+  done
+
+  # 2. Ou sortie de mix (ex: "02 GUIT MIX")
+  for ((mi=0; mi<MIXES_COUNT; mi++)); do
+    local out_var="MIX_${mi}_OUTPUT"
+    if [[ "${!out_var}" == "$ONLY_TRACK" ]]; then found=true; break; fi
+  done
+
+  [[ "$found" == false ]] && die "--only-track : piste inconnue \"${ONLY_TRACK}\". Vérifier le nom dans process-rehearsal.yaml."
+
+  TRACKS_TO_PROCESS["$ONLY_TRACK"]=1
+
+  # Trouver les mixes qui contiennent cette piste comme source ou qui ont ce nom comme sortie
+  for ((mi=0; mi<MIXES_COUNT; mi++)); do
+    local out_var="MIX_${mi}_OUTPUT"
+    local sc_var="MIX_${mi}_SRC_COUNT"
+    local n_sources="${!sc_var}"
+    local in_mix=false
+
+    # Piste est une source du mix ?
+    for ((j=0; j<n_sources; j++)); do
+      local fvar="MIX_${mi}_SRC_${j}_FILE"
+      if [[ "${!fvar}" == "$ONLY_TRACK" ]]; then in_mix=true; break; fi
+    done
+    # Piste est la sortie du mix elle-même ?
+    if [[ "${!out_var}" == "$ONLY_TRACK" ]]; then in_mix=true; fi
+
+    if [[ "$in_mix" == true ]]; then
+      MIXES_TO_PROCESS_SET[$mi]=1
+      # Ajouter toutes les sources du mix au scope
+      for ((j=0; j<n_sources; j++)); do
+        local fvar="MIX_${mi}_SRC_${j}_FILE"
+        TRACKS_TO_PROCESS["${!fvar}"]=1
+      done
+    fi
+  done
+
+  local track_list
+  track_list="$(printf '"%s" ' "${!TRACKS_TO_PROCESS[@]}")"
+  log "Mode --only-track : pistes → ${track_list}"
+  if [[ ${#MIXES_TO_PROCESS_SET[@]} -gt 0 ]]; then
+    log "Mode --only-track : mixes → indices ${!MIXES_TO_PROCESS_SET[*]}"
+  fi
+}
+
 # ────────────────────────── Traitement des pistes ────────────
 
 ALL_TRACK_PATHS=()
@@ -472,6 +538,10 @@ compress_normalize() {
       warn "Piste exclue : ${fname_no_ext}"
       continue
     fi
+    # Filtre --only-track : exclure les pistes hors scope dès la construction des listes
+    if [[ ${#TRACKS_TO_PROCESS[@]} -gt 0 ]] && [[ -z "${TRACKS_TO_PROCESS[$fname_no_ext]+x}" ]]; then
+      continue
+    fi
     all_sources+=("$fpath")
     all_names+=("$fname_no_ext")
     if ! is_mix_source "$fname_no_ext"; then
@@ -487,9 +557,9 @@ compress_normalize() {
   for ((ti=0; ti<${#all_sources[@]}; ti++)); do
     local src="${all_sources[$ti]}"
     local name="${all_names[$ti]}"
+    local dest="${WORK_DIR}/normalized/${name}.flac"
 
     # Copier la source vers le dossier normalized
-    local dest="${WORK_DIR}/normalized/${name}.flac"
     cp "$src" "$dest"
 
     # Appliquer la chaîne d'effets
@@ -508,6 +578,11 @@ build_mixes() {
   next_step "Mix stéréo des pistes composites"
 
   for ((mi=0; mi<MIXES_COUNT; mi++)); do
+    # Filtre --only-track : ignorer les mixes hors scope (vide = aucun mix si ONLY_TRACK défini)
+    if [[ -n "$ONLY_TRACK" ]] && [[ -z "${MIXES_TO_PROCESS_SET[$mi]+x}" ]]; then
+      continue
+    fi
+
     local out_var="MIX_${mi}_OUTPUT"
     local output_name="${!out_var}"
     local sc_var="MIX_${mi}_SRC_COUNT"
@@ -699,11 +774,19 @@ convert_output() {
 
     local out_dir="${GROOVES_DIR}/${out_dir_name}"
 
-    if [[ -d "$out_dir" ]]; then
-      warn "Écrasement de ${out_dir_name}..."
-      rm -rf "$out_dir"
+    if [[ -n "$ONLY_TRACK" ]]; then
+      # Mode --only-track : écrire dans le dossier existant sans l'effacer
+      if [[ ! -d "$out_dir" ]]; then
+        warn "Dossier de sortie absent pour le segment ${seg_num} — ignoré : ${out_dir_name}"
+        continue
+      fi
+    else
+      if [[ -d "$out_dir" ]]; then
+        warn "Écrasement de ${out_dir_name}..."
+        rm -rf "$out_dir"
+      fi
+      mkdir -p "$out_dir"
     fi
-    mkdir -p "$out_dir"
     OUTPUT_DIRS+=("$out_dir")
 
     local mp3_count=0
@@ -863,6 +946,7 @@ main() {
   check_deps
   parse_args "$@"
   load_config
+  resolve_only_track_scope
   validate_input
   parse_labels
   setup_dirs

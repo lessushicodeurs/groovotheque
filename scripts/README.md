@@ -165,6 +165,15 @@ Active la compression dynamique via Audacity. Un `preset:` nommé est obligatoir
 ```yaml
 - type: compress
   preset: "Bass Guitar"   # preset Audacity (obligatoire)
+  label: "description"    # optionnel, ignoré par le script
+  # Overrides optionnels (écrasent la valeur du preset) :
+  threshold_db: -15       # seuil en dBFS  (aussi accepté : threshold)
+  ratio: 6                # ratio de compression
+  attack: 1               # attaque en ms
+  release: 60             # relâchement en ms
+  knee: 2                 # knee en dB
+  lookahead: 1            # lookahead en ms
+  makeup: 0               # gain de compensation en dB
 ```
 
 ##### `normalize`
