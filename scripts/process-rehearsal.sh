@@ -45,7 +45,7 @@ check_deps() {
 # ────────────────────────── Config YAML ──────────────────────
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_FILE="${SCRIPT_DIR}/rehearsal-config.yaml"
+CONFIG_FILE="${SCRIPT_DIR}/process-rehearsal.yaml"
 
 # Variables remplies par load_config
 MP3_BITRATE=""

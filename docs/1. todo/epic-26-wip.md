@@ -19,7 +19,7 @@ Presets DRC : `docs/audacity/presets/compressor.md`
 ### Fichiers modifiés (tout dans `.worktrees/epic-26-audacity-drc/`)
 
 - `scripts/audacity_process.py` — helper Python principal (IPC Audacity via mod-script-pipe)
-- `scripts/rehearsal-config.yaml` — config presets par piste
+- `scripts/process-rehearsal.yaml` — config presets par piste
 - `scripts/setup.sh` — vérification Flatpak Audacity
 - `scripts/process-rehearsal.sh` — pipeline principal (ffmpeg compress/norm remplacé)
 
