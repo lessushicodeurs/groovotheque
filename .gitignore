@@ -15,3 +15,5 @@ comments.json
 test-results/
 # ne pas commit :
 grooves-pour-epic-20
+scripts/process-rehearsal-*.yaml
+scripts/process-rehearsal copy.yaml
