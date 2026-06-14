@@ -134,6 +134,20 @@ for idx in "${SELECTED[@]}"; do
     --exclude="*" \
     "$local_path/" "$REMOTE:$remote_path/"
 
+  # Fallback mix.json : si le groove n'a pas son propre mix.json mais que le
+  # dossier parent en possède un, le déployer sur le serveur distant.
+  parent_rel="$(dirname "$groove")"
+  if [ "$parent_rel" != "." ] && [ ! -f "$local_path/mix.json" ]; then
+    parent_mix_local="$LOCAL_GROOVES/$parent_rel/mix.json"
+    if [ -f "$parent_mix_local" ]; then
+      parent_remote_home="\${HOME}/${REMOTE_GROOVES#\~/}/$parent_rel"
+      echo "  → mix.json parent trouvé dans '$parent_rel', déploiement sur le serveur…"
+      ssh "$REMOTE" "mkdir -p \"$parent_remote_home\""
+      rsync -avz "$parent_mix_local" "$REMOTE:${REMOTE_GROOVES}/$parent_rel/mix.json"
+      echo "  → mix.json parent déployé dans '$parent_rel'"
+    fi
+  fi
+
   echo "=== '$groove' déployé ==="
   echo ""
 done

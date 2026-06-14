@@ -845,6 +845,21 @@ body {
   cursor: default;
 }
 
+/* ── Mix source indicator (30.3) ───────────── */
+
+.mix-source-indicator {
+  font-size: 0.65rem;
+  color: #7a7a3a;
+  background: #1a1a0a;
+  border: 1px solid #3a3a1a;
+  border-radius: 3px;
+  padding: 0.2rem 0.5rem;
+  flex-shrink: 0;
+  opacity: 0.8;
+  cursor: default;
+  letter-spacing: 0.02em;
+}
+
 /* ── Download ────────────────────────────── */
 
 .btn-download-all {
