@@ -70,7 +70,7 @@ Le code de référence officiel (`pipeclient.py`) se trouve dans le dépôt `aud
 | Fermer sans sauver | `Close: SaveChanges=No` |
 | Lister les commandes | `GetInfo: Type=Commands` |
 
-> **Note** : le nom exact de la commande pour le nouveau DRC (Audacity 3.3+) est `DynamicRangeCompressor:` (confirmé sur 3.7.7 Flatpak). Voir `docs/audacity/scripting-pratique.md` pour les paramètres complets et les pièges du protocole.
+> **Note** : le nom exact de la commande pour le nouveau DRC (Audacity 3.3+) est `Compressor:` (confirmé sur 3.7.7 Flatpak). `DynamicRangeCompressor:` est accepté sans erreur mais n'applique aucun effet — piège silencieux. Voir `docs/audacity/scripting-pratique.md` pour les paramètres complets et les pièges du protocole.
 
 ---
 
@@ -162,7 +162,7 @@ Ces outils sont de vrais CLI, sans dépendance GUI, intégrables directement dan
 
 - **Xvfb** : permet-il de faire tourner Audacity 3.7.7 Flatpak de façon fiable sur un serveur Linux sans écran avec mod-script-pipe ? Non testé.
 - **Forks (Tenacity, etc.)** : ont-ils introduit un vrai mode CLI ? Non investigué.
-- **Nom exact de la commande DRC 3.x** : résolu — `DynamicRangeCompressor:` (testé sur 3.7.7 Flatpak).
+- **Nom exact de la commande DRC 3.x** : résolu — `Compressor:` (testé sur 3.7.7 Flatpak). `DynamicRangeCompressor:` est un faux-ami : accepté sans erreur, sans effet.
 - **Performances batch** : temps de traitement Audacity (via pipe) vs ffmpeg sur des centaines de fichiers — non mesuré.
 
 ---
