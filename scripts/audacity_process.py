@@ -696,6 +696,8 @@ def main():
         return
 
     # Mode legacy : compressor → normalize → gain (multi-pass)
+    if args.verify:
+        print("[verify] --verify ignoré sans --chain", file=sys.stderr)
     comp_params = resolve_compression(args)
 
     _ensure_audacity_running()
