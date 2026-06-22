@@ -105,10 +105,6 @@ tracks:
         - file: "12 DR HH SD"
           pan: -20
 
-  exclude:
-
-    - "20 AMBIANCE"
-
 blabla_mix:
   pans:
     "01 BASS": 0
@@ -117,3 +113,4 @@ blabla_mix:
     "09 BACKING VOC": 0
     "10 LEAD VOC": 0
     "11 DRUMS MIX": 0
+    "20 AMBIANCE": 0

@@ -711,11 +711,16 @@ split_segments() {
         end="$track_dur"
       fi
 
-      # -ss -to en INPUT pour un seek efficace sur les grands fichiers
+      # -ss en INPUT pour un seek rapide, -t en OUTPUT pour une précision à l'échantillon.
+      # Ne pas utiliser -c copy : les blocs FLAC ont des tailles différentes selon leur origine
+      # (Audacity ~1024 échantillons, ffmpeg ~4096), ce qui causerait des décalages jusqu'à
+      # ~93ms entre pistes au niveau de chaque coupure de segment.
+      local duration
+      duration="$(python3 -c "print(max(0.0, ${end} - ${start}))")"
       ffmpeg -y -hide_banner -loglevel warning \
-        -ss "$start" -to "$end" \
+        -ss "$start" \
         -i "$normalized" \
-        -c copy \
+        -t "$duration" \
         "${WORK_DIR}/segments/${seg_num}/${name}.flac"
       produced=$((produced + 1))
     done

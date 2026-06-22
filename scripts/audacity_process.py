@@ -282,7 +282,7 @@ def apply_compress_step(pipe: AudacityPipe, filepath: str, comp_params: dict):
     print(f"    Compress ({comp_params})", flush=True)
     pipe.send("SelectAll:")
     # DRC sur un long fichier peut prendre plusieurs minutes — timeout 600s (10min).
-    resp = pipe.send(_compressor_command(comp_params), timeout=600.0)
+    resp = pipe.send(_compressor_command(comp_params), timeout=1800.0)
     if _is_failed(resp):
         print(f"    Avertissement compresseur : {resp}", file=sys.stderr)
 
@@ -356,7 +356,7 @@ def _apply_effect(pipe: AudacityPipe, step: dict):
             sys.exit(1)
         print(f"    [chain] Compress ({params})", flush=True)
         pipe.send("SelectAll:")
-        resp = pipe.send(_compressor_command(params), timeout=600.0)
+        resp = pipe.send(_compressor_command(params), timeout=1800.0)
         if _is_failed(resp):
             print(f"    Avertissement compresseur : {resp}", file=sys.stderr)
         # Barrière de synchronisation post-DRC
