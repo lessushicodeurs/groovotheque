@@ -30,6 +30,44 @@ Libère le port si occupé, relance le serveur en arrière-plan, écrit le PID d
 
 ---
 
+## markers-to-md.py — injection de structure dans un .md de groove
+
+Lit les marqueurs de `mix.json` d'un groove, détecte le BPM automatiquement (ou utilise un BPM fourni), et injecte une section `## Structure` dans le fichier `.md` du groove.
+
+```bash
+python3 scripts/markers-to-md.py <chemin/du/groove> [options]
+```
+
+**Options**
+
+| Option | Effet |
+|---|---|
+| `--bpm BPM` | Force le BPM au lieu de le détecter automatiquement |
+| `--skip N` | Exclut les N premières sections du calcul de BPM (utile si l'intro a un tempo différent) |
+
+**Exemples**
+
+```bash
+# Détection BPM automatique
+python3 scripts/markers-to-md.py grooves/Shook_Shook/02_-_Sexy_Man
+
+# BPM fourni manuellement
+python3 scripts/markers-to-md.py grooves/Shook_Shook/02_-_Sexy_Man --bpm 103
+
+# Ignorer les 2 premières sections pour le calcul de BPM
+python3 scripts/markers-to-md.py grooves/Shook_Shook/02_-_Sexy_Man --skip 2
+```
+
+**Comportement**
+
+- Si le `.md` est absent ou vide → crée le fichier avec un titre `# <nom du groove>` et la section Structure
+- Si `## Structure` existe déjà → la remplace (met aussi à jour la ligne BPM)
+- Sinon → ajoute la section en fin de fichier
+
+Nécessite un `mix.json` avec une clé `markers` dans le dossier du groove.
+
+---
+
 ## strip-parent-prefix — nettoyage de noms de sous-dossiers
 
 Supprime le préfixe redondant qu'un sous-dossier hérite de son parent.

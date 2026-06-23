@@ -27,6 +27,7 @@ Tous les scripts sont dans `scripts/`.
 | Script | Rôle |
 |---|---|
 | `setup.sh` | Installe les dépendances système du pipeline audio |
-| `process-rehearsal.sh` | Pipeline de traitement audio (découpe, normalisation, export) |
 | `restart-server.sh` | Redémarre le serveur Node.js |
+| `process-rehearsal.sh` | Pipeline de traitement audio (découpe, normalisation, export) |
 | `strip-parent-prefix.sh` | Supprime le préfixe parent des sous-dossiers de grooves |
+| `markers-to-md.py` | Injecte la section Structure (marqueurs + BPM) dans le .md d'un groove |
