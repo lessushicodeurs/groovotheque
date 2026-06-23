@@ -64,7 +64,7 @@ python3 scripts/markers-to-md.py grooves/Shook_Shook/02_-_Sexy_Man --skip 2
 - Si `## Structure` existe déjà → la remplace (met aussi à jour la ligne BPM)
 - Sinon → ajoute la section en fin de fichier
 
-Nécessite un `mix.json` avec une clé `markers` dans le dossier du groove.
+Nécessite un `markers.json` (tableau de marqueurs) dans le dossier du groove.
 
 ---
 

@@ -134,17 +134,16 @@ def main():
         print(f'Dossier introuvable : {groove_dir}', file=sys.stderr)
         sys.exit(1)
 
-    mix_path = groove_dir / 'mix.json'
-    if not mix_path.exists():
-        print(f'Pas de mix.json dans {groove_dir}', file=sys.stderr)
+    markers_path = groove_dir / 'markers.json'
+    if not markers_path.exists():
+        print(f'Pas de markers.json dans {groove_dir}', file=sys.stderr)
         sys.exit(1)
 
-    with open(mix_path, encoding='utf-8') as f:
-        mix = json.load(f)
+    with open(markers_path, encoding='utf-8') as f:
+        markers = json.load(f)
 
-    markers = mix.get('markers', [])
     if not markers:
-        print('Aucun marqueur dans ce mix.json', file=sys.stderr)
+        print('Aucun marqueur dans ce markers.json', file=sys.stderr)
         sys.exit(1)
 
     sorted_markers = sorted(markers, key=lambda m: m['in'])
