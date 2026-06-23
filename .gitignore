@@ -10,10 +10,10 @@ cache/*
 .auth
 cache/comments.json
 .env
-.env.deploy
-.env.deploy.example
-deploy.sh
-deploy-grooves.sh
+scripts/.env.deploy
+scripts/.env.deploy.example
+scripts/deploy.sh
+scripts/deploy-grooves.sh
 .worktrees
 test-results/
 # ne pas commit :
