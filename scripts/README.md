@@ -2,6 +2,46 @@
 
 ---
 
+## setup.sh — installation des dépendances
+
+Installe les outils système requis par le pipeline audio (Ubuntu/Debian uniquement).
+
+```bash
+sudo ./scripts/setup.sh
+```
+
+Installe via `apt-get` : `ffmpeg`, `bc`, `python3-yaml`, `aubio-tools`.
+Installe également Audacity via Flatpak.
+
+> Après installation, activer `mod-script-pipe` dans Audacity :
+> Edit → Preferences → Modules → mod-script-pipe: Enabled → redémarrer Audacity.
+
+---
+
+## restart-server.sh — redémarrage du serveur
+
+Redémarre `node server.js` en daemon sur le port 3099.
+
+```bash
+./scripts/restart-server.sh
+```
+
+Libère le port si occupé, relance le serveur en arrière-plan, écrit le PID dans `server.pid` et les logs dans `server.log`.
+
+---
+
+## test-bpm.sh — test de détection BPM
+
+Harnais de test ciblé pour `create_md_sheets` (détection BPM via `aubiotempo`).
+
+```bash
+./scripts/test-bpm.sh [--has-aubio]
+```
+
+Opère sur les dossiers de sortie existants dans `grooves/Tmp` sans relancer le pipeline complet. L'option `--has-aubio` active la détection BPM (désactivée par défaut).
+
+---
+
 ## strip-parent-prefix — nettoyage de noms de sous-dossiers
 
 Supprime le préfixe redondant qu'un sous-dossier hérite de son parent.
