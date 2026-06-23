@@ -11,6 +11,9 @@ cache/*
 comments.json
 .env
 .env.deploy
+.env.deploy.example
+deploy.sh
+deploy-grooves.sh
 .worktrees
 test-results/
 # ne pas commit :
