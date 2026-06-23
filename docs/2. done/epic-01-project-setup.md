@@ -11,7 +11,7 @@ Initialiser le projet Node.js, configurer Express, l'authentification et la stru
 - `.gitignore` : `node_modules/`, `grooves/`, `cache/`, `.auth`, `.env`
 
 ### 1.2 — Serveur Express de base
-- `server.js` : Express sur le port `process.env.PORT || 3000`
+- `server.js` : Express sur le port `process.env.PORT || 3099`
 - Servir `public/` en static
 - Middleware JSON + URL-encoded
 - Logging des requêtes (morgan ou console simple)

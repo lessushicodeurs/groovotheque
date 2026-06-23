@@ -11,7 +11,7 @@ htpasswd -B .auth admin          # ajoute un utilisateur supplémentaire
 node server.js
 ```
 
-Ouvrir http://localhost:3000
+Ouvrir http://localhost:3099
 
 ## Structure
 

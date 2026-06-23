@@ -2,7 +2,6 @@ node_modules/
 .claude/worktrees/
 server.log
 server.pid
-grooves*
 grooves/
 cache/*
 !cache/.gitkeep

@@ -77,7 +77,7 @@ module.exports = defineConfig({
   },
   webServer: {
     command: 'TEST_AUTH_FILE=tests/fixtures/.auth node server.js',
-    url: 'http://localhost:3000',
+    url: 'http://localhost:3099',
     reuseExistingServer: false,
   },
   projects: [
