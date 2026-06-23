@@ -30,4 +30,3 @@ Tous les scripts sont dans `scripts/`.
 | `process-rehearsal.sh` | Pipeline de traitement audio (découpe, normalisation, export) |
 | `restart-server.sh` | Redémarre le serveur Node.js |
 | `strip-parent-prefix.sh` | Supprime le préfixe parent des sous-dossiers de grooves |
-| `test-bpm.sh` | Harnais de test ciblé pour la détection BPM |

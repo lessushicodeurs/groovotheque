@@ -30,18 +30,6 @@ Libère le port si occupé, relance le serveur en arrière-plan, écrit le PID d
 
 ---
 
-## test-bpm.sh — test de détection BPM
-
-Harnais de test ciblé pour `create_md_sheets` (détection BPM via `aubiotempo`).
-
-```bash
-./scripts/test-bpm.sh [--has-aubio]
-```
-
-Opère sur les dossiers de sortie existants dans `grooves/Tmp` sans relancer le pipeline complet. L'option `--has-aubio` active la détection BPM (désactivée par défaut).
-
----
-
 ## strip-parent-prefix — nettoyage de noms de sous-dossiers
 
 Supprime le préfixe redondant qu'un sous-dossier hérite de son parent.
