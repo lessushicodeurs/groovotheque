@@ -112,6 +112,27 @@ app.get('/vendor/marked.esm.js', (req, res) => {
   res.sendFile(path.join(__dirname, 'node_modules/marked/lib/marked.esm.js'));
 });
 
+// 34.1 — WaveSurfer ESM depuis node_modules
+app.get('/vendor/wavesurfer.esm.js', (req, res) => {
+  res.type('application/javascript');
+  res.sendFile(path.join(__dirname, 'node_modules/wavesurfer.js/dist/wavesurfer.esm.js'));
+});
+app.get('/vendor/plugins/timeline.esm.js', (req, res) => {
+  res.type('application/javascript');
+  res.sendFile(path.join(__dirname, 'node_modules/wavesurfer.js/dist/plugins/timeline.esm.js'));
+});
+app.get('/vendor/plugins/hover.esm.js', (req, res) => {
+  res.type('application/javascript');
+  res.sendFile(path.join(__dirname, 'node_modules/wavesurfer.js/dist/plugins/hover.esm.js'));
+});
+app.get('/vendor/plugins/regions.esm.js', (req, res) => {
+  res.type('application/javascript');
+  res.sendFile(path.join(__dirname, 'node_modules/wavesurfer.js/dist/plugins/regions.esm.js'));
+});
+
+// 34.2 — AlphaTab dist depuis node_modules (worker + fonts + soundfont)
+app.use('/vendor/alphatab', express.static(path.join(__dirname, 'node_modules/@coderline/alphatab/dist')));
+
 // 20.2 — Contenu d'un niveau : GET /api/grooves?path=
 // Conteneurs d'abord (alpha), grooves ensuite (alpha)
 app.get('/api/grooves', async (req, res) => {
