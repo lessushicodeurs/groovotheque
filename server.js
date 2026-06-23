@@ -130,6 +130,9 @@ app.get('/vendor/plugins/regions.esm.js', (req, res) => {
   res.sendFile(path.join(__dirname, 'node_modules/wavesurfer.js/dist/plugins/regions.esm.js'));
 });
 
+// 34.2 — AlphaTab dist depuis node_modules (worker + fonts + soundfont)
+app.use('/vendor/alphatab', express.static(path.join(__dirname, 'node_modules/@coderline/alphatab/dist')));
+
 // 20.2 — Contenu d'un niveau : GET /api/grooves?path=
 // Conteneurs d'abord (alpha), grooves ensuite (alpha)
 app.get('/api/grooves', async (req, res) => {
