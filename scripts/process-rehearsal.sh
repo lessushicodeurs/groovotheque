@@ -402,7 +402,7 @@ apply_effects_chain() {
   local step_count
   step_count="$(python3 -c "import json,sys; print(len(json.loads(sys.argv[1])))" "$effects_json")"
 
-  local SCRIPT_PY="${SCRIPT_DIR}/audacity_process.py"
+  local SCRIPT_PY="${SCRIPT_DIR}/private/audacity_process.py"
 
   # Tableau (simulé par JSON accumulé) des steps Audacity en attente de flush
   local audacity_run_json="[]"
