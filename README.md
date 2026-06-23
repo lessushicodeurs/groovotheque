@@ -20,15 +20,14 @@ Ouvrir http://localhost:3000
 - `public/` — frontend statique (HTML/CSS/JS, pas de build)
 - `.auth` — credentials Basic Auth (`user:password`, un par ligne)
 
-## Déploiement AlwaysData
+## Scripts
 
-1. Pousser le code via Git ou FTP (hors `node_modules/`, `grooves/`, `cache/`, `.auth`).
-2. Dans l'admin AlwaysData → **Sites** → **Node.js** :
-   - Commande de démarrage : `node server.js`
-   - Répertoire de travail : chemin vers le projet
-   - La variable `PORT` est injectée automatiquement par AlwaysData.
-3. Créer le fichier `.auth` directement sur le serveur (SSH ou gestionnaire de fichiers).
-4. Créer les dossiers `grooves/` et `cache/` sur le serveur.
-5. Redémarrer le site depuis l'admin pour prendre en compte `.auth`.
+Tous les scripts sont dans `scripts/`.
 
-> Le dossier `grooves/` est la source de vérité. Le preneur de son dépose les fichiers audio par FTP directement dans ce dossier.
+| Script | Rôle |
+|---|---|
+| `setup.sh` | Installe les dépendances système du pipeline audio |
+| `process-rehearsal.sh` | Pipeline de traitement audio (découpe, normalisation, export) |
+| `restart-server.sh` | Redémarre le serveur Node.js |
+| `strip-parent-prefix.sh` | Supprime le préfixe parent des sous-dossiers de grooves |
+| `test-bpm.sh` | Harnais de test ciblé pour la détection BPM |
