@@ -31,3 +31,9 @@ Tous les scripts sont dans `scripts/`.
 | `process-rehearsal.sh` | Pipeline de traitement audio (découpe, normalisation, export) |
 | `strip-parent-prefix.sh` | Supprime le préfixe parent des sous-dossiers de grooves |
 | `markers-to-md.py` | Injecte la section Structure (marqueurs + BPM) dans le .md d'un groove |
+
+## Licence
+
+[AGPL v3](LICENSE) — libre d'utiliser, modifier et redistribuer, à condition de publier tes modifications sous la même licence (y compris si tu en fais un service en ligne).
+
+Ce projet est personnel, sans support ni suivi de demandes. Les PR ne sont pas acceptées.
