@@ -1,8 +1,8 @@
 import { marked } from '/vendor/marked.esm.js'
-import WaveSurfer from 'https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.esm.js'
-import TimelinePlugin from 'https://unpkg.com/wavesurfer.js@7/dist/plugins/timeline.esm.js'
-import HoverPlugin from 'https://unpkg.com/wavesurfer.js@7/dist/plugins/hover.esm.js'
-import RegionsPlugin from 'https://unpkg.com/wavesurfer.js@7/dist/plugins/regions.esm.js'
+import WaveSurfer from '/vendor/wavesurfer.esm.js'
+import TimelinePlugin from '/vendor/plugins/timeline.esm.js'
+import HoverPlugin from '/vendor/plugins/hover.esm.js'
+import RegionsPlugin from '/vendor/plugins/regions.esm.js'
 
 const TRACK_COLORS = [
   '#4fc3f7',
@@ -1327,8 +1327,7 @@ async function initTabDrawer(tabFile) {
   })
 
   // Note: le package alphaTab utilise un T majuscule dans les noms de fichiers dist
-  const AT_VER  = '1.8.3'
-  const AT_BASE = `https://cdn.jsdelivr.net/npm/@coderline/alphatab@${AT_VER}/dist`
+  const AT_BASE = '/vendor/alphatab'
 
   let alphaTabMod
   try {
