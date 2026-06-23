@@ -8,7 +8,7 @@ grooves/
 cache/*
 !cache/.gitkeep
 .auth
-comments.json
+cache/comments.json
 .env
 .env.deploy
 .env.deploy.example

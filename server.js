@@ -519,7 +519,7 @@ app.post('/api/peaks/*', async (req, res) => {
 
 // ── Epic 22 — Commentaires ────────────────────────────────────────────────
 
-const COMMENTS_FILE = path.join(__dirname, 'comments.json');
+const COMMENTS_FILE = path.join(__dirname, 'cache', 'comments.json');
 
 function readComments() {
   try {
