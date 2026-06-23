@@ -1334,7 +1334,7 @@ async function initTabDrawer(tabFile) {
     alphaTabMod = await import(`${AT_BASE}/alphaTab.mjs`)
     window.__alphaTabModule = alphaTabMod
   } catch (err) {
-    tabContentEl.textContent = 'AlphaTab non disponible (vérifier la connexion).'
+    tabContentEl.textContent = 'AlphaTab non disponible (erreur de chargement).'
     tabContentEl.classList.remove('tab-content--loading')
     console.warn('[tab] Échec chargement AlphaTab:', err)
     return
