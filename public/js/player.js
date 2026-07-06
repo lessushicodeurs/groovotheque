@@ -315,12 +315,20 @@ function initAuthorNamePrompt() {
   })
   authorNameInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); authorNameSubmit.click() }
-    if (e.key === 'Escape') { e.stopPropagation(); closeAuthorNamePrompt(null) }
   })
   authorNameCancel.addEventListener('click', () => closeAuthorNamePrompt(null))
   authorNameBackdrop.addEventListener('click', (e) => {
     if (e.target === authorNameBackdrop) closeAuthorNamePrompt(null)
   })
+  // Échap ferme la modal quel que soit le focus (capture : passe avant le
+  // raccourci global du player qui déclencherait stopAll())
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !authorNameBackdrop.hasAttribute('hidden')) {
+      e.stopPropagation()
+      e.preventDefault()
+      closeAuthorNamePrompt(null)
+    }
+  }, { capture: true })
 }
 
 function formatRelativeDate(iso) {
