@@ -49,6 +49,7 @@ function encodePath(p) {
 const feedBtn      = document.getElementById('btn-feed');
 const feedBadge    = document.getElementById('feed-badge');
 const feedBackdrop = document.getElementById('feed-backdrop');
+const feedPanel    = document.getElementById('feed-panel');
 const feedList     = document.getElementById('feed-list');
 const feedMarkAll  = document.getElementById('feed-mark-all');
 const feedClose    = document.getElementById('feed-close');
@@ -133,6 +134,8 @@ function createFeedEntry(entry, seen) {
   excerpt.className = 'feed-entry-excerpt';
   excerpt.textContent = comment.text;
 
+  // Ligne d'infos (lien vers le player, position, réponses) : hors du
+  // role="button" pour ne pas imbriquer deux éléments interactifs
   const info = document.createElement('div');
   info.className = 'feed-entry-info';
 
@@ -142,8 +145,6 @@ function createFeedEntry(entry, seen) {
   link.href = `player.html?groove=${encodePath(groovePath)}&comment=${encodeURIComponent(comment.id)}`;
   link.textContent = `▶ ${grooveName}`;
   link.title = `Ouvrir ${grooveName} à ${formatPosition(comment.position)}`;
-  // Le clic sur le lien ne doit pas déplier l'entrée
-  link.addEventListener('click', e => e.stopPropagation());
 
   const pos = document.createElement('span');
   pos.className = 'feed-entry-pos';
@@ -159,7 +160,7 @@ function createFeedEntry(entry, seen) {
     info.appendChild(replies);
   }
 
-  main.append(meta, excerpt, info);
+  main.append(meta, excerpt);
   head.append(dot, main);
 
   const thread = document.createElement('div');
@@ -190,7 +191,7 @@ function createFeedEntry(entry, seen) {
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
   });
 
-  el.append(head, thread);
+  el.append(head, info, thread);
   return el;
 }
 
@@ -219,6 +220,7 @@ function openFeed() {
   feedBackdrop.removeAttribute('hidden');
   requestAnimationFrame(() => feedBackdrop.classList.add('feed-backdrop--open'));
   feedBtn.setAttribute('aria-expanded', 'true');
+  feedClose.focus();
   // Recharger le fil à chaque ouverture (activité récente)
   loadFeed().then(() => { renderFeed(); updateFeedBadge(); });
 }
@@ -231,6 +233,29 @@ function closeFeed() {
     feedHideTimer = null;
     feedBackdrop.setAttribute('hidden', '');
   }, 220);
+  // Restituer le focus au bouton d'ouverture (dialog aria-modal)
+  feedBtn.focus();
+}
+
+// Piège de focus du dialog : Tab boucle à l'intérieur du panneau
+function trapFeedFocus(e) {
+  if (e.key !== 'Tab' || feedBackdrop.hasAttribute('hidden')) return;
+  const focusables = feedPanel.querySelectorAll(
+    'button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
+  );
+  if (!focusables.length) return;
+  const first = focusables[0];
+  const last = focusables[focusables.length - 1];
+  if (!feedPanel.contains(document.activeElement)) {
+    e.preventDefault();
+    first.focus();
+  } else if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  }
 }
 
 function initFeed() {
@@ -248,6 +273,9 @@ function initFeed() {
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape' && !feedBackdrop.hasAttribute('hidden')) closeFeed();
   });
+
+  // Piège de focus tant que le dialog est ouvert
+  document.addEventListener('keydown', trapFeedFocus);
 
   // Tout marquer comme lu
   feedMarkAll.addEventListener('click', () => {
