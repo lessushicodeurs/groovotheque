@@ -3,6 +3,11 @@ import WaveSurfer from '/vendor/wavesurfer.esm.js'
 import TimelinePlugin from '/vendor/plugins/timeline.esm.js'
 import HoverPlugin from '/vendor/plugins/hover.esm.js'
 import RegionsPlugin from '/vendor/plugins/regions.esm.js'
+import {
+  getSeenIds, markCommentsSeen, isDiscussionSeen,
+  displayAuthor, formatRelativeDate,
+  formatPosition as formatCommentPosition,
+} from './comments-shared.js'
 
 const TRACK_COLORS = [
   '#4fc3f7',
@@ -196,8 +201,6 @@ let commentsVisible       = true
 let activeCommentId       = null  // commentaire ouvert dans le popover
 let commentModalPosition_ = 0    // position capturée à l'ouverture de la modal
 
-const SEEN_KEY = 'groovotheque:seen_comments'
-
 // 37.4 — lien profond ?comment=<id> : seek + popover à l'arrivée
 let pendingDeepLinkCommentId = params.get('comment')
 let commentsLoaded = false
@@ -214,37 +217,11 @@ function tryOpenDeepLinkComment() {
   openCommentPopover(comment, markerEl ?? commentMarkersLaneEl)
 }
 
-function getSeenIds() {
-  try { return new Set(JSON.parse(localStorage.getItem(SEEN_KEY) || '[]')) }
-  catch { return new Set() }
-}
+// getSeenIds / markCommentsSeen / isDiscussionSeen / formatCommentPosition
+// vivent dans comments-shared.js (partagés avec l'index)
 
 function markCommentSeen(id) {
   markCommentsSeen([id])
-}
-
-// 37.2 — marquage en lot (commentaire racine + réponses)
-function markCommentsSeen(ids) {
-  const seen = getSeenIds()
-  let changed = false
-  for (const id of ids) {
-    if (id && !seen.has(id)) { seen.add(id); changed = true }
-  }
-  if (!changed) return
-  try { localStorage.setItem(SEEN_KEY, JSON.stringify([...seen])) } catch { /* ignore */ }
-}
-
-// 37.2 — une discussion est vue si le racine ET toutes ses réponses sont vus
-function isDiscussionSeen(comment, seen) {
-  return seen.has(comment.id) && (comment.replies || []).every(r => seen.has(r.id))
-}
-
-function formatCommentPosition(sec) {
-  if (!isFinite(sec) || sec < 0) sec = 0
-  const total = Math.round(sec)
-  const m = Math.floor(total / 60)
-  const s = total % 60
-  return `${m}:${s.toString().padStart(2, '0')}`
 }
 
 function initials(name) {
@@ -264,11 +241,6 @@ function getAuthorName() {
 
 function setAuthorName(name) {
   try { localStorage.setItem(AUTHOR_KEY, name.trim()) } catch { /* ignore */ }
-}
-
-// Nom d'affichage : authorName en priorité, repli sur le nom de compte
-function displayAuthor(item) {
-  return item.authorName || item.author || '?'
 }
 
 // Garde-fou d'ergonomie (pas de sécurité serveur) : Éditer/Supprimer visibles
@@ -329,14 +301,6 @@ function initAuthorNamePrompt() {
       closeAuthorNamePrompt(null)
     }
   }, { capture: true })
-}
-
-function formatRelativeDate(iso) {
-  try {
-    const d = new Date(iso)
-    return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })
-      + ' ' + d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
-  } catch { return iso }
 }
 
 const MARKER_EPS = 0.05  // 50 ms — tolérance de contigüité
