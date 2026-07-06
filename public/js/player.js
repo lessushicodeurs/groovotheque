@@ -195,10 +195,23 @@ function getSeenIds() {
 }
 
 function markCommentSeen(id) {
+  markCommentsSeen([id])
+}
+
+// 37.2 — marquage en lot (commentaire racine + réponses)
+function markCommentsSeen(ids) {
   const seen = getSeenIds()
-  if (seen.has(id)) return
-  seen.add(id)
+  let changed = false
+  for (const id of ids) {
+    if (id && !seen.has(id)) { seen.add(id); changed = true }
+  }
+  if (!changed) return
   try { localStorage.setItem(SEEN_KEY, JSON.stringify([...seen])) } catch { /* ignore */ }
+}
+
+// 37.2 — une discussion est vue si le racine ET toutes ses réponses sont vus
+function isDiscussionSeen(comment, seen) {
+  return seen.has(comment.id) && (comment.replies || []).every(r => seen.has(r.id))
 }
 
 function formatCommentPosition(sec) {
@@ -2076,7 +2089,8 @@ function updateCommentBadge() {
     return
   }
   const seen = getSeenIds()
-  const hasUnseen = currentComments.some(c => !seen.has(c.id))
+  // 37.2 — les réponses non vues comptent dans l'état non-lu
+  const hasUnseen = currentComments.some(c => !isDiscussionSeen(c, seen))
   commentBadgeEl.textContent = String(total)
   commentBadgeEl.removeAttribute('hidden')
   commentBadgeEl.classList.toggle('comment-badge--unseen', hasUnseen)
@@ -2103,7 +2117,8 @@ function renderCommentMarkers() {
     if (comment.position > totalDuration) continue
     const leftPct = (comment.position / totalDuration) * 100
 
-    const isSeen = seen.has(comment.id)
+    // 37.2 — une réponse non vue rend le marqueur non-lu
+    const isSeen = isDiscussionSeen(comment, seen)
 
     // Triangle dans la lane
     const markerEl = document.createElement('div')
@@ -2196,8 +2211,8 @@ function openCommentPopover(comment, anchorEl, autoEdit = false) {
   // Seek à la position du commentaire
   performSeek(comment.position)
 
-  // Marquer comme vu
-  markCommentSeen(comment.id)
+  // Marquer comme vu — 37.2 : le racine ET les réponses affichées
+  markCommentsSeen([comment.id, ...(comment.replies || []).map(r => r.id)])
   activeCommentId = comment.id
 
   // Mettre à jour le visuel du marqueur (vu)
@@ -2342,6 +2357,8 @@ function initCommentPopover() {
     cpReplySend.disabled = true
     try {
       const reply = await apiAddReply(activeCommentId, text)
+      // 37.2 — sa propre réponse est immédiatement vue
+      markCommentSeen(reply.id)
       const comment = currentComments.find(c => c.id === activeCommentId)
       if (comment) {
         comment.replies.push(reply)
@@ -2406,6 +2423,8 @@ function initCommentModal() {
     commentModalSubmit.disabled = true
     try {
       const comment = await apiCreateComment(commentModalPosition_, text)
+      // 37.2 — son propre commentaire est immédiatement vu
+      markCommentSeen(comment.id)
       currentComments.push(comment)
       currentComments.sort((a, b) => a.position - b.position)
       renderCommentMarkers()

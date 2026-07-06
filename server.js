@@ -556,6 +556,7 @@ function writeComments(data) {
 }
 
 // GET /api/comments-summary — résumé {groovePath: {count, ids}} pour l'index
+// 37.2 — ids inclut aussi les IDs des réponses pour le calcul du non-lu
 app.get('/api/comments-summary', (req, res) => {
   try {
     const data = readComments();
@@ -564,7 +565,7 @@ app.get('/api/comments-summary', (req, res) => {
       if (comments.length > 0) {
         summary[groove] = {
           count: comments.length,
-          ids: comments.map(c => c.id),
+          ids: comments.flatMap(c => [c.id, ...(c.replies || []).map(r => r.id)]),
         };
       }
     }
