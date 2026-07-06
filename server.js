@@ -583,6 +583,10 @@ app.get('/api/comments-feed', (req, res) => {
     const data = readComments();
     const feed = [];
     for (const [groovePath, comments] of Object.entries(data)) {
+      // Groove supprimé du disque : ne pas proposer un lien vers un player
+      // en erreur (un existsSync par chemin distinct, coût négligeable)
+      const grooveDir = path.resolve(GROOVES_DIR, groovePath);
+      if (!grooveDir.startsWith(GROOVES_DIR + path.sep) || !fs.existsSync(grooveDir)) continue;
       const grooveName = formatDisplayName(groovePath.split('/').pop());
       for (const comment of comments) {
         feed.push({ groovePath, grooveName, comment });
