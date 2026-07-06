@@ -61,20 +61,34 @@ async function loadTagsSummary() {
 // 36.4 — Nombre de chips visibles avant le bouton « … »
 const MAX_VISIBLE_CARD_TAGS = 3;
 
+// Affichage d'un tag : le « # » décoratif vient du CSS (::before), on ne double
+// donc pas un « # » initial saisi par l'utilisateur. La valeur stockée reste
+// intacte (aucune normalisation), seul le rendu est ajusté.
+function displayTag(tag) {
+  return tag.startsWith('#') ? tag.slice(1) : tag;
+}
+
 function createCardTagChip(tag) {
-  const chip = document.createElement('button');
-  chip.type = 'button';
+  // <span role="button"> : un vrai <button> serait imbriqué dans le <a>
+  // de la carte (HTML invalide, fragile en accessibilité)
+  const chip = document.createElement('span');
   chip.className = 'tag-chip';
+  chip.setAttribute('role', 'button');
+  chip.tabIndex = 0;
   chip.title = `Filtrer sur « ${tag} »`;
   const label = document.createElement('span');
   label.className = 'tag-chip-label';
-  label.textContent = tag;
+  label.textContent = displayTag(tag);
   chip.appendChild(label);
   // Le chip ajoute un filtre sans naviguer vers le player (la carte est un lien)
-  chip.addEventListener('click', (e) => {
+  const activate = (e) => {
     e.preventDefault();
     e.stopPropagation();
     addTagFilter(tag);
+  };
+  chip.addEventListener('click', activate);
+  chip.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') activate(e);
   });
   return chip;
 }
@@ -90,18 +104,23 @@ function applyTagChips() {
     wrap.className = 'groove-card-tags';
     tags.slice(0, MAX_VISIBLE_CARD_TAGS).forEach(t => wrap.appendChild(createCardTagChip(t)));
     if (tags.length > MAX_VISIBLE_CARD_TAGS) {
-      const more = document.createElement('button');
-      more.type = 'button';
+      const more = document.createElement('span');
       more.className = 'tag-more-btn';
+      more.setAttribute('role', 'button');
+      more.tabIndex = 0;
       more.textContent = '…';
       const hidden = tags.length - MAX_VISIBLE_CARD_TAGS;
       more.title = `${hidden} tag${hidden > 1 ? 's' : ''} de plus`;
       more.setAttribute('aria-label', more.title);
-      more.addEventListener('click', (e) => {
+      const expand = (e) => {
         e.preventDefault();
         e.stopPropagation();
         more.remove();
         tags.slice(MAX_VISIBLE_CARD_TAGS).forEach(t => wrap.appendChild(createCardTagChip(t)));
+      };
+      more.addEventListener('click', expand);
+      more.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') expand(e);
       });
       wrap.appendChild(more);
     }
@@ -236,7 +255,9 @@ function renderSearchResults(grooves) {
   applyTagChips();
 }
 
-async function renderLevel(currentPath) {
+// `token` : garde anti-course partagée avec applyFilters — un rendu de niveau
+// lent ne doit pas écraser des résultats filtrés demandés plus récemment.
+async function renderLevel(currentPath, token = ++filterToken) {
   listEl.innerHTML = '<p class="state-msg">Chargement…</p>';
 
   const url = currentPath
@@ -247,6 +268,7 @@ async function renderLevel(currentPath) {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const items = await res.json();
+    if (token !== filterToken) return; // une saisie plus récente a pris la main
 
     listEl.innerHTML = '';
 
@@ -265,6 +287,7 @@ async function renderLevel(currentPath) {
     applyCommentBadges();
     applyTagChips();
   } catch (err) {
+    if (token !== filterToken) return;
     const p = document.createElement('p');
     p.className = 'state-msg error';
     p.textContent = `Erreur de chargement : ${err.message}`;
@@ -282,14 +305,27 @@ const searchSuggEl  = document.getElementById('search-tag-suggestions');
 let activeTags = [];       // chips de tags actifs (filtre ET)
 let searchSuggIndex = -1;  // suggestion surlignée au clavier
 let filterToken = 0;       // garde anti-course sur les rendus async
+let tagEntryActive = false; // frappe active d'un segment « #… » (autocomplétion)
 
 // Découpe la saisie : texte libre avant le dernier « # », requête tag après.
-// Le segment « #… » est transitoire : il sert uniquement à l'autocomplétion
-// et n'est jamais converti implicitement en tag ni utilisé comme texte libre.
+// Le segment « #… » n'est transitoire que pendant la frappe active
+// (tagEntryActive) : il sert alors à l'autocomplétion et n'est jamais converti
+// implicitement en tag. Sur Escape ou blur, il redevient du texte libre —
+// un groove nommé « Track #2 » reste ainsi trouvable en tapant « #2 ».
 function splitSearchValue(value) {
+  if (!tagEntryActive) return { text: value, tagQuery: null };
   const idx = value.lastIndexOf('#');
   if (idx === -1) return { text: value, tagQuery: null };
   return { text: value.slice(0, idx), tagQuery: value.slice(idx + 1) };
+}
+
+// Fin de la saisie tag (Escape/blur) : le segment « #… » restant est traité
+// comme texte libre et réintègre le filtre et l'URL (q)
+function commitPendingTagQuery() {
+  if (!tagEntryActive) return;
+  tagEntryActive = false;
+  updateUrl(false);
+  applyFilters();
 }
 
 function currentFreeText() {
@@ -308,7 +344,7 @@ function renderSearchChips() {
 
     const label = document.createElement('span');
     label.className = 'tag-chip-label';
-    label.textContent = tag;
+    label.textContent = displayTag(tag);
     chip.appendChild(label);
 
     const removeBtn = document.createElement('button');
@@ -342,13 +378,22 @@ async function applyFilters() {
   const q = currentFreeText().toLowerCase();
 
   if (activeTags.length === 0 && !q) {
-    renderLevel(getCurrentPath());
+    renderLevel(getCurrentPath(), token);
     return;
   }
 
   try {
-    // Le filtre par tags a besoin du résumé : attendre son chargement initial
-    if (activeTags.length > 0 && tagsSummaryPromise) await tagsSummaryPromise;
+    if (activeTags.length > 0) {
+      // Le filtre par tags a besoin du résumé : attendre son chargement initial
+      if (tagsSummaryPromise) await tagsSummaryPromise;
+      // Premier chargement en échec : retenter avant de filtrer
+      if (!tagsSummary) await loadTagsSummary();
+      if (token !== filterToken) return;
+      if (!tagsSummary) {
+        listEl.innerHTML = '<p class="state-msg error">Impossible de charger les tags : le filtre par tags est indisponible.</p>';
+        return;
+      }
+    }
     const grooves = await loadAllGrooves();
     if (token !== filterToken) return; // une saisie plus récente a pris la main
 
@@ -369,6 +414,7 @@ async function applyFilters() {
     }
     renderSearchResults(filtered);
   } catch (err) {
+    if (token !== filterToken) return;
     listEl.innerHTML = `<p class="state-msg error">Erreur : ${err.message}</p>`;
   }
 }
@@ -397,6 +443,7 @@ function hideSearchSuggestions() {
 function selectSearchSuggestion(tag) {
   // La saisie « #… » se transforme en chip ; le texte libre reste dans le champ
   searchInput.value = splitSearchValue(searchInput.value).text;
+  tagEntryActive = false;
   hideSearchSuggestions();
   addTagFilter(tag);
   searchInput.focus();
@@ -417,7 +464,8 @@ function renderSearchSuggestions(tagQuery) {
     const li = document.createElement('li');
     li.className = 'tag-suggestion';
     li.setAttribute('role', 'option');
-    li.textContent = tag;
+    li.dataset.tag = tag; // valeur réelle (l'affichage strip un « # » initial)
+    li.textContent = displayTag(tag);
     // mousedown pour devancer le blur du champ
     li.addEventListener('mousedown', (e) => {
       e.preventDefault();
@@ -439,12 +487,15 @@ function readFiltersFromUrl() {
   const params = new URLSearchParams(location.search);
   activeTags = params.getAll('tags').map(t => t.trim()).filter(Boolean);
   searchInput.value = params.get('q') || '';
+  tagEntryActive = false; // un q restauré peut contenir « # » : texte libre
 }
 
 function setupSearch() {
   if (!searchInput) return;
 
   searchInput.addEventListener('input', () => {
+    // Taper (ou re-taper) avec un « # » présent réactive la saisie tag
+    tagEntryActive = searchInput.value.includes('#');
     const { tagQuery } = splitSearchValue(searchInput.value);
     // « # » (et uniquement « # ») déclenche l'autocomplétion des tags
     if (tagQuery !== null) renderSearchSuggestions(tagQuery);
@@ -468,10 +519,12 @@ function setupSearch() {
       const items = Array.from(searchSuggEl.children);
       if (searchSuggIndex >= 0 && items[searchSuggIndex]) {
         e.preventDefault();
-        selectSearchSuggestion(items[searchSuggIndex].textContent);
+        selectSearchSuggestion(items[searchSuggIndex].dataset.tag);
       }
-    } else if (e.key === 'Escape' && suggestionsOpen) {
+    } else if (e.key === 'Escape') {
+      // Fin de saisie tag : le segment « #… » restant devient du texte libre
       hideSearchSuggestions();
+      commitPendingTagQuery();
     } else if (e.key === 'Backspace' && searchInput.value === '' && activeTags.length > 0) {
       // Backspace sur champ vide : retire le dernier chip
       removeTagFilter(activeTags[activeTags.length - 1]);
@@ -480,7 +533,10 @@ function setupSearch() {
 
   searchInput.addEventListener('blur', () => {
     // Laisser le mousedown des suggestions s'exécuter avant de fermer
-    setTimeout(hideSearchSuggestions, 150);
+    setTimeout(() => {
+      hideSearchSuggestions();
+      commitPendingTagQuery();
+    }, 150);
   });
 
   // Retour arrière / avant : restaurer l'état de recherche depuis l'URL
@@ -491,6 +547,19 @@ function setupSearch() {
     applyFilters();
   });
 }
+
+// Retour depuis le player via bfcache : les tags ont pu être édités, le résumé
+// et le vocabulaire chargés au premier rendu sont potentiellement périmés
+window.addEventListener('pageshow', (event) => {
+  if (!event.persisted) return;
+  tagsSummaryPromise = loadTagsSummary().then(() => {
+    // Retirer les chips existants pour les ré-appliquer avec les données fraîches
+    listEl.querySelectorAll('.groove-card-tags').forEach(el => el.remove());
+    applyTagChips();
+    // Un filtre par tags actif doit refléter le nouveau résumé
+    if (activeTags.length > 0) applyFilters();
+  });
+});
 
 async function init() {
   const currentPath = getCurrentPath();

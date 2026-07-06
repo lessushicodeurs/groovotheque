@@ -2311,13 +2311,10 @@ body.tab-no-scroll { overflow: hidden; }
   margin-top: 0.4rem;
 }
 
-/* Les chips des cartes et du filtre sont des <button> */
-button.tag-chip {
-  border: none;
-  font-family: inherit;
-}
-
+/* Les chips des cartes sont des <span role="button"> : un vrai <button>
+   serait imbriqué dans le <a> de la carte (HTML invalide) */
 .tag-more-btn {
+  display: inline-flex;
   background: #232323;
   border: none;
   color: #778;
