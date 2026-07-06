@@ -2457,6 +2457,175 @@ function initCommentControls() {
   initCommentModal()
 }
 
+// ── Epic 36 — Tags du groove ──────────────────────────────────────────────
+
+const tagsBarEl        = document.getElementById('tags-bar')
+const tagsChipsEl      = document.getElementById('tags-chips')
+const tagAddInputEl    = document.getElementById('tag-add-input')
+const tagSuggestionsEl = document.getElementById('tag-suggestions')
+
+let grooveTags    = []   // tags du groove courant
+let tagVocabulary = []   // union des tags de tous les grooves (autocomplétion)
+let tagSuggestionIndex = -1
+
+async function loadTagVocabulary() {
+  try {
+    const res = await fetch('/api/tags-summary')
+    if (!res.ok) return
+    const summary = await res.json()
+    const seen = new Set()
+    for (const tags of Object.values(summary)) {
+      for (const t of tags) seen.add(t)
+    }
+    tagVocabulary = [...seen].sort((a, b) => a.localeCompare(b, 'fr', { sensitivity: 'base' }))
+  } catch { /* vocabulaire indisponible : autocomplétion dégradée */ }
+}
+
+async function saveTags() {
+  try {
+    const res = await fetch(`/api/tags/${encodePath(grooveSlug)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tags: grooveTags }),
+    })
+    if (res.ok) {
+      const data = await res.json()
+      grooveTags = data.tags ?? grooveTags
+      // Rafraîchir le vocabulaire : un tag retiré de son dernier groove
+      // disparaît des autocomplétions, un tag créé y entre.
+      loadTagVocabulary()
+    }
+  } catch { /* sauvegarde silencieusement échouée, l'état local reste */ }
+  renderTagChips()
+}
+
+function renderTagChips() {
+  tagsChipsEl.innerHTML = ''
+  for (const tag of grooveTags) {
+    const chip = document.createElement('span')
+    chip.className = 'tag-chip'
+    chip.title = `Voir les grooves tagués « ${tag} »`
+
+    const label = document.createElement('span')
+    label.className = 'tag-chip-label'
+    label.textContent = tag
+    chip.appendChild(label)
+
+    const removeBtn = document.createElement('button')
+    removeBtn.className = 'tag-chip-x'
+    removeBtn.setAttribute('aria-label', `Retirer le tag ${tag}`)
+    removeBtn.textContent = '×'
+    removeBtn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      grooveTags = grooveTags.filter(t => t !== tag)
+      renderTagChips()
+      saveTags()
+    })
+    chip.appendChild(removeBtn)
+
+    // Clic sur le chip (hors croix) : ouvre l'index filtré sur ce tag
+    chip.addEventListener('click', () => {
+      location.href = `index.html?tags=${encodeURIComponent(tag)}`
+    })
+
+    tagsChipsEl.appendChild(chip)
+  }
+}
+
+function hideTagSuggestions() {
+  tagSuggestionsEl.setAttribute('hidden', '')
+  tagSuggestionsEl.innerHTML = ''
+  tagSuggestionIndex = -1
+}
+
+function renderTagSuggestions() {
+  const query = tagAddInputEl.value.trim().toLowerCase()
+  const matches = query
+    ? tagVocabulary.filter(t =>
+        t.toLowerCase().includes(query) && !grooveTags.includes(t)
+      )
+    : []
+  if (matches.length === 0) {
+    hideTagSuggestions()
+    return
+  }
+  tagSuggestionsEl.innerHTML = ''
+  tagSuggestionIndex = -1
+  matches.slice(0, 12).forEach(tag => {
+    const li = document.createElement('li')
+    li.className = 'tag-suggestion'
+    li.setAttribute('role', 'option')
+    li.textContent = tag
+    // mousedown pour devancer le blur du champ
+    li.addEventListener('mousedown', (e) => {
+      e.preventDefault()
+      addTag(tag)
+    })
+    tagSuggestionsEl.appendChild(li)
+  })
+  tagSuggestionsEl.removeAttribute('hidden')
+}
+
+function moveTagSuggestion(delta) {
+  const items = Array.from(tagSuggestionsEl.children)
+  if (items.length === 0) return
+  tagSuggestionIndex = (tagSuggestionIndex + delta + items.length) % items.length
+  items.forEach((li, i) => li.classList.toggle('active', i === tagSuggestionIndex))
+}
+
+function addTag(tag) {
+  const trimmed = tag.trim()
+  if (!trimmed) return
+  if (!grooveTags.includes(trimmed)) {
+    grooveTags.push(trimmed)
+    renderTagChips()
+    saveTags()
+  }
+  tagAddInputEl.value = ''
+  hideTagSuggestions()
+}
+
+async function initTags() {
+  try {
+    const [tagsRes] = await Promise.all([
+      fetch(`/api/tags/${encodePath(grooveSlug)}`),
+      loadTagVocabulary(),
+    ])
+    if (tagsRes.ok) grooveTags = (await tagsRes.json()).tags ?? []
+  } catch { /* tags indisponibles : la barre reste utilisable en local */ }
+
+  renderTagChips()
+  tagsBarEl.removeAttribute('hidden')
+
+  tagAddInputEl.addEventListener('input', renderTagSuggestions)
+
+  tagAddInputEl.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      moveTagSuggestion(1)
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      moveTagSuggestion(-1)
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      const items = Array.from(tagSuggestionsEl.children)
+      if (tagSuggestionIndex >= 0 && items[tagSuggestionIndex]) {
+        addTag(items[tagSuggestionIndex].textContent)
+      } else {
+        // Aucun match sélectionné : création implicite du tag tel que saisi
+        addTag(tagAddInputEl.value)
+      }
+    } else if (e.key === 'Escape') {
+      hideTagSuggestions()
+    }
+  })
+
+  tagAddInputEl.addEventListener('blur', () => {
+    // Laisser le mousedown des suggestions s'exécuter avant de fermer
+    setTimeout(hideTagSuggestions, 150)
+  })
+}
+
 async function initNotePanel() {
   const btnNote  = document.getElementById('btn-note')
   const notePanel = document.getElementById('note-panel')
@@ -2499,6 +2668,7 @@ async function init() {
     document.title = `${name} — Groovotheque`
     setupTitleMarquee()
     initNotePanel()
+    initTags()
 
     if (!groove.tracks?.length) {
       showFatalError('Aucune piste audio dans ce groove.', false)

@@ -2156,3 +2156,143 @@ body.tab-no-scroll { overflow: hidden; }
 .comment-edit-textarea:focus {
   border-color: #555;
 }
+
+/* ── Epic 36 — Tags ─────────────────────────────────────────────────── */
+
+/* Chip de tag : langage visuel commun (player, cartes, recherche).
+   Hashtag, coins légèrement arrondis, couleur de fond unique. */
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  background: #2c3a58;
+  color: #b9c8ea;
+  border-radius: 5px;
+  padding: 0.12rem 0.5rem;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 100%;
+  transition: background 0.1s;
+}
+
+.tag-chip:hover {
+  background: #37476b;
+}
+
+.tag-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tag-chip-label::before {
+  content: '#';
+  opacity: 0.55;
+  margin-right: 1px;
+}
+
+.tag-chip-x {
+  background: none;
+  border: none;
+  color: #8194bd;
+  font-size: 0.9rem;
+  line-height: 1;
+  padding: 0 0 0 0.15rem;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.tag-chip-x:hover {
+  color: #fff;
+}
+
+/* Barre de tags du player (sous le titre) */
+.tags-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.45rem 2rem;
+  border-bottom: 1px solid #1a1a1a;
+}
+
+.tags-chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.tag-add-wrap {
+  position: relative;
+}
+
+.tag-add-input {
+  background: transparent;
+  border: none;
+  border-bottom: 1px dashed #333;
+  color: #bbb;
+  font-size: 0.78rem;
+  padding: 0.15rem 0.2rem;
+  width: 130px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.tag-add-input:focus {
+  border-bottom-color: #3a6a9a;
+}
+
+.tag-add-input::placeholder {
+  color: #444;
+}
+
+/* Liste d'autocomplétion (player et recherche) */
+.tag-suggestions {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 500;
+  margin: 4px 0 0;
+  padding: 4px;
+  list-style: none;
+  background: #1d1d1d;
+  border: 1px solid #333;
+  border-radius: 6px;
+  min-width: 180px;
+  max-width: 300px;
+  max-height: 220px;
+  overflow-y: auto;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+}
+
+.tag-suggestion {
+  padding: 0.32rem 0.6rem;
+  border-radius: 4px;
+  font-size: 0.83rem;
+  color: #ccc;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tag-suggestion::before {
+  content: '#';
+  opacity: 0.5;
+  margin-right: 2px;
+}
+
+.tag-suggestion:hover,
+.tag-suggestion.active {
+  background: #2c3a58;
+  color: #dbe4f7;
+}
+
+@media (max-width: 767px) {
+  .tags-bar {
+    padding: 0.45rem 1rem;
+  }
+}
