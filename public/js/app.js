@@ -22,6 +22,8 @@ async function loadCommentSummary() {
 function applyCommentBadges() {
   if (!commentSummary) return;
   const seen = getSeenIds();
+  // 37.3 — ré-exécutable : retirer les badges existants avant de re-poser
+  listEl.querySelectorAll('.groove-comment-icon').forEach(el => el.remove());
   listEl.querySelectorAll('.groove-card[data-groove-path]').forEach(card => {
     const path = card.dataset.groovePath;
     const info = commentSummary[path];
@@ -42,6 +44,258 @@ function applyCommentBadges() {
 // Encode un chemin relatif pour l'utiliser dans une URL path
 function encodePath(p) {
   return p.split('/').map(encodeURIComponent).join('/');
+}
+
+// ── Epic 37 — Fil de commentaires (panneau latéral) ──────────────────────
+
+const feedBtn      = document.getElementById('btn-feed');
+const feedBadge    = document.getElementById('feed-badge');
+const feedBackdrop = document.getElementById('feed-backdrop');
+const feedList     = document.getElementById('feed-list');
+const feedMarkAll  = document.getElementById('feed-mark-all');
+const feedClose    = document.getElementById('feed-close');
+
+let feedEntries = null; // [{ groovePath, grooveName, comment }] trié par activité desc
+
+function markIdsSeen(ids) {
+  const seen = getSeenIds();
+  let changed = false;
+  for (const id of ids) {
+    if (id && !seen.has(id)) { seen.add(id); changed = true; }
+  }
+  if (!changed) return;
+  try { localStorage.setItem(SEEN_KEY, JSON.stringify([...seen])); } catch { /* ignore */ }
+}
+
+function discussionIds(comment) {
+  return [comment.id, ...(comment.replies || []).map(r => r.id)];
+}
+
+// Une discussion est non lue si le racine OU une réponse n'est pas vue
+function isDiscussionSeen(comment, seen) {
+  return discussionIds(comment).every(id => seen.has(id));
+}
+
+// 37.5 — nom de rédacteur en priorité, repli sur le nom de compte
+function displayAuthor(item) {
+  return item.authorName || item.author || '?';
+}
+
+function formatPosition(sec) {
+  if (!isFinite(sec) || sec < 0) sec = 0;
+  const total = Math.round(sec);
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+}
+
+function formatRelativeDate(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  const min = Math.floor((Date.now() - d.getTime()) / 60000);
+  if (min < 1) return 'à l’instant';
+  if (min < 60) return `il y a ${min} min`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `il y a ${h} h`;
+  const days = Math.floor(h / 24);
+  if (days === 1) return 'hier';
+  if (days < 7) return `il y a ${days} j`;
+  return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+async function loadFeed() {
+  try {
+    const res = await fetch('/api/comments-feed');
+    if (!res.ok) return;
+    feedEntries = await res.json();
+  } catch { /* silent */ }
+}
+
+// Compteur de discussions non lues sur le bouton 💬 (masqué à zéro)
+function updateFeedBadge() {
+  if (!feedEntries) return;
+  const seen = getSeenIds();
+  const unread = feedEntries.filter(e => !isDiscussionSeen(e.comment, seen)).length;
+  if (unread > 0) {
+    feedBadge.textContent = String(unread);
+    feedBadge.classList.add('comment-badge--unseen');
+    feedBadge.removeAttribute('hidden');
+  } else {
+    feedBadge.setAttribute('hidden', '');
+  }
+}
+
+function buildThreadItem(item, isReply) {
+  const el = document.createElement('div');
+  el.className = 'feed-thread-item' + (isReply ? ' feed-thread-item--reply' : '');
+
+  const meta = document.createElement('div');
+  meta.className = 'feed-thread-meta';
+  const author = document.createElement('span');
+  author.className = 'feed-thread-author';
+  author.textContent = displayAuthor(item);
+  const date = document.createElement('span');
+  date.className = 'feed-thread-date';
+  date.textContent = formatRelativeDate(item.createdAt);
+  meta.append(author, date);
+
+  const text = document.createElement('div');
+  text.className = 'feed-thread-text';
+  text.textContent = item.text;
+
+  el.append(meta, text);
+  return el;
+}
+
+function createFeedEntry(entry, seen) {
+  const { groovePath, grooveName, comment } = entry;
+  const unread = !isDiscussionSeen(comment, seen);
+
+  const el = document.createElement('article');
+  el.className = 'feed-entry' + (unread ? ' feed-entry--unread' : '');
+
+  const head = document.createElement('div');
+  head.className = 'feed-entry-head';
+  head.setAttribute('role', 'button');
+  head.setAttribute('tabindex', '0');
+  head.setAttribute('aria-expanded', 'false');
+
+  const dot = document.createElement('span');
+  dot.className = 'feed-entry-dot';
+  dot.setAttribute('aria-hidden', 'true');
+
+  const main = document.createElement('div');
+  main.className = 'feed-entry-main';
+
+  const meta = document.createElement('div');
+  meta.className = 'feed-entry-meta';
+  const author = document.createElement('span');
+  author.className = 'feed-entry-author';
+  author.textContent = displayAuthor(comment);
+  const date = document.createElement('span');
+  date.className = 'feed-entry-date';
+  date.textContent = formatRelativeDate(comment.updatedAt || comment.createdAt);
+  meta.append(author, date);
+
+  const excerpt = document.createElement('div');
+  excerpt.className = 'feed-entry-excerpt';
+  excerpt.textContent = comment.text;
+
+  const info = document.createElement('div');
+  info.className = 'feed-entry-info';
+
+  const link = document.createElement('a');
+  link.className = 'feed-entry-groove';
+  link.href = `player.html?groove=${encodePath(groovePath)}`;
+  link.textContent = `▶ ${grooveName}`;
+  link.title = `Ouvrir ${grooveName} à ${formatPosition(comment.position)}`;
+  // Le clic sur le lien ne doit pas déplier l'entrée
+  link.addEventListener('click', e => e.stopPropagation());
+
+  const pos = document.createElement('span');
+  pos.className = 'feed-entry-pos';
+  pos.textContent = formatPosition(comment.position);
+
+  info.append(link, pos);
+
+  const nbReplies = (comment.replies || []).length;
+  if (nbReplies > 0) {
+    const replies = document.createElement('span');
+    replies.className = 'feed-entry-replies';
+    replies.textContent = `${nbReplies} réponse${nbReplies > 1 ? 's' : ''}`;
+    info.appendChild(replies);
+  }
+
+  main.append(meta, excerpt, info);
+  head.append(dot, main);
+
+  const thread = document.createElement('div');
+  thread.className = 'feed-thread';
+  thread.setAttribute('hidden', '');
+
+  // Clic sur l'entrée → déplie le fil sur place et marque la discussion lue
+  const toggle = () => {
+    const isOpen = !thread.hasAttribute('hidden');
+    if (isOpen) {
+      thread.setAttribute('hidden', '');
+      head.setAttribute('aria-expanded', 'false');
+      return;
+    }
+    if (!thread.childElementCount) {
+      thread.appendChild(buildThreadItem(comment, false));
+      for (const r of comment.replies || []) thread.appendChild(buildThreadItem(r, true));
+    }
+    thread.removeAttribute('hidden');
+    head.setAttribute('aria-expanded', 'true');
+    markIdsSeen(discussionIds(comment));
+    el.classList.remove('feed-entry--unread');
+    updateFeedBadge();
+    applyCommentBadges();
+  };
+  head.addEventListener('click', toggle);
+  head.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+  });
+
+  el.append(head, thread);
+  return el;
+}
+
+function renderFeed() {
+  feedList.innerHTML = '';
+  if (!feedEntries) {
+    feedList.innerHTML = '<p class="state-msg">Erreur de chargement du fil.</p>';
+    return;
+  }
+  if (feedEntries.length === 0) {
+    feedList.innerHTML = '<p class="state-msg">Aucun commentaire pour l’instant.</p>';
+    return;
+  }
+  const seen = getSeenIds();
+  for (const entry of feedEntries) {
+    feedList.appendChild(createFeedEntry(entry, seen));
+  }
+}
+
+function openFeed() {
+  feedBackdrop.removeAttribute('hidden');
+  requestAnimationFrame(() => feedBackdrop.classList.add('feed-backdrop--open'));
+  feedBtn.setAttribute('aria-expanded', 'true');
+  // Recharger le fil à chaque ouverture (activité récente)
+  loadFeed().then(() => { renderFeed(); updateFeedBadge(); });
+}
+
+function closeFeed() {
+  feedBackdrop.classList.remove('feed-backdrop--open');
+  feedBtn.setAttribute('aria-expanded', 'false');
+  setTimeout(() => feedBackdrop.setAttribute('hidden', ''), 220);
+}
+
+function initFeed() {
+  if (!feedBtn) return;
+
+  feedBtn.addEventListener('click', openFeed);
+  feedClose.addEventListener('click', closeFeed);
+
+  // Clic hors panneau
+  feedBackdrop.addEventListener('click', e => {
+    if (e.target === feedBackdrop) closeFeed();
+  });
+
+  // Échap
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !feedBackdrop.hasAttribute('hidden')) closeFeed();
+  });
+
+  // Tout marquer comme lu
+  feedMarkAll.addEventListener('click', () => {
+    if (!feedEntries) return;
+    markIdsSeen(feedEntries.flatMap(e => discussionIds(e.comment)));
+    feedList.querySelectorAll('.feed-entry--unread').forEach(el => el.classList.remove('feed-entry--unread'));
+    updateFeedBadge();
+    applyCommentBadges();
+  });
+
+  // Compteur visible sans ouvrir le panneau
+  loadFeed().then(updateFeedBadge);
 }
 
 // Lit le query param ?path= de l'URL courante
@@ -234,6 +488,7 @@ async function init() {
   const currentPath = getCurrentPath();
   renderBreadcrumb(currentPath);
   setupSearch(currentPath);
+  initFeed();
   // Charger le résumé des commentaires en parallèle du rendu de la liste
   loadCommentSummary().then(applyCommentBadges);
   await renderLevel(currentPath);

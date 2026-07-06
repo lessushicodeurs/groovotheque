@@ -2156,3 +2156,288 @@ body.tab-no-scroll { overflow: hidden; }
 .comment-edit-textarea:focus {
   border-color: #555;
 }
+
+/* ── Epic 37 — Fil de commentaires sur l'index ─────────────────── */
+
+/* En-tête index : titre + bouton 💬 */
+.index-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.btn-feed {
+  position: relative;
+  background: #191919;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  color: #ddd;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0.45rem 0.6rem;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+  flex-shrink: 0;
+}
+
+.btn-feed:hover {
+  background: #222;
+  border-color: #3a3a3a;
+}
+
+.btn-feed[aria-expanded="true"] {
+  background: #1e1e1e;
+  border-color: #444;
+}
+
+/* Backdrop du tiroir */
+.feed-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0);
+  z-index: 500;
+  transition: background 0.2s ease;
+}
+
+.feed-backdrop--open {
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.feed-backdrop[hidden] { display: none; }
+
+/* Tiroir latéral droit */
+.feed-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 400px;
+  max-width: 100vw;
+  background: #161616;
+  border-left: 1px solid #2a2a2a;
+  box-shadow: -12px 0 40px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  transform: translateX(100%);
+  transition: transform 0.2s ease;
+}
+
+.feed-backdrop--open .feed-panel {
+  transform: translateX(0);
+}
+
+.feed-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.875rem 1rem;
+  border-bottom: 1px solid #222;
+  flex-shrink: 0;
+}
+
+.feed-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #e0e0e0;
+  flex: 1;
+}
+
+.feed-mark-all {
+  background: #1c1c1c;
+  border: 1px solid #2a2a2a;
+  border-radius: 4px;
+  color: #777;
+  font-size: 0.72rem;
+  padding: 0.3rem 0.55rem;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+  flex-shrink: 0;
+}
+
+.feed-mark-all:hover {
+  background: #242424;
+  color: #ccc;
+}
+
+.feed-close {
+  background: none;
+  border: none;
+  color: #555;
+  cursor: pointer;
+  font-size: 1rem;
+  padding: 0.2rem 0.3rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.feed-close:hover { color: #999; }
+
+/* Liste des discussions */
+.feed-list {
+  flex: 1;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #2a2a2a transparent;
+}
+
+/* Une entrée = une discussion */
+.feed-entry {
+  border-bottom: 1px solid #1e1e1e;
+}
+
+.feed-entry-head {
+  display: flex;
+  gap: 0.6rem;
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.feed-entry-head:hover {
+  background: #1b1b1b;
+}
+
+/* Point de couleur non-lu */
+.feed-entry-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: transparent;
+  flex-shrink: 0;
+  margin-top: 0.35rem;
+}
+
+.feed-entry--unread .feed-entry-dot {
+  background: #f59e0b;
+}
+
+.feed-entry-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.feed-entry-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-bottom: 0.2rem;
+}
+
+.feed-entry-author {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #ccc;
+}
+
+.feed-entry-date {
+  font-size: 0.7rem;
+  color: #555;
+}
+
+.feed-entry-excerpt {
+  font-size: 0.8rem;
+  color: #999;
+  line-height: 1.4;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
+}
+
+/* Mise en évidence des non-lus : graisse */
+.feed-entry--unread .feed-entry-excerpt {
+  color: #ddd;
+  font-weight: 600;
+}
+
+.feed-entry-info {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-top: 0.3rem;
+  flex-wrap: wrap;
+}
+
+.feed-entry-groove {
+  font-size: 0.75rem;
+  color: #5b9bd5;
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.feed-entry-groove:hover {
+  color: #88bbee;
+  text-decoration: underline;
+}
+
+.feed-entry-pos {
+  font-size: 0.7rem;
+  color: #666;
+  font-family: monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.feed-entry-replies {
+  font-size: 0.7rem;
+  color: #777;
+}
+
+.feed-entry--unread .feed-entry-replies {
+  color: #f59e0b;
+}
+
+/* Fil déplié (racine + réponses) */
+.feed-thread {
+  padding: 0 1rem 0.75rem 2.1rem;
+}
+
+.feed-thread[hidden] { display: none; }
+
+.feed-thread-item {
+  padding: 0.45rem 0;
+  border-top: 1px solid #1c1c1c;
+}
+
+.feed-thread-item--reply {
+  margin-left: 0.9rem;
+}
+
+.feed-thread-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-bottom: 0.15rem;
+}
+
+.feed-thread-author {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #bbb;
+}
+
+.feed-thread-date {
+  font-size: 0.67rem;
+  color: #555;
+}
+
+.feed-thread-text {
+  font-size: 0.78rem;
+  color: #c0c0c0;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Mobile : tiroir pleine largeur */
+@media (max-width: 767px) {
+  .feed-panel {
+    width: 100%;
+    border-left: none;
+  }
+}

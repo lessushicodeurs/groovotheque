@@ -7,8 +7,13 @@
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  <header class="site-header">
+  <header class="site-header index-header">
     <h1>Groovotheque</h1>
+    <!-- 37.3 — Bouton fil de commentaires -->
+    <button id="btn-feed" class="btn-feed" aria-label="Fil de commentaires"
+            aria-expanded="false" aria-controls="feed-panel" title="Fil de commentaires">
+      💬<span id="feed-badge" class="comment-badge" hidden>0</span>
+    </button>
   </header>
   <main>
     <div class="index-controls">
@@ -22,6 +27,19 @@
       <p class="state-msg">Chargement…</p>
     </div>
   </main>
+  <!-- 37.3 — Tiroir latéral du fil de commentaires -->
+  <div id="feed-backdrop" class="feed-backdrop" hidden>
+    <aside id="feed-panel" class="feed-panel" role="dialog" aria-modal="true" aria-label="Fil de commentaires">
+      <div class="feed-header">
+        <h2 class="feed-title">Commentaires</h2>
+        <button id="feed-mark-all" class="feed-mark-all">Tout marquer comme lu</button>
+        <button id="feed-close" class="feed-close" aria-label="Fermer">✕</button>
+      </div>
+      <div id="feed-list" class="feed-list">
+        <p class="state-msg">Chargement…</p>
+      </div>
+    </aside>
+  </div>
 <script type="module" src="/js/app.js"></script>
 </body>
 </html>
