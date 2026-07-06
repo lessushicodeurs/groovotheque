@@ -620,10 +620,29 @@ build_mixes() {
     local sc_var="MIX_${mi}_SRC_COUNT"
     local n_sources="${!sc_var}"
 
+    # Présence des sources : si aucune n'existe, la piste n'a pas été
+    # enregistrée pour cette session — mix ignoré silencieusement.
+    # Avertir seulement si les sources sont partiellement présentes.
+    local n_present=0
+    local missing=()
+    for ((j=0; j<n_sources; j++)); do
+      local fvar="MIX_${mi}_SRC_${j}_FILE"
+      local fname="${!fvar}"
+      if [[ -f "${WORK_DIR}/normalized/${fname}.flac" ]]; then
+        n_present=$((n_present + 1))
+      else
+        missing+=("${fname}.flac")
+      fi
+    done
+    (( n_present == 0 )) && continue
+    if (( ${#missing[@]} > 0 )); then
+      warn "Sources normalisées absentes pour le mix '${output_name}' : ${missing[*]} — mix ignoré"
+      continue
+    fi
+
     local inputs=()
     local filter_parts=()
     local amix_inputs=()
-    local all_present=true
 
     for ((j=0; j<n_sources; j++)); do
       local fvar="MIX_${mi}_SRC_${j}_FILE"
@@ -632,22 +651,14 @@ build_mixes() {
       local fname="${!fvar}"
       local pan="${!pvar}"
       local gain_db="${!gvar:-0}"
-      local fpath="${WORK_DIR}/normalized/${fname}.flac"
 
-      if [[ ! -f "$fpath" ]]; then
-        warn "Source normalisée absente pour le mix '${output_name}' : ${fname}.flac — mix ignoré"
-        all_present=false; break
-      fi
-
-      inputs+=(-i "$fpath")
+      inputs+=(-i "${WORK_DIR}/normalized/${fname}.flac")
       local gain_l gain_r
       gain_l="$(python3 -c "import math; g=10**(${gain_db}/20); print((100 - ${pan}) / 100 * g)")"
       gain_r="$(python3 -c "import math; g=10**(${gain_db}/20); print((100 + ${pan}) / 100 * g)")"
       filter_parts+=("[${j}:a]pan=stereo|c0=${gain_l}*c0|c1=${gain_r}*c0[a${j}]")
       amix_inputs+=("[a${j}]")
     done
-
-    [[ "$all_present" == false ]] && continue
 
     local fc
     fc="$(IFS=';'; echo "${filter_parts[*]}");"
