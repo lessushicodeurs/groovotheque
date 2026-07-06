@@ -256,7 +256,12 @@ function renderFeed() {
   }
 }
 
+// Timer de masquage différé (fin de transition) — annulé si réouverture
+let feedHideTimer = null;
+
 function openFeed() {
+  // Réouverture pendant la transition de fermeture : annuler le masquage différé
+  if (feedHideTimer !== null) { clearTimeout(feedHideTimer); feedHideTimer = null; }
   feedBackdrop.removeAttribute('hidden');
   requestAnimationFrame(() => feedBackdrop.classList.add('feed-backdrop--open'));
   feedBtn.setAttribute('aria-expanded', 'true');
@@ -267,7 +272,11 @@ function openFeed() {
 function closeFeed() {
   feedBackdrop.classList.remove('feed-backdrop--open');
   feedBtn.setAttribute('aria-expanded', 'false');
-  setTimeout(() => feedBackdrop.setAttribute('hidden', ''), 220);
+  if (feedHideTimer !== null) clearTimeout(feedHideTimer);
+  feedHideTimer = setTimeout(() => {
+    feedHideTimer = null;
+    feedBackdrop.setAttribute('hidden', '');
+  }, 220);
 }
 
 function initFeed() {
