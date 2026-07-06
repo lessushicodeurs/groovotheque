@@ -39,6 +39,76 @@ function applyCommentBadges() {
   });
 }
 
+// ── Epic 36 — Tags : résumé, vocabulaire, chips sur les cartes ──────────
+
+let tagsSummary = null;  // { groovePath: [tags] }
+let tagVocabulary = [];  // union des tags portés par au moins un groove
+let tagsSummaryPromise = null;
+
+async function loadTagsSummary() {
+  try {
+    const res = await fetch('/api/tags-summary');
+    if (!res.ok) return;
+    tagsSummary = await res.json();
+    const seen = new Set();
+    for (const tags of Object.values(tagsSummary)) {
+      for (const t of tags) seen.add(t);
+    }
+    tagVocabulary = [...seen].sort((a, b) => a.localeCompare(b, 'fr', { sensitivity: 'base' }));
+  } catch { /* résumé indisponible : pas de chips */ }
+}
+
+// 36.4 — Nombre de chips visibles avant le bouton « … »
+const MAX_VISIBLE_CARD_TAGS = 3;
+
+function createCardTagChip(tag) {
+  const chip = document.createElement('button');
+  chip.type = 'button';
+  chip.className = 'tag-chip';
+  chip.title = `Filtrer sur « ${tag} »`;
+  const label = document.createElement('span');
+  label.className = 'tag-chip-label';
+  label.textContent = tag;
+  chip.appendChild(label);
+  // Le chip ajoute un filtre sans naviguer vers le player (la carte est un lien)
+  chip.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    addTagFilter(tag);
+  });
+  return chip;
+}
+
+function applyTagChips() {
+  if (!tagsSummary) return;
+  listEl.querySelectorAll('.groove-card[data-groove-path]').forEach(card => {
+    if (card.querySelector('.groove-card-tags')) return; // déjà appliqué
+    const tags = tagsSummary[card.dataset.groovePath];
+    if (!tags || tags.length === 0) return;
+    const body = card.querySelector('.groove-card-body') || card;
+    const wrap = document.createElement('div');
+    wrap.className = 'groove-card-tags';
+    tags.slice(0, MAX_VISIBLE_CARD_TAGS).forEach(t => wrap.appendChild(createCardTagChip(t)));
+    if (tags.length > MAX_VISIBLE_CARD_TAGS) {
+      const more = document.createElement('button');
+      more.type = 'button';
+      more.className = 'tag-more-btn';
+      more.textContent = '…';
+      const hidden = tags.length - MAX_VISIBLE_CARD_TAGS;
+      more.title = `${hidden} tag${hidden > 1 ? 's' : ''} de plus`;
+      more.setAttribute('aria-label', more.title);
+      more.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        more.remove();
+        tags.slice(MAX_VISIBLE_CARD_TAGS).forEach(t => wrap.appendChild(createCardTagChip(t)));
+      });
+      wrap.appendChild(more);
+    }
+    body.appendChild(wrap);
+  });
+}
+
 // Encode un chemin relatif pour l'utiliser dans une URL path
 function encodePath(p) {
   return p.split('/').map(encodeURIComponent).join('/');
@@ -145,7 +215,7 @@ async function loadAllGrooves() {
   return allGrooves;
 }
 
-function renderSearchResults(query, grooves) {
+function renderSearchResults(grooves) {
   listEl.innerHTML = '';
   if (grooves.length === 0) {
     listEl.innerHTML = '<p class="state-msg">Aucun résultat.</p>';
@@ -163,6 +233,7 @@ function renderSearchResults(query, grooves) {
     listEl.appendChild(card);
   }
   applyCommentBadges();
+  applyTagChips();
 }
 
 async function renderLevel(currentPath) {
@@ -192,6 +263,7 @@ async function renderLevel(currentPath) {
       }
     }
     applyCommentBadges();
+    applyTagChips();
   } catch (err) {
     const p = document.createElement('p');
     p.className = 'state-msg error';
@@ -201,42 +273,240 @@ async function renderLevel(currentPath) {
   }
 }
 
-function setupSearch(currentPath) {
-  const searchInput = document.getElementById('search-input');
+// ── Epic 36 — Recherche hybride tags (ET) + texte libre ──────────────────
+
+const searchInput   = document.getElementById('search-input');
+const searchChipsEl = document.getElementById('search-chips');
+const searchSuggEl  = document.getElementById('search-tag-suggestions');
+
+let activeTags = [];       // chips de tags actifs (filtre ET)
+let searchSuggIndex = -1;  // suggestion surlignée au clavier
+let filterToken = 0;       // garde anti-course sur les rendus async
+
+// Découpe la saisie : texte libre avant le dernier « # », requête tag après.
+// Le segment « #… » est transitoire : il sert uniquement à l'autocomplétion
+// et n'est jamais converti implicitement en tag ni utilisé comme texte libre.
+function splitSearchValue(value) {
+  const idx = value.lastIndexOf('#');
+  if (idx === -1) return { text: value, tagQuery: null };
+  return { text: value.slice(0, idx), tagQuery: value.slice(idx + 1) };
+}
+
+function currentFreeText() {
+  return splitSearchValue(searchInput.value).text.trim();
+}
+
+function hasActiveFilters() {
+  return activeTags.length > 0 || currentFreeText() !== '';
+}
+
+function renderSearchChips() {
+  searchChipsEl.innerHTML = '';
+  for (const tag of activeTags) {
+    const chip = document.createElement('span');
+    chip.className = 'tag-chip';
+
+    const label = document.createElement('span');
+    label.className = 'tag-chip-label';
+    label.textContent = tag;
+    chip.appendChild(label);
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'tag-chip-x';
+    removeBtn.setAttribute('aria-label', `Retirer le filtre ${tag}`);
+    removeBtn.textContent = '×';
+    removeBtn.addEventListener('click', () => removeTagFilter(tag));
+    chip.appendChild(removeBtn);
+
+    searchChipsEl.appendChild(chip);
+  }
+}
+
+// 36.5 — URL partageable : index.html?path=…&tags=…&tags=…&q=…
+function updateUrl(push) {
+  const params = new URLSearchParams();
+  const path = getCurrentPath();
+  if (path) params.set('path', path);
+  for (const tag of activeTags) params.append('tags', tag);
+  const q = currentFreeText();
+  if (q) params.set('q', q);
+  const qs = params.toString();
+  const url = qs ? `${location.pathname}?${qs}` : location.pathname;
+  if (push) history.pushState(null, '', url);
+  else history.replaceState(null, '', url);
+}
+
+async function applyFilters() {
+  const token = ++filterToken;
+  const q = currentFreeText().toLowerCase();
+
+  if (activeTags.length === 0 && !q) {
+    renderLevel(getCurrentPath());
+    return;
+  }
+
+  try {
+    // Le filtre par tags a besoin du résumé : attendre son chargement initial
+    if (activeTags.length > 0 && tagsSummaryPromise) await tagsSummaryPromise;
+    const grooves = await loadAllGrooves();
+    if (token !== filterToken) return; // une saisie plus récente a pris la main
+
+    let filtered = grooves;
+    // Intersection : le groove doit porter TOUS les tags actifs
+    if (activeTags.length > 0) {
+      filtered = filtered.filter(g => {
+        const tags = (tagsSummary && tagsSummary[g.path]) || [];
+        return activeTags.every(t => tags.includes(t));
+      });
+    }
+    // Texte libre : affine sur nom + chemin à l'intérieur de la sélection
+    if (q) {
+      filtered = filtered.filter(g =>
+        g.displayName.toLowerCase().includes(q) ||
+        g.path.toLowerCase().includes(q)
+      );
+    }
+    renderSearchResults(filtered);
+  } catch (err) {
+    listEl.innerHTML = `<p class="state-msg error">Erreur : ${err.message}</p>`;
+  }
+}
+
+function addTagFilter(tag) {
+  if (activeTags.includes(tag)) return;
+  activeTags.push(tag);
+  renderSearchChips();
+  updateUrl(true); // entrée d'historique : retour arrière restaure l'état
+  applyFilters();
+}
+
+function removeTagFilter(tag) {
+  activeTags = activeTags.filter(t => t !== tag);
+  renderSearchChips();
+  updateUrl(true);
+  applyFilters();
+}
+
+function hideSearchSuggestions() {
+  searchSuggEl.setAttribute('hidden', '');
+  searchSuggEl.innerHTML = '';
+  searchSuggIndex = -1;
+}
+
+function selectSearchSuggestion(tag) {
+  // La saisie « #… » se transforme en chip ; le texte libre reste dans le champ
+  searchInput.value = splitSearchValue(searchInput.value).text;
+  hideSearchSuggestions();
+  addTagFilter(tag);
+  searchInput.focus();
+}
+
+function renderSearchSuggestions(tagQuery) {
+  const query = tagQuery.trim().toLowerCase();
+  const matches = tagVocabulary.filter(t =>
+    !activeTags.includes(t) && (query === '' || t.toLowerCase().includes(query))
+  );
+  if (matches.length === 0) {
+    hideSearchSuggestions();
+    return;
+  }
+  searchSuggEl.innerHTML = '';
+  searchSuggIndex = -1;
+  matches.slice(0, 12).forEach(tag => {
+    const li = document.createElement('li');
+    li.className = 'tag-suggestion';
+    li.setAttribute('role', 'option');
+    li.textContent = tag;
+    // mousedown pour devancer le blur du champ
+    li.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      selectSearchSuggestion(tag);
+    });
+    searchSuggEl.appendChild(li);
+  });
+  searchSuggEl.removeAttribute('hidden');
+}
+
+function moveSearchSuggestion(delta) {
+  const items = Array.from(searchSuggEl.children);
+  if (items.length === 0) return;
+  searchSuggIndex = (searchSuggIndex + delta + items.length) % items.length;
+  items.forEach((li, i) => li.classList.toggle('active', i === searchSuggIndex));
+}
+
+function readFiltersFromUrl() {
+  const params = new URLSearchParams(location.search);
+  activeTags = params.getAll('tags').map(t => t.trim()).filter(Boolean);
+  searchInput.value = params.get('q') || '';
+}
+
+function setupSearch() {
   if (!searchInput) return;
 
-  let pendingQuery = '';
+  searchInput.addEventListener('input', () => {
+    const { tagQuery } = splitSearchValue(searchInput.value);
+    // « # » (et uniquement « # ») déclenche l'autocomplétion des tags
+    if (tagQuery !== null) renderSearchSuggestions(tagQuery);
+    else hideSearchSuggestions();
+    // Le texte libre ne crée pas d'entrée d'historique (replaceState)
+    updateUrl(false);
+    applyFilters();
+  });
 
-  searchInput.addEventListener('input', async () => {
-    const query = searchInput.value.trim().toLowerCase();
-    pendingQuery = query;
-
-    if (!query) {
-      renderLevel(currentPath);
-      return;
+  searchInput.addEventListener('keydown', (e) => {
+    const suggestionsOpen = !searchSuggEl.hasAttribute('hidden');
+    if (e.key === 'ArrowDown' && suggestionsOpen) {
+      e.preventDefault();
+      moveSearchSuggestion(1);
+    } else if (e.key === 'ArrowUp' && suggestionsOpen) {
+      e.preventDefault();
+      moveSearchSuggestion(-1);
+    } else if (e.key === 'Enter' && suggestionsOpen) {
+      // Entrée ne sélectionne qu'une suggestion surlignée : jamais de
+      // conversion implicite texte → tag
+      const items = Array.from(searchSuggEl.children);
+      if (searchSuggIndex >= 0 && items[searchSuggIndex]) {
+        e.preventDefault();
+        selectSearchSuggestion(items[searchSuggIndex].textContent);
+      }
+    } else if (e.key === 'Escape' && suggestionsOpen) {
+      hideSearchSuggestions();
+    } else if (e.key === 'Backspace' && searchInput.value === '' && activeTags.length > 0) {
+      // Backspace sur champ vide : retire le dernier chip
+      removeTagFilter(activeTags[activeTags.length - 1]);
     }
+  });
 
-    try {
-      const grooves = await loadAllGrooves();
-      if (pendingQuery !== query) return;
-      const filtered = grooves.filter(g =>
-        g.displayName.toLowerCase().includes(query) ||
-        g.path.toLowerCase().includes(query)
-      );
-      renderSearchResults(query, filtered);
-    } catch (err) {
-      listEl.innerHTML = `<p class="state-msg error">Erreur : ${err.message}</p>`;
-    }
+  searchInput.addEventListener('blur', () => {
+    // Laisser le mousedown des suggestions s'exécuter avant de fermer
+    setTimeout(hideSearchSuggestions, 150);
+  });
+
+  // Retour arrière / avant : restaurer l'état de recherche depuis l'URL
+  window.addEventListener('popstate', () => {
+    readFiltersFromUrl();
+    renderSearchChips();
+    hideSearchSuggestions();
+    applyFilters();
   });
 }
 
 async function init() {
   const currentPath = getCurrentPath();
   renderBreadcrumb(currentPath);
-  setupSearch(currentPath);
-  // Charger le résumé des commentaires en parallèle du rendu de la liste
+  setupSearch();
+  // Charger les résumés (commentaires, tags) en parallèle du rendu de la liste
   loadCommentSummary().then(applyCommentBadges);
-  await renderLevel(currentPath);
+  tagsSummaryPromise = loadTagsSummary().then(applyTagChips);
+  // 36.5 — l'URL porte l'état de recherche : chargeable directement
+  readFiltersFromUrl();
+  renderSearchChips();
+  if (hasActiveFilters()) {
+    await applyFilters();
+  } else {
+    await renderLevel(currentPath);
+  }
 }
 
 init();

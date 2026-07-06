@@ -2296,3 +2296,95 @@ body.tab-no-scroll { overflow: hidden; }
     padding: 0.45rem 1rem;
   }
 }
+
+/* Chips sur les cartes de l'index (36.4) */
+.groove-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.4rem;
+}
+
+/* Les chips des cartes et du filtre sont des <button> */
+button.tag-chip {
+  border: none;
+  font-family: inherit;
+}
+
+.tag-more-btn {
+  background: #232323;
+  border: none;
+  color: #778;
+  border-radius: 5px;
+  padding: 0.12rem 0.45rem;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.1s, color 0.1s;
+}
+
+.tag-more-btn:hover {
+  background: #2c2c2c;
+  color: #ccc;
+}
+
+/* Champ de recherche hybride (36.5) : chips à gauche, texte libre à droite */
+.search-wrap {
+  position: relative;
+}
+
+.search-box {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  background: #191919;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  padding: 0.2rem 0.5rem;
+  min-height: 2rem;
+  width: min(420px, 80vw);
+  transition: border-color 0.15s;
+}
+
+.search-box:focus-within {
+  border-color: #3a6a9a;
+}
+
+.search-chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.search-chips:empty {
+  display: none;
+}
+
+.search-chips .tag-chip {
+  cursor: default;
+}
+
+/* L'input perd sa bordure propre : c'est la boîte qui la porte */
+.search-box .search-input {
+  flex: 1;
+  min-width: 90px;
+  width: auto;
+  background: transparent;
+  border: none;
+  padding: 0.2rem 0.3rem;
+}
+
+/* La liste de suggestions s'ancre sous la boîte de recherche */
+.search-wrap .tag-suggestions {
+  right: 0;
+  left: auto;
+}
+
+@media (max-width: 767px) {
+  .search-box {
+    width: min(320px, 78vw);
+  }
+}

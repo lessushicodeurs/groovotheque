@@ -14,8 +14,13 @@
     <div class="index-controls">
       <nav id="breadcrumb" class="breadcrumb" aria-label="Navigation"></nav>
       <div class="search-wrap">
-        <input id="search-input" class="search-input" type="search"
-               placeholder="Rechercher…" aria-label="Rechercher un groove">
+        <div id="search-box" class="search-box">
+          <div id="search-chips" class="search-chips"></div>
+          <input id="search-input" class="search-input" type="search"
+                 placeholder="Rechercher… (# pour un tag)" aria-label="Rechercher un groove"
+                 autocomplete="off">
+        </div>
+        <ul id="search-tag-suggestions" class="tag-suggestions" role="listbox" hidden></ul>
       </div>
     </div>
     <div class="groove-list" id="groove-list">
