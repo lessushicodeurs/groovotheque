@@ -184,7 +184,8 @@ function createFeedEntry(entry, seen) {
 
   const link = document.createElement('a');
   link.className = 'feed-entry-groove';
-  link.href = `player.html?groove=${encodePath(groovePath)}`;
+  // 37.4 — lien profond : seek sur le commentaire + popover ouvert
+  link.href = `player.html?groove=${encodePath(groovePath)}&comment=${encodeURIComponent(comment.id)}`;
   link.textContent = `▶ ${grooveName}`;
   link.title = `Ouvrir ${grooveName} à ${formatPosition(comment.position)}`;
   // Le clic sur le lien ne doit pas déplier l'entrée

@@ -189,6 +189,22 @@ let commentModalPosition_ = 0    // position capturée à l'ouverture de la moda
 
 const SEEN_KEY = 'groovotheque:seen_comments'
 
+// 37.4 — lien profond ?comment=<id> : seek + popover à l'arrivée
+let pendingDeepLinkCommentId = params.get('comment')
+let commentsLoaded = false
+
+// Appelé après le chargement des commentaires ET après le rendu des pistes
+// (adjustTrackWidths), quel que soit l'ordre d'arrivée. ID inconnu ou
+// commentaire supprimé entre-temps : le player s'ouvre normalement.
+function tryOpenDeepLinkComment() {
+  if (!pendingDeepLinkCommentId || !commentsLoaded || !totalDuration) return
+  const comment = currentComments.find(c => c.id === pendingDeepLinkCommentId)
+  pendingDeepLinkCommentId = null
+  if (!comment) return
+  const markerEl = commentMarkersLaneEl?.querySelector(`[data-comment-id="${comment.id}"]`)
+  openCommentPopover(comment, markerEl ?? commentMarkersLaneEl)
+}
+
 function getSeenIds() {
   try { return new Set(JSON.parse(localStorage.getItem(SEEN_KEY) || '[]')) }
   catch { return new Set() }
@@ -1035,6 +1051,7 @@ function adjustTrackWidths() {
   renderMarkers()
   renderCommentMarkers()
   animateSeenComments()
+  tryOpenDeepLinkComment()  // 37.4 — pistes prêtes, commentaires peut-être aussi
 }
 
 // ── Epic 13 — Tablature synchronisée ──────────────────────────────────────
@@ -2460,6 +2477,10 @@ async function loadComments() {
   // Révéler les boutons dans le transport
   btnToggleComments.removeAttribute('hidden')
   btnAddComment.removeAttribute('hidden')
+
+  // 37.4 — commentaires prêts, pistes peut-être aussi
+  commentsLoaded = true
+  tryOpenDeepLinkComment()
 }
 
 function initCommentControls() {
