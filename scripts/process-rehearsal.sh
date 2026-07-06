@@ -457,7 +457,7 @@ print(json.dumps(run))
         ffmpeg -y -hide_banner -loglevel warning \
           -i "$filepath" \
           -af "volume=${db}dB" \
-          "$tmp_flac"
+          -bits_per_raw_sample 24 "$tmp_flac"
         mv "$tmp_flac" "$filepath"
         ok "    → gain ${db} dB appliqué"
         ;;
@@ -476,7 +476,7 @@ print(json.dumps(run))
         ffmpeg -y -hide_banner -loglevel warning \
           -i "$filepath" \
           -af "aformat=channel_layouts=stereo,pan=stereo|c0=${gain_l}*c0|c1=${gain_r}*c0" \
-          "$tmp_flac"
+          -bits_per_raw_sample 24 "$tmp_flac"
         mv "$tmp_flac" "$filepath"
         ok "    → pan ${position} appliqué"
         ;;
@@ -669,7 +669,7 @@ build_mixes() {
     ffmpeg -y -hide_banner -loglevel warning \
       "${inputs[@]}" \
       -filter_complex "$fc" \
-      -map "[out]" "$out_path"
+      -map "[out]" -bits_per_raw_sample 24 "$out_path"
     ok "→ ${output_name}.flac"
 
     # Appliquer la chaîne d'effets du mix (si définie)
