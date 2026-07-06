@@ -26,7 +26,7 @@ Redémarre `node server.js` en daemon sur le port 3099.
 ./scripts/restart-server.sh
 ```
 
-Libère le port si occupé, relance le serveur en arrière-plan, écrit le PID dans `server.pid` et les logs dans `server.log`.
+Libère le port si occupé, vérifie que `node_modules` est synchronisé avec `package.json` (sinon `npm install` automatique), relance le serveur en arrière-plan, écrit le PID dans `server.pid` et les logs dans `server.log`.
 
 ---
 

@@ -20,6 +20,12 @@ if [ -f "$PID_FILE" ]; then
   rm -f "$PID_FILE"
 fi
 
+# Dépendances désynchronisées de package.json (ex. merge d'une epic) → npm install
+if ! npm --prefix "$ROOT" ls --omit=dev >/dev/null 2>&1; then
+  echo "Dépendances manquantes ou désynchronisées — npm install..."
+  npm --prefix "$ROOT" install
+fi
+
 # Restart as daemon
 nohup node "$ROOT/server.js" >> "$LOG" 2>&1 &
 NEW_PID=$!
