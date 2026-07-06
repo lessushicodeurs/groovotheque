@@ -2249,6 +2249,12 @@ body.tab-no-scroll { overflow: hidden; }
   color: #444;
 }
 
+/* Message d'erreur transitoire de la barre de tags (échec sauvegarde/chargement) */
+.tags-error {
+  color: #d07070;
+  font-size: 0.75rem;
+}
+
 /* Liste d'autocomplétion (player et recherche) */
 .tag-suggestions {
   position: absolute;
