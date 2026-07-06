@@ -267,24 +267,39 @@ app.get('/api/tags/*', async (req, res) => {
 
 // 36.1 — POST /api/tags/* : remplace la liste complète des tags
 // Ouvert à tout utilisateur authentifié (pas de gating admin).
-// Validation : trim de chaque tag, rejet des chaînes vides, dédoublonnage exact.
+// Validation : trim de chaque tag, rejet des chaînes vides, dédoublonnage exact,
+// tag ≤ 80 caractères, ≤ 50 tags. Cible obligatoirement un groove feuille
+// (un POST sur un conteneur créerait un tags.json orphelin).
+const MAX_TAG_LENGTH = 80;
+const MAX_TAGS_PER_GROOVE = 50;
+
 app.post('/api/tags/*', async (req, res) => {
   const groovePath = req.params[0];
   const grooveDir = resolveGrooveDir(groovePath, res);
   if (!grooveDir) return;
+  let dirType;
   try {
-    await fs.promises.access(grooveDir);
+    dirType = await classifyDir(grooveDir);
   } catch {
     return res.status(404).json({ error: 'Groove introuvable' });
+  }
+  if (dirType !== 'groove') {
+    return res.status(400).json({ error: 'La cible n\'est pas un groove' });
   }
   const { tags } = req.body ?? {};
   if (!Array.isArray(tags) || tags.some(t => typeof t !== 'string')) {
     return res.status(400).json({ error: 'tags doit être un tableau de chaînes' });
   }
+  if (tags.length > MAX_TAGS_PER_GROOVE) {
+    return res.status(400).json({ error: `${MAX_TAGS_PER_GROOVE} tags maximum par groove` });
+  }
   const cleaned = [];
   for (const tag of tags) {
     const trimmed = tag.trim();
     if (!trimmed) continue; // chaîne vide après trim : ignorée
+    if (trimmed.length > MAX_TAG_LENGTH) {
+      return res.status(400).json({ error: `Tag trop long (${MAX_TAG_LENGTH} caractères maximum)` });
+    }
     if (!cleaned.includes(trimmed)) cleaned.push(trimmed); // dédoublonnage exact
   }
   const tagsPath = path.join(grooveDir, 'tags.json');
