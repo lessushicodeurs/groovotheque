@@ -574,6 +574,30 @@ app.get('/api/comments-summary', (req, res) => {
   }
 });
 
+// 37.1 — GET /api/comments-feed : toutes les discussions de la bibliothèque,
+// triées par dernière activité descendante (updatedAt, repli sur createdAt).
+// Une entrée = une discussion (commentaire racine + réponses). Lecture seule.
+app.get('/api/comments-feed', (req, res) => {
+  try {
+    const data = readComments();
+    const feed = [];
+    for (const [groovePath, comments] of Object.entries(data)) {
+      const grooveName = formatDisplayName(groovePath.split('/').pop());
+      for (const comment of comments) {
+        feed.push({ groovePath, grooveName, comment });
+      }
+    }
+    feed.sort((a, b) => {
+      const ta = Date.parse(a.comment.updatedAt || a.comment.createdAt) || 0;
+      const tb = Date.parse(b.comment.updatedAt || b.comment.createdAt) || 0;
+      return tb - ta;
+    });
+    res.json(feed);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/comments/*/:id/replies — AVANT le POST générique (priorité de route)
 // Chemin exemple : /api/comments/SHK2/uuid-here/replies
 // params[0] = "SHK2", params.id = "uuid-here"
