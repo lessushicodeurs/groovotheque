@@ -225,6 +225,77 @@ app.get('/api/search', async (req, res) => {
   }
 });
 
+// ── Epic 36 — Tags sur les grooves ────────────────────────────────────────
+
+// 36.2 — GET /api/tags-summary : { "<groovePath>": ["tag1", ...], ... }
+// Seuls les grooves portant au moins un tag apparaissent (pattern comments-summary).
+app.get('/api/tags-summary', async (req, res) => {
+  try {
+    const grooves = await collectGrooves(GROOVES_DIR, '');
+    const summary = {};
+    await Promise.all(grooves.map(async groove => {
+      try {
+        const raw = await fs.promises.readFile(
+          path.join(GROOVES_DIR, groove.path, 'tags.json'), 'utf8'
+        );
+        const data = JSON.parse(raw);
+        if (Array.isArray(data.tags) && data.tags.length > 0) {
+          summary[groove.path] = data.tags;
+        }
+      } catch { /* pas de tags.json (ou illisible) : groove absent du résumé */ }
+    }));
+    res.json(summary);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 36.1 — GET /api/tags/* : tags d'un groove ({ tags: [] } si fichier absent)
+app.get('/api/tags/*', async (req, res) => {
+  const groovePath = req.params[0];
+  const grooveDir = resolveGrooveDir(groovePath, res);
+  if (!grooveDir) return;
+  const tagsPath = path.join(grooveDir, 'tags.json');
+  try {
+    const data = JSON.parse(await fs.promises.readFile(tagsPath, 'utf8'));
+    res.json({ tags: Array.isArray(data.tags) ? data.tags : [] });
+  } catch (err) {
+    if (err.code === 'ENOENT') return res.json({ tags: [] });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 36.1 — POST /api/tags/* : remplace la liste complète des tags
+// Ouvert à tout utilisateur authentifié (pas de gating admin).
+// Validation : trim de chaque tag, rejet des chaînes vides, dédoublonnage exact.
+app.post('/api/tags/*', async (req, res) => {
+  const groovePath = req.params[0];
+  const grooveDir = resolveGrooveDir(groovePath, res);
+  if (!grooveDir) return;
+  try {
+    await fs.promises.access(grooveDir);
+  } catch {
+    return res.status(404).json({ error: 'Groove introuvable' });
+  }
+  const { tags } = req.body ?? {};
+  if (!Array.isArray(tags) || tags.some(t => typeof t !== 'string')) {
+    return res.status(400).json({ error: 'tags doit être un tableau de chaînes' });
+  }
+  const cleaned = [];
+  for (const tag of tags) {
+    const trimmed = tag.trim();
+    if (!trimmed) continue; // chaîne vide après trim : ignorée
+    if (!cleaned.includes(trimmed)) cleaned.push(trimmed); // dédoublonnage exact
+  }
+  const tagsPath = path.join(grooveDir, 'tags.json');
+  try {
+    await fs.promises.writeFile(tagsPath, JSON.stringify({ tags: cleaned }, null, 2), 'utf8');
+    res.json({ tags: cleaned });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 20.4 — Routes spécifiques AVANT le wildcard général /api/grooves/*
 
 app.get('/api/grooves/*/md', async (req, res) => {
