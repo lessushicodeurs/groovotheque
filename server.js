@@ -599,6 +599,13 @@ app.get('/api/comments-feed', (req, res) => {
   }
 });
 
+// 37.5 — nom de rédacteur optionnel (membres partageant le compte musicien)
+function sanitizeAuthorName(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim().slice(0, 50);
+  return trimmed || null;
+}
+
 // POST /api/comments/*/:id/replies — AVANT le POST générique (priorité de route)
 // Chemin exemple : /api/comments/SHK2/uuid-here/replies
 // params[0] = "SHK2", params.id = "uuid-here"
@@ -606,7 +613,7 @@ app.post('/api/comments/*/:id/replies', (req, res) => {
   const groovePath = req.params[0];
   const { id } = req.params;
   const author = req.auth?.user;
-  const { text } = req.body;
+  const { text, authorName } = req.body;
   if (!text?.trim()) return res.status(400).json({ error: 'text requis' });
   try {
     const data = readComments();
@@ -619,6 +626,8 @@ app.post('/api/comments/*/:id/replies', (req, res) => {
       text: text.trim(),
       createdAt: new Date().toISOString(),
     };
+    const name = sanitizeAuthorName(authorName);
+    if (name) reply.authorName = name;
     comment.replies.push(reply);
     comment.updatedAt = new Date().toISOString();
     writeComments(data);
@@ -645,7 +654,7 @@ app.post('/api/comments/*', (req, res) => {
   const groovePath = req.params[0];
   if (!groovePath) return res.status(400).json({ error: 'Chemin manquant' });
   const author = req.auth?.user;
-  const { position, text } = req.body;
+  const { position, text, authorName } = req.body;
   if (typeof position !== 'number' || !text?.trim()) {
     return res.status(400).json({ error: 'position (number) et text requis' });
   }
@@ -662,6 +671,8 @@ app.post('/api/comments/*', (req, res) => {
       updatedAt: now,
       replies: [],
     };
+    const name = sanitizeAuthorName(authorName);
+    if (name) comment.authorName = name;
     data[groovePath].push(comment);
     writeComments(data);
     res.status(201).json(comment);
@@ -682,7 +693,10 @@ app.put('/api/comments/*/:id', (req, res) => {
     const list = data[groovePath] || [];
     const comment = list.find(c => c.id === id);
     if (!comment) return res.status(404).json({ error: 'Commentaire introuvable' });
-    if (comment.author !== author) return res.status(403).json({ error: 'Non autorisé' });
+    // 37.5 — l'admin garde tous les droits
+    if (comment.author !== author && author !== 'admin') {
+      return res.status(403).json({ error: 'Non autorisé' });
+    }
     comment.text = text.trim();
     comment.updatedAt = new Date().toISOString();
     writeComments(data);
@@ -702,7 +716,10 @@ app.delete('/api/comments/*/:id', (req, res) => {
     const list = data[groovePath] || [];
     const idx = list.findIndex(c => c.id === id);
     if (idx === -1) return res.status(404).json({ error: 'Commentaire introuvable' });
-    if (list[idx].author !== author) return res.status(403).json({ error: 'Non autorisé' });
+    // 37.5 — l'admin garde tous les droits
+    if (list[idx].author !== author && author !== 'admin') {
+      return res.status(403).json({ error: 'Non autorisé' });
+    }
     list.splice(idx, 1);
     writeComments(data);
     res.json({ ok: true });

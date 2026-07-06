@@ -2441,3 +2441,68 @@ body.tab-no-scroll { overflow: hidden; }
     border-left: none;
   }
 }
+
+/* 37.5 — Signature du rédacteur dans le modal */
+.comment-modal-signature {
+  margin-top: 0.5rem;
+}
+
+.comment-signed {
+  margin: 0;
+  font-size: 0.75rem;
+  color: #777;
+}
+
+.comment-signed strong {
+  color: #bbb;
+  font-weight: 600;
+}
+
+.comment-signed-edit {
+  background: none;
+  border: none;
+  color: #557;
+  font-size: 0.72rem;
+  cursor: pointer;
+  padding: 0 0 0 0.3rem;
+  text-decoration: underline;
+}
+
+.comment-signed-edit:hover {
+  color: #88b;
+}
+
+.comment-name-input {
+  width: 100%;
+  background: #111;
+  border: 1px solid #2a2a2a;
+  border-radius: 4px;
+  color: #eee;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.82rem;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.1s;
+  box-sizing: border-box;
+}
+
+.comment-name-input:focus {
+  border-color: #3a3a3a;
+}
+
+.comment-name-input[hidden] {
+  display: none;
+}
+
+.comment-modal-hint {
+  font-size: 0.75rem;
+  color: #777;
+  margin: 0 0 0.75rem;
+  line-height: 1.4;
+}
+
+/* Conteneur d'actions masqué quand vide (l'attribut hidden doit gagner
+   sur le display:flex de .comment-popover-actions) */
+.comment-popover-actions[hidden] {
+  display: none;
+}

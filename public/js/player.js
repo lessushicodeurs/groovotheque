@@ -65,6 +65,15 @@ const commentModalPosition = document.getElementById('comment-modal-position')
 const commentModalText     = document.getElementById('comment-modal-text')
 const commentModalCancel   = document.getElementById('comment-modal-cancel')
 const commentModalSubmit   = document.getElementById('comment-modal-submit')
+// 37.5 — signature du rédacteur
+const commentModalSigned     = document.getElementById('comment-modal-signed')
+const commentModalSignedName = document.getElementById('comment-modal-signed-name')
+const commentModalEditName   = document.getElementById('comment-modal-edit-name')
+const commentModalName       = document.getElementById('comment-modal-name')
+const authorNameBackdrop     = document.getElementById('author-name-backdrop')
+const authorNameInput        = document.getElementById('author-name-input')
+const authorNameCancel       = document.getElementById('author-name-cancel')
+const authorNameSubmit       = document.getElementById('author-name-submit')
 const commentPopoverEl     = document.getElementById('comment-popover')
 const cpInitials           = document.getElementById('cp-initials')
 const cpAuthor             = document.getElementById('cp-author')
@@ -243,6 +252,75 @@ function initials(name) {
   const parts = name.split(/[\s._-]+/).filter(Boolean)
   if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase()
   return name.slice(0, 2).toUpperCase()
+}
+
+// ── 37.5 — Nom de rédacteur ───────────────────────────────────────────────
+
+const AUTHOR_KEY = 'groovotheque:author_name'
+
+function getAuthorName() {
+  try { return (localStorage.getItem(AUTHOR_KEY) || '').trim() } catch { return '' }
+}
+
+function setAuthorName(name) {
+  try { localStorage.setItem(AUTHOR_KEY, name.trim()) } catch { /* ignore */ }
+}
+
+// Nom d'affichage : authorName en priorité, repli sur le nom de compte
+function displayAuthor(item) {
+  return item.authorName || item.author || '?'
+}
+
+// Garde-fou d'ergonomie (pas de sécurité serveur) : Éditer/Supprimer visibles
+// sur ses propres commentaires ; l'admin voit tout ; les commentaires
+// antérieurs à l'epic (sans authorName) restent gérables par le même compte.
+function canManageComment(comment) {
+  if (window.CURRENT_USER === 'admin') return true
+  if (comment.author !== window.CURRENT_USER) return false
+  return !comment.authorName || comment.authorName === getAuthorName()
+}
+
+// Demande le prénom via une petite modal si absent du localStorage.
+// Résout avec le nom, ou null si l'utilisateur annule.
+let authorNamePromptResolve = null
+
+function ensureAuthorName() {
+  const existing = getAuthorName()
+  if (existing) return Promise.resolve(existing)
+  return new Promise(resolve => {
+    authorNamePromptResolve = resolve
+    authorNameInput.value = ''
+    authorNameSubmit.disabled = true
+    authorNameBackdrop.removeAttribute('hidden')
+    authorNameInput.focus()
+  })
+}
+
+function closeAuthorNamePrompt(result) {
+  authorNameBackdrop.setAttribute('hidden', '')
+  const resolve = authorNamePromptResolve
+  authorNamePromptResolve = null
+  if (resolve) resolve(result)
+}
+
+function initAuthorNamePrompt() {
+  authorNameInput.addEventListener('input', () => {
+    authorNameSubmit.disabled = authorNameInput.value.trim().length === 0
+  })
+  authorNameSubmit.addEventListener('click', () => {
+    const name = authorNameInput.value.trim()
+    if (!name) return
+    setAuthorName(name)
+    closeAuthorNamePrompt(name)
+  })
+  authorNameInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); authorNameSubmit.click() }
+    if (e.key === 'Escape') { e.stopPropagation(); closeAuthorNamePrompt(null) }
+  })
+  authorNameCancel.addEventListener('click', () => closeAuthorNamePrompt(null))
+  authorNameBackdrop.addEventListener('click', (e) => {
+    if (e.target === authorNameBackdrop) closeAuthorNamePrompt(null)
+  })
 }
 
 function formatRelativeDate(iso) {
@@ -2059,11 +2137,11 @@ async function fetchComments() {
   } catch { return [] }
 }
 
-async function apiCreateComment(position, text) {
+async function apiCreateComment(position, text, authorName) {
   const res = await fetch(`/api/comments/${encodePath(grooveSlug)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ position, text }),
+    body: JSON.stringify({ position, text, authorName }),
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()
@@ -2087,11 +2165,11 @@ async function apiDeleteComment(id) {
   return res.json()
 }
 
-async function apiAddReply(id, text) {
+async function apiAddReply(id, text, authorName) {
   const res = await fetch(`/api/comments/${encodePath(grooveSlug)}/${encodeURIComponent(id)}/replies`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, authorName }),
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()
@@ -2201,14 +2279,14 @@ function renderReplies(replies) {
 
     const ini = document.createElement('div')
     ini.className = 'comment-reply-initials'
-    ini.textContent = initials(reply.author)
+    ini.textContent = initials(displayAuthor(reply))
 
     const body = document.createElement('div')
     body.className = 'comment-reply-body'
 
     const auth = document.createElement('span')
     auth.className = 'comment-reply-author'
-    auth.textContent = reply.author + ' '
+    auth.textContent = displayAuthor(reply) + ' '
 
     const txt = document.createElement('span')
     txt.className = 'comment-reply-text'
@@ -2244,18 +2322,18 @@ function openCommentPopover(comment, anchorEl, autoEdit = false) {
       ?.classList.add('comment-line--seen')
   })
 
-  // Remplir le popover
-  cpInitials.textContent = initials(comment.author)
-  cpAuthor.textContent = comment.author
+  // Remplir le popover — 37.5 : nom de rédacteur en priorité
+  cpInitials.textContent = initials(displayAuthor(comment))
+  cpAuthor.textContent = displayAuthor(comment)
   cpPos.textContent = formatCommentPosition(comment.position)
   cpText.textContent = comment.text
   cpText.removeAttribute('hidden')
   cpDate.textContent = formatRelativeDate(comment.createdAt)
   renderReplies(comment.replies)
 
-  // Actions auteur
+  // Actions auteur — 37.5 : même rédacteur (ou admin) uniquement
   cpActions.innerHTML = ''
-  if (window.CURRENT_USER === comment.author) {
+  if (canManageComment(comment)) {
     cpActions.removeAttribute('hidden')
 
     const editBtn = document.createElement('button')
@@ -2359,9 +2437,10 @@ function initCommentPopover() {
   // Bouton fermer
   commentPopoverEl.querySelector('.comment-popover-close').addEventListener('click', closeCommentPopover)
 
-  // Fermer au clic en dehors
+  // Fermer au clic en dehors — 37.5 : sauf clic dans la modal de prénom
   document.addEventListener('mousedown', (e) => {
     if (commentPopoverEl.hasAttribute('hidden')) return
+    if (!authorNameBackdrop.hasAttribute('hidden')) return
     if (!commentPopoverEl.contains(e.target) && !e.target.closest('.comment-marker')) {
       closeCommentPopover()
     }
@@ -2371,12 +2450,17 @@ function initCommentPopover() {
   cpReplySend.addEventListener('click', async () => {
     const text = cpReplyInput.value.trim()
     if (!text || !activeCommentId) return
+    // Capturer l'ID avant l'attente : la modal de prénom peut fermer le popover
+    const commentId = activeCommentId
+    // 37.5 — demander le prénom à la première rédaction
+    const authorName = await ensureAuthorName()
+    if (authorName === null) return
     cpReplySend.disabled = true
     try {
-      const reply = await apiAddReply(activeCommentId, text)
+      const reply = await apiAddReply(commentId, text, authorName)
       // 37.2 — sa propre réponse est immédiatement vue
       markCommentSeen(reply.id)
-      const comment = currentComments.find(c => c.id === activeCommentId)
+      const comment = currentComments.find(c => c.id === commentId)
       if (comment) {
         comment.replies.push(reply)
         renderReplies(comment.replies)
@@ -2407,16 +2491,41 @@ function openCommentModal() {
   const existing = currentComments.find(c => Math.abs(c.position - pos) < TOLERANCE)
   if (existing) {
     const markerEl = commentMarkersLaneEl?.querySelector(`[data-comment-id="${existing.id}"]`)
-    openCommentPopover(existing, markerEl ?? commentMarkersLaneEl, window.CURRENT_USER === existing.author)
+    openCommentPopover(existing, markerEl ?? commentMarkersLaneEl, canManageComment(existing))
     return
   }
 
   commentModalPosition_ = pos
   commentModalPosition.textContent = `Position : ${formatCommentPosition(commentModalPosition_)}`
   commentModalText.value = ''
-  commentModalSubmit.disabled = true
+  updateModalSignature()
+  updateModalSubmitState()
   commentModalBackdrop.removeAttribute('hidden')
   commentModalText.focus()
+}
+
+// 37.5 — Affiche « signé X · modifier » si le prénom est connu,
+// sinon le champ de saisie du prénom (première rédaction).
+function updateModalSignature() {
+  const name = getAuthorName()
+  if (name) {
+    commentModalSignedName.textContent = name
+    commentModalSigned.removeAttribute('hidden')
+    commentModalName.setAttribute('hidden', '')
+  } else {
+    commentModalSigned.setAttribute('hidden', '')
+    commentModalName.value = ''
+    commentModalName.removeAttribute('hidden')
+  }
+}
+
+// L'envoi requiert un texte ET un prénom (connu ou saisi)
+function updateModalSubmitState() {
+  const hasText = commentModalText.value.trim().length > 0
+  const hasName = commentModalName.hasAttribute('hidden')
+    ? getAuthorName().length > 0
+    : commentModalName.value.trim().length > 0
+  commentModalSubmit.disabled = !(hasText && hasName)
 }
 
 function closeCommentModal() {
@@ -2424,8 +2533,17 @@ function closeCommentModal() {
 }
 
 function initCommentModal() {
-  commentModalText.addEventListener('input', () => {
-    commentModalSubmit.disabled = commentModalText.value.trim().length === 0
+  commentModalText.addEventListener('input', updateModalSubmitState)
+
+  // 37.5 — champ prénom + « signé X · modifier »
+  commentModalName.addEventListener('input', updateModalSubmitState)
+  commentModalEditName.addEventListener('click', () => {
+    commentModalName.value = getAuthorName()
+    commentModalSigned.setAttribute('hidden', '')
+    commentModalName.removeAttribute('hidden')
+    commentModalName.focus()
+    commentModalName.select()
+    updateModalSubmitState()
   })
 
   commentModalCancel.addEventListener('click', closeCommentModal)
@@ -2437,9 +2555,17 @@ function initCommentModal() {
   commentModalSubmit.addEventListener('click', async () => {
     const text = commentModalText.value.trim()
     if (!text) return
+    // 37.5 — mémoriser le prénom saisi avant l'envoi
+    if (!commentModalName.hasAttribute('hidden')) {
+      const name = commentModalName.value.trim()
+      if (!name) return
+      setAuthorName(name)
+    }
+    const authorName = getAuthorName()
+    if (!authorName) return
     commentModalSubmit.disabled = true
     try {
-      const comment = await apiCreateComment(commentModalPosition_, text)
+      const comment = await apiCreateComment(commentModalPosition_, text, authorName)
       // 37.2 — son propre commentaire est immédiatement vu
       markCommentSeen(comment.id)
       currentComments.push(comment)
@@ -2495,6 +2621,7 @@ function initCommentControls() {
 
   initCommentPopover()
   initCommentModal()
+  initAuthorNamePrompt()  // 37.5
 }
 
 async function initNotePanel() {
