@@ -2452,11 +2452,13 @@ function initCommentPopover() {
     if (!text || !activeCommentId) return
     // Capturer l'ID avant l'attente : la modal de prénom peut fermer le popover
     const commentId = activeCommentId
-    // 37.5 — demander le prénom à la première rédaction
-    const authorName = await ensureAuthorName()
-    if (authorName === null) return
+    // Désactivé AVANT l'attente : un second clic pendant la modal de prénom
+    // écraserait authorNamePromptResolve et gèlerait la première promesse
     cpReplySend.disabled = true
     try {
+      // 37.5 — demander le prénom à la première rédaction
+      const authorName = await ensureAuthorName()
+      if (authorName === null) return
       const reply = await apiAddReply(commentId, text, authorName)
       // 37.2 — sa propre réponse est immédiatement vue
       markCommentSeen(reply.id)
