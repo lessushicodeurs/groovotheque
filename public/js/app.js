@@ -55,13 +55,19 @@ const feedMarkAll  = document.getElementById('feed-mark-all');
 const feedClose    = document.getElementById('feed-close');
 
 let feedEntries = null; // [{ groovePath, grooveName, comment }] trié par activité desc
+let feedLoadError = false; // dernier chargement en échec (données peut-être périmées)
 
 async function loadFeed() {
   try {
     const res = await fetch('/api/comments-feed');
-    if (!res.ok) return;
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     feedEntries = await res.json();
-  } catch { /* silent */ }
+    feedLoadError = false;
+  } catch {
+    // Échec : on conserve les éventuelles données déjà chargées (mieux que rien)
+    // et on signale l'erreur discrètement au rendu.
+    feedLoadError = true;
+  }
 }
 
 // Compteur de discussions non lues sur le bouton 💬 (masqué à zéro)
@@ -197,12 +203,25 @@ function createFeedEntry(entry, seen) {
 
 function renderFeed() {
   feedList.innerHTML = '';
+  // Aucune donnée à afficher (premier chargement en échec) : erreur pleine.
   if (!feedEntries) {
     feedList.innerHTML = '<p class="state-msg">Erreur de chargement du fil.</p>';
     return;
   }
+  // Rechargement en échec après un premier chargement réussi : on garde les
+  // données périmées visibles, précédées d'une bannière d'erreur discrète.
+  if (feedLoadError) {
+    const banner = document.createElement('p');
+    banner.className = 'feed-error-banner';
+    banner.setAttribute('role', 'status');
+    banner.textContent = 'Actualisation impossible — fil peut-être daté.';
+    feedList.appendChild(banner);
+  }
   if (feedEntries.length === 0) {
-    feedList.innerHTML = '<p class="state-msg">Aucun commentaire pour l’instant.</p>';
+    const empty = document.createElement('p');
+    empty.className = 'state-msg';
+    empty.textContent = 'Aucun commentaire pour l’instant.';
+    feedList.appendChild(empty);
     return;
   }
   const seen = getSeenIds();

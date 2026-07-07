@@ -2282,6 +2282,16 @@ body.tab-no-scroll { overflow: hidden; }
   scrollbar-color: #2a2a2a transparent;
 }
 
+/* Échec d'actualisation : bannière discrète en tête, données périmées gardées */
+.feed-error-banner {
+  margin: 0;
+  padding: 0.55rem 1rem;
+  font-size: 0.72rem;
+  color: #d98b8b;
+  background: #2a1c1c;
+  border-bottom: 1px solid #3a2323;
+}
+
 /* Une entrée = une discussion */
 .feed-entry {
   border-bottom: 1px solid #1e1e1e;
