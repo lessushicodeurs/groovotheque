@@ -95,9 +95,31 @@
       <p id="comment-modal-position" class="comment-modal-position">Position : —</p>
       <textarea id="comment-modal-text" class="comment-modal-textarea"
                 placeholder="Votre commentaire…" maxlength="1000"></textarea>
+      <!-- 37.5 — Signature du rédacteur -->
+      <div class="comment-modal-signature">
+        <p id="comment-modal-signed" class="comment-signed" hidden>
+          signé <strong id="comment-modal-signed-name"></strong>
+          <button id="comment-modal-edit-name" class="comment-signed-edit" type="button">modifier</button>
+        </p>
+        <input id="comment-modal-name" class="comment-name-input" type="text"
+               placeholder="Votre prénom…" maxlength="50" autocomplete="given-name" hidden>
+      </div>
       <div class="comment-modal-footer">
         <button id="comment-modal-cancel" class="comment-modal-cancel">Annuler</button>
         <button id="comment-modal-submit" class="comment-modal-submit" disabled>Envoyer</button>
+      </div>
+    </div>
+  </div>
+  <!-- 37.5 — Demande du prénom à la première rédaction (réponses) -->
+  <div id="author-name-backdrop" class="comment-modal-backdrop" hidden>
+    <div class="comment-modal" role="dialog" aria-modal="true" aria-labelledby="author-name-title">
+      <h2 id="author-name-title">Votre prénom</h2>
+      <p class="comment-modal-hint">Il signera vos messages pour les distinguer de ceux des autres membres du groupe.</p>
+      <input id="author-name-input" class="comment-name-input" type="text"
+             placeholder="Prénom…" maxlength="50" autocomplete="given-name">
+      <div class="comment-modal-footer">
+        <button id="author-name-cancel" class="comment-modal-cancel">Annuler</button>
+        <button id="author-name-submit" class="comment-modal-submit" disabled>Valider</button>
       </div>
     </div>
   </div>
