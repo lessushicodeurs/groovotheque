@@ -247,7 +247,10 @@ function renderSearchResults(grooves) {
       const breadcrumb = document.createElement('p');
       breadcrumb.className = 'groove-card-path';
       breadcrumb.textContent = segments.slice(0, -1).map(s => s.replace(/_/g, ' ')).join(' › ');
-      card.appendChild(breadcrumb);
+      // Dans le corps de la carte, sous le nom : en flex-item frère du corps,
+      // le chemin comprimait le titre (chevauchement) et écrasait les chips.
+      // applyTagChips ajoute ensuite la rangée de chips à la suite.
+      card.querySelector('.groove-card-body').appendChild(breadcrumb);
     }
     listEl.appendChild(card);
   }

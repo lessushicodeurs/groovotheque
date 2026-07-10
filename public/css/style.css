@@ -1543,11 +1543,13 @@ body.tab-no-scroll { overflow: hidden; }
   display: block;
 }
 
-/* Chemin affiché sous les résultats de recherche */
+/* Chemin affiché sous le nom dans les résultats de recherche
+   (dans .groove-card-body, jamais en concurrence avec le titre) */
 .groove-card-path {
-  margin: 0.3rem 0 0;
+  margin: 0.15rem 0 0;
   font-size: 0.72rem;
   color: #556;
+  overflow-wrap: anywhere;
 }
 
 /* Contrôles en haut de l'index (fil d'Ariane + recherche) */
