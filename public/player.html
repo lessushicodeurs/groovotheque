@@ -19,6 +19,17 @@
     <button id="btn-save-mix" class="btn-save-mix" hidden>Sauvegarder le mix</button>
     <button id="btn-download-all" class="btn-download-all" hidden>↓ Tout télécharger</button>
   </header>
+  <!-- 36.3 — Tags du groove -->
+  <div id="tags-bar" class="tags-bar" hidden>
+    <div id="tags-chips" class="tags-chips"></div>
+    <div class="tag-add-wrap">
+      <input id="tag-add-input" class="tag-add-input" type="text"
+             placeholder="Ajouter un tag…" maxlength="80" autocomplete="off"
+             aria-label="Ajouter un tag">
+      <ul id="tag-suggestions" class="tag-suggestions" role="listbox" hidden></ul>
+    </div>
+    <span id="tags-error" class="tags-error" role="alert" hidden></span>
+  </div>
   <div id="note-panel" class="note-panel" role="region" aria-label="Notes"></div>
   <main id="player-main" class="loading">
     <div id="tracks-container" class="tracks-container" hidden></div>
