@@ -212,6 +212,36 @@ export function downloadBlob(blob, filename) {
   URL.revokeObjectURL(url)
 }
 
+// Le rendu de l'OfflineAudioContext n'est pas reproductible au bit près d'une passe
+// à l'autre (écarts d'un LSB, soit −90 dBFS). Garder le dernier rendu garantit que
+// deux formats exportés d'affilée portent exactement le même signal — et évite un
+// second rendu. Le buffer est relâché après quelques minutes d'inactivité.
+const RENDER_CACHE_TTL = 120000
+let lastRender = null
+let lastRenderTimer = null
+
+function renderSignature(tracks) {
+  return JSON.stringify(tracks.map(t => [t.url, t.volume, t.pan]))
+}
+
+async function renderCached(tracks, onProgress) {
+  const signature = renderSignature(tracks)
+  if (lastRender && lastRender.signature === signature) {
+    scheduleRenderRelease()
+    return lastRender
+  }
+  lastRender = null
+  const result = await renderMix(tracks, onProgress)
+  lastRender = { signature, ...result }
+  scheduleRenderRelease()
+  return lastRender
+}
+
+function scheduleRenderRelease() {
+  clearTimeout(lastRenderTimer)
+  lastRenderTimer = setTimeout(() => { lastRender = null }, RENDER_CACHE_TTL)
+}
+
 /**
  * Rend puis encode et télécharge le mix.
  *
@@ -223,7 +253,7 @@ export function downloadBlob(blob, filename) {
  * @returns {Promise<{attenuationDb: number, size: number}>}
  */
 export async function exportMix({ tracks, format, baseName, onProgress }) {
-  const { buffer, attenuationDb } = await renderMix(tracks, onProgress)
+  const { buffer, attenuationDb } = await renderCached(tracks, onProgress)
 
   onProgress?.('encode')
   let blob
