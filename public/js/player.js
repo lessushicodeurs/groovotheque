@@ -1767,7 +1767,11 @@ function audibleTracks() {
   return currentTracks.map((track, i) => {
     const s = trackStates[i]
     const volume = anySolo ? (s.soloed ? s.volume : 0) : (s.muted ? 0 : s.volume)
-    return { url: track.url, volume, pan: panNodes[i]?.pan.value ?? 0 }
+    // Le pan n'est audible que si le routage Web Audio a abouti ; sinon le player
+    // se rabat sur ws.setVolume() et n'applique aucun pan. L'export doit rendre ce
+    // que l'on entend, donc pan neutre dans ce cas.
+    const pan = webAudioRouted[i] ? (panNodes[i]?.pan.value ?? 0) : 0
+    return { url: track.url, volume, pan }
   }).filter(t => t.volume > 0)
 }
 

@@ -20,7 +20,7 @@ const SAMPLE_RATE = 44100
  *        sinon la valeur négative appliquée à l'ensemble du buffer.
  */
 export async function renderMix(tracks, onProgress) {
-  if (!tracks.length) throw new Error('Aucune piste audible : le mix serait silencieux.')
+  if (!tracks.length) throw new Error('aucune piste audible, le mix serait silencieux.')
 
   onProgress?.('decode')
 
@@ -209,16 +209,28 @@ export function downloadBlob(blob, filename) {
   document.body.appendChild(a)
   a.click()
   a.remove()
-  URL.revokeObjectURL(url)
+  // Révoquer l'URL dans le même tick annule le téléchargement sur certains
+  // navigateurs : laisser au navigateur le temps de démarrer avant de libérer
+  // le Blob (qui peut peser plusieurs dizaines de Mo).
+  setTimeout(() => URL.revokeObjectURL(url), 5000)
 }
 
-// Le rendu de l'OfflineAudioContext n'est pas reproductible au bit près d'une passe
-// à l'autre (écarts d'un LSB, soit −90 dBFS). Garder le dernier rendu garantit que
-// deux formats exportés d'affilée portent exactement le même signal — et évite un
-// second rendu. Le buffer est relâché après quelques minutes d'inactivité.
-const RENDER_CACHE_TTL = 120000
+// Le rendu de l'OfflineAudioContext n'est pas garanti reproductible au bit près d'une
+// passe à l'autre (écarts d'un LSB, soit −90 dBFS). Garder le dernier rendu garantit
+// que deux formats exportés d'affilée portent exactement le même signal — et évite un
+// second rendu.
+//
+// Pas d'expiration par durée : la signature (URLs + gain + pan) suffit à invalider le
+// cache dès que le mix change, et un délai ferait retomber sur un nouveau rendu au
+// milieu d'une série d'exports (le critère « FLAC strictement identique au WAV »).
+// Coût : un AudioBuffer stéréo reste en mémoire jusqu'au prochain rendu ou au
+// déchargement de la page (≈ 21 Mo par minute de mix en float32).
 let lastRender = null
-let lastRenderTimer = null
+
+/** Laisse passer une frame de rendu pour que l'UI posée juste avant soit peinte. */
+function nextPaint() {
+  return new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)))
+}
 
 function renderSignature(tracks) {
   return JSON.stringify(tracks.map(t => [t.url, t.volume, t.pan]))
@@ -226,20 +238,11 @@ function renderSignature(tracks) {
 
 async function renderCached(tracks, onProgress) {
   const signature = renderSignature(tracks)
-  if (lastRender && lastRender.signature === signature) {
-    scheduleRenderRelease()
-    return lastRender
-  }
-  lastRender = null
+  if (lastRender && lastRender.signature === signature) return lastRender
+  // N'invalider qu'en cas de succès : un rendu raté ne doit pas détruire un cache valide.
   const result = await renderMix(tracks, onProgress)
   lastRender = { signature, ...result }
-  scheduleRenderRelease()
   return lastRender
-}
-
-function scheduleRenderRelease() {
-  clearTimeout(lastRenderTimer)
-  lastRenderTimer = setTimeout(() => { lastRender = null }, RENDER_CACHE_TTL)
 }
 
 /**
@@ -256,6 +259,10 @@ export async function exportMix({ tracks, format, baseName, onProgress }) {
   const { buffer, attenuationDb } = await renderCached(tracks, onProgress)
 
   onProgress?.('encode')
+  // L'encodage WAV bloque le thread principal : laisser le navigateur peindre le
+  // libellé « Encodage… » avant de partir dans la boucle.
+  await nextPaint()
+
   let blob
   if (format === 'wav') {
     blob = new Blob([encodeWav(buffer)], { type: 'audio/wav' })
