@@ -9,6 +9,9 @@ self.FLAC_SCRIPT_LOCATION = '/vendor/libflac/'
 const COMPRESSION_LEVEL = 5   // défaut de l'outil `flac` : bon compromis vitesse / taille
 const BITS_PER_SAMPLE = 16
 const BLOCK_FRAMES = 4096     // frames par appel à process_interleaved
+// En-tête de bloc de métadonnées (4 o) + bloc STREAMINFO (34 o) : dernier octet
+// réécrit par patchStreamInfo (fin de la somme MD5).
+const STREAMINFO_END = 38
 
 let loadError = null
 try {
@@ -55,6 +58,8 @@ function encode(pcm, channels, sampleRate, frames) {
     encoder,
     (buffer) => { chunks.push(new Uint8Array(buffer)) },
     (meta) => { metaData = meta },
+    // ogg_serial_number : doit rester `false`. libflac.js bascule sur un conteneur
+    // Ogg dès que ce paramètre est un nombre (y compris -1) ou `true`.
     false, 0,
   )
   if (status !== 0) {
@@ -88,15 +93,18 @@ function encode(pcm, channels, sampleRate, frames) {
 // total d'échantillons et somme MD5 doivent être réécrits dans le bloc STREAMINFO
 // à partir des métadonnées finales (portage de `addFLACMetaData` de libflacjs).
 function patchStreamInfo(chunks, meta) {
-  let index = 0
   let offset = 4
   let data = chunks[0]
   if (!data || data.length < 4 || String.fromCharCode(...data.subarray(0, 4)) !== 'fLaC') return
   if (data.length === 4) {
-    index = 1
     offset = 0
     data = chunks[1]
     if (!data) return
+  }
+
+  // En-tête de bloc (4 o) + STREAMINFO (34 o) : sans cela on écrirait hors du fragment.
+  if (data.length < offset + STREAMINFO_END) {
+    throw new Error('Fichier FLAC : bloc STREAMINFO tronqué, métadonnées non écrites.')
   }
 
   const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
@@ -114,5 +122,6 @@ function patchStreamInfo(chunks, meta) {
   for (let i = 0; i * 2 < md5.length; i++) {
     view.setUint8(offset + 22 + i, parseInt(md5.substring(i * 2, i * 2 + 2), 16))
   }
-  chunks[index] = data
+  // Pas de réaffectation dans `chunks` : la DataView écrit directement dans le
+  // buffer du fragment.
 }
