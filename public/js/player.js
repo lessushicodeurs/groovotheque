@@ -8,6 +8,7 @@ import {
   displayAuthor, formatRelativeDate,
   formatPosition as formatCommentPosition,
 } from './comments-shared.js'
+import { exportMix } from './mix-export.js'
 
 const TRACK_COLORS = [
   '#4fc3f7',
@@ -60,6 +61,9 @@ const btnPrev          = document.getElementById('btn-prev')
 const btnNext          = document.getElementById('btn-next')
 const btnSaveMix       = document.getElementById('btn-save-mix')
 const btnDownloadAll   = document.getElementById('btn-download-all')
+const downloadWrap     = document.getElementById('download-wrap')
+const downloadMenu     = document.getElementById('download-menu')
+const downloadStatusEl = document.getElementById('download-status')
 
 // ── Epic 22 — DOM refs commentaires ──────────────────────────────────────
 const btnAddComment        = document.getElementById('btn-add-comment')
@@ -1627,6 +1631,194 @@ async function loadMarkers() {
 }
 
 // 30.3 — Charge mix + loop + markers en parallèle
+// ── Epic 38 — Téléchargement (pistes séparées / mix stéréo) ────────────────
+
+const DOWNLOAD_LABELS = {
+  zip:  'Pistes séparées (zip)',
+  mp3:  'Mix stéréo (MP3)',
+  flac: 'Mix stéréo (FLAC)',
+  wav:  'Mix stéréo (WAV)',
+}
+
+let downloadBusy = false
+let downloadStatusTimer = null
+
+// 38.1 — Menu déroulant : ouverture/fermeture, clic extérieur, Échap
+function initDownloadMenu() {
+  downloadWrap.removeAttribute('hidden')
+
+  btnDownloadAll.addEventListener('click', (e) => {
+    e.stopPropagation()
+    if (downloadMenu.hasAttribute('hidden')) openDownloadMenu()
+    else closeDownloadMenu()
+  })
+
+  downloadMenu.addEventListener('click', (e) => {
+    const item = e.target.closest('.download-menu-item')
+    if (!item || item.disabled) return
+    const format = item.dataset.format
+    if (format === 'zip') {
+      closeDownloadMenu()
+      downloadTracksZip()
+    } else {
+      downloadMixFile(format, item)
+    }
+  })
+
+  document.addEventListener('click', (e) => {
+    if (!downloadWrap.contains(e.target)) closeDownloadMenu()
+  })
+
+  // Navigation clavier du menu. Le handler global (espace, Échap, flèches) se retire
+  // dès que le menu est ouvert : voir isDownloadMenuOpen() dans les raccourcis.
+  downloadWrap.addEventListener('keydown', (e) => {
+    if (!isDownloadMenuOpen()) return
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      e.stopPropagation()
+      closeDownloadMenu()
+    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      e.stopPropagation()
+      moveDownloadMenuFocus(e.key === 'ArrowDown' ? 1 : -1)
+    }
+  })
+
+  // Échap hors du menu (focus ailleurs dans la page) le ferme aussi.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || !isDownloadMenuOpen()) return
+    if (downloadWrap.contains(e.target)) return   // déjà traité ci-dessus
+    e.preventDefault()
+    e.stopPropagation()
+    closeDownloadMenu()
+  })
+}
+
+function isDownloadMenuOpen() {
+  return !!downloadMenu && !downloadMenu.hasAttribute('hidden')
+}
+
+function downloadMenuItems() {
+  return [...downloadMenu.querySelectorAll('.download-menu-item:not([disabled])')]
+}
+
+// Flèches haut/bas : déplacement circulaire du focus entre les entrées du menu.
+function moveDownloadMenuFocus(delta) {
+  const items = downloadMenuItems()
+  if (!items.length) return
+  const current = items.indexOf(document.activeElement)
+  const next = current === -1
+    ? (delta > 0 ? 0 : items.length - 1)
+    : (current + delta + items.length) % items.length
+  items[next].focus()
+}
+
+function openDownloadMenu() {
+  downloadMenu.removeAttribute('hidden')
+  btnDownloadAll.setAttribute('aria-expanded', 'true')
+  hideDownloadStatus()
+  downloadMenuItems()[0]?.focus()
+}
+
+function closeDownloadMenu() {
+  if (downloadBusy) return   // un rendu est en cours : le menu reste visible
+  // Ne pas laisser le focus sur une entrée qui disparaît.
+  const focusWasInside = downloadWrap.contains(document.activeElement)
+  downloadMenu.setAttribute('hidden', '')
+  btnDownloadAll.setAttribute('aria-expanded', 'false')
+  if (focusWasInside) btnDownloadAll.focus()
+}
+
+// 38.4 — Message discret sous le bouton (atténuation, erreur)
+function showDownloadStatus(msg, isError) {
+  clearTimeout(downloadStatusTimer)
+  downloadStatusEl.textContent = msg
+  downloadStatusEl.classList.toggle('error', !!isError)
+  downloadStatusEl.removeAttribute('hidden')
+  downloadStatusTimer = setTimeout(hideDownloadStatus, isError ? 8000 : 6000)
+}
+
+function hideDownloadStatus() {
+  clearTimeout(downloadStatusTimer)
+  downloadStatusEl.setAttribute('hidden', '')
+  downloadStatusEl.textContent = ''
+}
+
+// Epic 09 — Téléchargement des pistes séparées (comportement d'origine)
+function downloadTracksZip() {
+  btnDownloadAll.disabled = true
+  btnDownloadAll.textContent = 'Préparation…'
+  const a = document.createElement('a')
+  a.href = `/api/grooves/${encodePath(grooveSlug)}/download`
+  a.download = `${grooveSlug.split('/').pop()}.zip`
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => {
+    btnDownloadAll.disabled = false
+    btnDownloadAll.textContent = '↓ Tout télécharger'
+  }, 2000)
+}
+
+// 38.2 — Pistes audibles avec leurs réglages courants (mémoire, pas mix.json).
+// Même règle que applyVolumes() : le solo l'emporte sur le mute.
+function audibleTracks() {
+  const anySolo = trackStates.some(s => s.soloed)
+  return currentTracks.map((track, i) => {
+    const s = trackStates[i]
+    const volume = anySolo ? (s.soloed ? s.volume : 0) : (s.muted ? 0 : s.volume)
+    // Le pan n'est audible que si le routage Web Audio a abouti ; sinon le player
+    // se rabat sur ws.setVolume() et n'applique aucun pan. L'export doit rendre ce
+    // que l'on entend, donc pan neutre dans ce cas.
+    const pan = webAudioRouted[i] ? (panNodes[i]?.pan.value ?? 0) : 0
+    return { url: track.url, volume, pan }
+  }).filter(t => t.volume > 0)
+}
+
+// 38.2 à 38.6 — Rendu du mix, encodage et téléchargement
+async function downloadMixFile(format, item) {
+  if (downloadBusy) return
+  downloadBusy = true
+  pauseAll()
+  hideDownloadStatus()
+
+  const items = [...downloadMenu.querySelectorAll('.download-menu-item')]
+  items.forEach(el => { el.disabled = true })
+  btnDownloadAll.disabled = true
+  const setStep = (label) => { item.textContent = label }
+  setStep('Rendu…')
+
+  let notice = null
+  let isError = false
+  try {
+    const { attenuationDb } = await exportMix({
+      tracks: audibleTracks(),
+      format,
+      baseName: `${grooveSlug.split('/').pop()}-mix`,
+      onProgress: (step) => {
+        if (step === 'decode') setStep('Lecture des pistes…')
+        else if (step === 'render') setStep('Rendu…')
+        else if (step === 'encode') setStep('Encodage…')
+      },
+    })
+    if (attenuationDb < 0) {
+      const db = Math.abs(attenuationDb).toFixed(1).replace('.', ',')
+      notice = `Mix atténué de −${db} dB pour éviter la saturation`
+    }
+  } catch (err) {
+    console.error('[mix-export]', err)
+    notice = `Export impossible : ${err.message}`
+    isError = true
+  } finally {
+    items.forEach(el => { el.disabled = false })
+    btnDownloadAll.disabled = false
+    item.textContent = DOWNLOAD_LABELS[format]
+    downloadBusy = false
+    closeDownloadMenu()
+    if (notice) showDownloadStatus(notice, isError)
+  }
+}
+
 async function loadMix(tracks) {
   await Promise.all([
     loadMixTracks(tracks),
@@ -2859,21 +3051,7 @@ async function init() {
     tracksContainer.removeAttribute('hidden')
     drawerEl.removeAttribute('hidden')
     initDrawer()
-    btnDownloadAll.removeAttribute('hidden')
-    btnDownloadAll.addEventListener('click', () => {
-      btnDownloadAll.disabled = true
-      btnDownloadAll.textContent = 'Préparation…'
-      const a = document.createElement('a')
-      a.href = `/api/grooves/${encodePath(grooveSlug)}/download`
-      a.download = `${grooveSlug.split('/').pop()}.zip`
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
-      setTimeout(() => {
-        btnDownloadAll.disabled = false
-        btnDownloadAll.textContent = '↓ Tout télécharger'
-      }, 2000)
-    })
+    initDownloadMenu()
 
     // 6.3 — Fetch all cached peaks in parallel before building tracks
     const cachedPeaksArr = await Promise.all(
@@ -3012,6 +3190,9 @@ async function init() {
     document.addEventListener('keydown', (e) => {
       // Skip when user is interacting with any input or textarea element
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      // 38.1 — Menu de téléchargement ouvert : il gère lui-même Échap et les flèches,
+      // et Espace doit activer nativement l'entrée focalisée.
+      if (isDownloadMenuOpen()) return
 
       if (e.key === ' ') {
         e.preventDefault()

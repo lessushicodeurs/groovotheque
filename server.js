@@ -133,6 +133,15 @@ app.get('/vendor/plugins/regions.esm.js', (req, res) => {
 // 34.2 — AlphaTab dist depuis node_modules (worker + fonts + soundfont)
 app.use('/vendor/alphatab', express.static(path.join(__dirname, 'node_modules/@coderline/alphatab/dist')));
 
+// 38.5 — libflacjs (encodeur FLAC WebAssembly) depuis node_modules
+app.use('/vendor/libflac', express.static(path.join(__dirname, 'node_modules/libflacjs/dist')));
+
+// 38.6 — lamejs (encodeur MP3) depuis node_modules
+app.get('/vendor/lamejs/lame.min.js', (req, res) => {
+  res.type('application/javascript');
+  res.sendFile(path.join(__dirname, 'node_modules/lamejs/lame.min.js'));
+});
+
 // 20.2 — Contenu d'un niveau : GET /api/grooves?path=
 // Conteneurs d'abord (alpha), grooves ensuite (alpha)
 app.get('/api/grooves', async (req, res) => {

@@ -756,8 +756,14 @@ body {
 
 /* ── Download ────────────────────────────── */
 
-.btn-download-all {
+/* 38.1 — Conteneur du menu de téléchargement (ancre du popup) */
+.download-wrap {
+  position: relative;
   margin-left: auto;
+  flex-shrink: 0;
+}
+
+.btn-download-all {
   flex-shrink: 0;
   background: #1c1c1c;
   border: 1px solid #2a2a2a;
@@ -780,6 +786,70 @@ body {
 .btn-download-all:disabled {
   color: #3a3a3a;
   cursor: default;
+}
+
+/* 38.1 — Menu déroulant du bouton de téléchargement
+   Même famille visuelle que .tag-suggestions */
+.download-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 500;
+  margin: 4px 0 0;
+  padding: 4px;
+  list-style: none;
+  background: #1d1d1d;
+  border: 1px solid #333;
+  border-radius: 6px;
+  min-width: 180px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+}
+
+.download-menu-item {
+  display: block;
+  width: 100%;
+  padding: 0.32rem 0.6rem;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  text-align: left;
+  font-size: 0.83rem;
+  color: #ccc;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.download-menu-item:hover:not(:disabled),
+.download-menu-item:focus-visible {
+  background: #2c3a58;
+  color: #dbe4f7;
+  outline: none;
+}
+
+.download-menu-item:disabled {
+  color: #5a5a5a;
+  cursor: default;
+}
+
+/* 38.4 — Message discret de fin de rendu (atténuation, erreur) */
+.download-status {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 499;
+  margin-top: 4px;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  background: #1d1d1d;
+  border: 1px solid #333;
+  font-size: 0.72rem;
+  color: #999;
+  white-space: nowrap;
+}
+
+.download-status.error {
+  color: #d07070;
+  border-color: #4a2a2a;
 }
 
 .btn-track-download {
@@ -1129,6 +1199,7 @@ body.tab-no-scroll { overflow: hidden; }
 
   /* Player header: hide secondary actions */
   .btn-save-mix,
+  .download-wrap,
   .btn-download-all {
     display: none;
   }
