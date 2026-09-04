@@ -1669,21 +1669,64 @@ function initDownloadMenu() {
     if (!downloadWrap.contains(e.target)) closeDownloadMenu()
   })
 
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeDownloadMenu()
+  // Navigation clavier du menu. Le handler global (espace, Échap, flèches) se retire
+  // dès que le menu est ouvert : voir isDownloadMenuOpen() dans les raccourcis.
+  downloadWrap.addEventListener('keydown', (e) => {
+    if (!isDownloadMenuOpen()) return
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      e.stopPropagation()
+      closeDownloadMenu()
+    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      e.stopPropagation()
+      moveDownloadMenuFocus(e.key === 'ArrowDown' ? 1 : -1)
+    }
   })
+
+  // Échap hors du menu (focus ailleurs dans la page) le ferme aussi.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || !isDownloadMenuOpen()) return
+    if (downloadWrap.contains(e.target)) return   // déjà traité ci-dessus
+    e.preventDefault()
+    e.stopPropagation()
+    closeDownloadMenu()
+  })
+}
+
+function isDownloadMenuOpen() {
+  return !!downloadMenu && !downloadMenu.hasAttribute('hidden')
+}
+
+function downloadMenuItems() {
+  return [...downloadMenu.querySelectorAll('.download-menu-item:not([disabled])')]
+}
+
+// Flèches haut/bas : déplacement circulaire du focus entre les entrées du menu.
+function moveDownloadMenuFocus(delta) {
+  const items = downloadMenuItems()
+  if (!items.length) return
+  const current = items.indexOf(document.activeElement)
+  const next = current === -1
+    ? (delta > 0 ? 0 : items.length - 1)
+    : (current + delta + items.length) % items.length
+  items[next].focus()
 }
 
 function openDownloadMenu() {
   downloadMenu.removeAttribute('hidden')
   btnDownloadAll.setAttribute('aria-expanded', 'true')
   hideDownloadStatus()
+  downloadMenuItems()[0]?.focus()
 }
 
 function closeDownloadMenu() {
   if (downloadBusy) return   // un rendu est en cours : le menu reste visible
+  // Ne pas laisser le focus sur une entrée qui disparaît.
+  const focusWasInside = downloadWrap.contains(document.activeElement)
   downloadMenu.setAttribute('hidden', '')
   btnDownloadAll.setAttribute('aria-expanded', 'false')
+  if (focusWasInside) btnDownloadAll.focus()
 }
 
 // 38.4 — Message discret sous le bouton (atténuation, erreur)
@@ -1737,6 +1780,7 @@ async function downloadMixFile(format, item) {
 
   const items = [...downloadMenu.querySelectorAll('.download-menu-item')]
   items.forEach(el => { el.disabled = true })
+  btnDownloadAll.disabled = true
   const setStep = (label) => { item.textContent = label }
   setStep('Rendu…')
 
@@ -1763,6 +1807,7 @@ async function downloadMixFile(format, item) {
     isError = true
   } finally {
     items.forEach(el => { el.disabled = false })
+    btnDownloadAll.disabled = false
     item.textContent = DOWNLOAD_LABELS[format]
     downloadBusy = false
     closeDownloadMenu()
@@ -3141,6 +3186,9 @@ async function init() {
     document.addEventListener('keydown', (e) => {
       // Skip when user is interacting with any input or textarea element
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      // 38.1 — Menu de téléchargement ouvert : il gère lui-même Échap et les flèches,
+      // et Espace doit activer nativement l'entrée focalisée.
+      if (isDownloadMenuOpen()) return
 
       if (e.key === ' ') {
         e.preventDefault()
