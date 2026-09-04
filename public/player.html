@@ -17,7 +17,18 @@
     <button id="btn-prev" class="nav-btn" aria-label="Groove précédent" disabled>‹</button>
     <button id="btn-next" class="nav-btn" aria-label="Groove suivant" disabled>›</button>
     <button id="btn-save-mix" class="btn-save-mix" hidden>Sauvegarder le mix</button>
-    <button id="btn-download-all" class="btn-download-all" hidden>↓ Tout télécharger</button>
+    <!-- 38.1 — Menu de téléchargement (pistes séparées / mix stéréo) -->
+    <div id="download-wrap" class="download-wrap" hidden>
+      <button id="btn-download-all" class="btn-download-all"
+              aria-haspopup="true" aria-expanded="false" aria-controls="download-menu">↓ Tout télécharger</button>
+      <ul id="download-menu" class="download-menu" role="menu" hidden>
+        <li role="none"><button type="button" class="download-menu-item" role="menuitem" data-format="zip">Pistes séparées (zip)</button></li>
+        <li role="none"><button type="button" class="download-menu-item" role="menuitem" data-format="mp3">Mix stéréo (MP3)</button></li>
+        <li role="none"><button type="button" class="download-menu-item" role="menuitem" data-format="flac">Mix stéréo (FLAC)</button></li>
+        <li role="none"><button type="button" class="download-menu-item" role="menuitem" data-format="wav">Mix stéréo (WAV)</button></li>
+      </ul>
+      <span id="download-status" class="download-status" role="status" hidden></span>
+    </div>
   </header>
   <!-- 36.3 — Tags du groove -->
   <div id="tags-bar" class="tags-bar" hidden>
