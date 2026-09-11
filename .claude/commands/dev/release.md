@@ -162,10 +162,13 @@ Extraire la section du changelog correspondante dans un fichier temporaire, puis
 gh release create v<X.Y.Z> \
   --title "v<X.Y.Z>" \
   --notes-file <fichier-notes> \
-  --prerelease
+  --verify-tag
 ```
 
-`--prerelease` tant que la version est en `0.x` — le projet est en alpha.
+`--verify-tag` garantit que `gh` s'accroche au tag déjà créé à l'étape 7 au lieu d'en
+fabriquer un autre. Pas de `--prerelease` : les releases 0.0.1 à 0.0.3 sont des releases
+normales, la dernière publiée doit porter le badge « Latest ». Le statut alpha est déjà
+annoncé dans l'en-tête du CHANGELOG.
 
 ## 10. Rapport final
 
