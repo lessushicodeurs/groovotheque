@@ -644,8 +644,20 @@ function applyTempo(pct) {
 
 // Volume is controlled via GainNodes when Web Audio routing succeeded, or via
 // ws.setVolume() as fallback. Chain: MediaElementSource → GainNode → StereoPannerNode → dest.
+// 35.3 — Le solo porte sur l'ensemble des lignes du player, MIDI comprises :
+// soloer une piste MIDI doit couper les pistes audio, et inversement.
+function anySoloActive() {
+  return trackStates.some(s => s.soloed) || midiTracks.some(t => t.soloed)
+}
+
+// Applique l'état mute/solo/volume aux pistes audio ET aux pistes MIDI.
+function applyMix() {
+  applyVolumes()
+  applyMidiTracksAudio()
+}
+
 function applyVolumes() {
-  const anySolo = trackStates.some(s => s.soloed)
+  const anySolo = anySoloActive()
   gainNodes.forEach((gainNode, i) => {
     const s = trackStates[i]
     const vol = anySolo ? (s.soloed ? s.volume : 0) : (s.muted ? 0 : s.volume)
@@ -1171,14 +1183,14 @@ function buildTrackRow(track, idx, cachedPeaks = null, opts = {}) {
     state.muted = !state.muted
     btnMute.classList.toggle('active', state.muted)
     btnMute.setAttribute('aria-pressed', String(state.muted))
-    applyVolumes()
+    applyMix()
   })
 
   btnSolo.addEventListener('click', () => {
     state.soloed = !state.soloed
     btnSolo.classList.toggle('active', state.soloed)
     btnSolo.setAttribute('aria-pressed', String(state.soloed))
-    applyVolumes()
+    applyMix()
   })
 
   volSlider.addEventListener('input', () => {
@@ -1287,15 +1299,21 @@ function firstAudioRowEl() {
   return tracksContainer.querySelector('.track-row:not(.track-row--midi)')
 }
 
-function applyMidiTrackAudio(t) {
+// Le solo est résolu ici pour toutes les pistes MIDI (et non délégué à
+// changeTrackSolo) afin qu'un solo posé sur une piste audio les coupe aussi.
+function applyMidiTracksAudio() {
   if (!alphaTabApi) return
-  try {
-    alphaTabApi.changeTrackMute([t.track], t.muted)
-    alphaTabApi.changeTrackSolo([t.track], t.soloed)
-    alphaTabApi.changeTrackVolume([t.track], t.volume)
-  } catch (err) {
-    console.warn('[tab] contrôle de piste MIDI indisponible:', err)
-  }
+  const anySolo = anySoloActive()
+  midiTracks.forEach(t => {
+    const muted = anySolo ? !t.soloed : t.muted
+    try {
+      alphaTabApi.changeTrackSolo([t.track], false)
+      alphaTabApi.changeTrackMute([t.track], muted)
+      alphaTabApi.changeTrackVolume([t.track], t.volume)
+    } catch (err) {
+      console.warn('[tab] contrôle de piste MIDI indisponible:', err)
+    }
+  })
 }
 
 // Sélection des portées rendues dans le drawer AlphaTab.
@@ -1387,19 +1405,19 @@ function buildMidiTrackRow(track, idx, color) {
     state.muted = !state.muted
     btnMute.classList.toggle('active', state.muted)
     btnMute.setAttribute('aria-pressed', String(state.muted))
-    applyMidiTrackAudio(state)
+    applyMix()
   })
 
   btnSolo.addEventListener('click', () => {
     state.soloed = !state.soloed
     btnSolo.classList.toggle('active', state.soloed)
     btnSolo.setAttribute('aria-pressed', String(state.soloed))
-    applyMidiTrackAudio(state)
+    applyMix()
   })
 
   volSlider.addEventListener('input', () => {
     state.volume = Number(volSlider.value) / 100
-    applyMidiTrackAudio(state)
+    applyMidiTracksAudio()
   })
 
   btnShow.addEventListener('click', () => setTabTrackVisible(myIdx, !state.visible))
@@ -1413,6 +1431,9 @@ function buildMidiTrackRows(score) {
   score.tracks.forEach((track, i) => {
     buildMidiTrackRow(track, i, TRACK_COLORS[(colorOffset + i) % TRACK_COLORS.length])
   })
+  // Un solo posé sur une piste audio avant le chargement du score doit aussi
+  // couper les pistes MIDI qui viennent d'apparaître.
+  applyMidiTracksAudio()
 }
 
 // ── 35.4 — Backing track embarqué dans le fichier GP ──────────────────────
