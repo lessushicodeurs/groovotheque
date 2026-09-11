@@ -213,8 +213,9 @@ let markerIdCounter   = 0
 // une simple translation appliquée identiquement à toutes les rangées, ce qui
 // garantit un alignement au pixel près.
 const ZOOM_LEVELS = [1, 2, 4, 8, 16]
-let zoomLevel     = 1   // palier courant (session uniquement, jamais persisté)
-let zoomScrollX   = 0   // décalage horizontal courant, en pixels
+let zoomLevel        = 1      // palier courant (session uniquement, jamais persisté)
+let zoomScrollX      = 0      // décalage horizontal courant, en pixels
+let zoomUserScrolled = false  // 18.5 — l'utilisateur a repris la main sur le défilement
 
 // ── Epic 22 — Comments state ──────────────────────────────────────────────
 let commentMarkersLaneEl  = null  // div dans .timeline-wave-col pour les triangles
@@ -1225,6 +1226,60 @@ function initZoomControls() {
   btnZoomIn?.addEventListener('click', () => stepZoom(1))
   btnZoomOut?.addEventListener('click', () => stepZoom(-1))
   btnZoomLevel?.addEventListener('click', () => applyZoom(1))
+}
+
+// 18.3 — Défilement manuel : molette / trackpad sur desktop, swipe sur mobile.
+// Un seul décalage est appliqué à toutes les rangées, donc l'alignement entre
+// timeline, bande de marqueurs et pistes est conservé au pixel près.
+function initZoomScroll() {
+  tracksContainer.addEventListener('wheel', (e) => {
+    if (zoomLevel <= 1) return
+    const horizontal = Math.abs(e.deltaX) > Math.abs(e.deltaY)
+    const delta = horizontal ? e.deltaX : (e.shiftKey ? e.deltaY : 0)
+    if (!delta) return
+    e.preventDefault()
+    setZoomScrollX(zoomScrollX + delta)
+    zoomUserScrolled = true
+  }, { passive: false })
+
+  // Swipe tactile. Les écouteurs sont en phase de capture : preventDefault()
+  // y est appliqué avant que WaveSurfer ne traite le pointermove, ce qui
+  // l'empêche de démarrer une création de région pendant le défilement.
+  let swipeId = null
+  let swipeStartX = 0
+  let swipeStartY = 0
+  let swipeStartScroll = 0
+  let swiping = false
+
+  tracksContainer.addEventListener('pointerdown', (e) => {
+    if (zoomLevel <= 1 || e.pointerType !== 'touch') return
+    swipeId          = e.pointerId
+    swipeStartX      = e.clientX
+    swipeStartY      = e.clientY
+    swipeStartScroll = zoomScrollX
+    swiping          = false
+  }, { capture: true })
+
+  tracksContainer.addEventListener('pointermove', (e) => {
+    if (swipeId === null || e.pointerId !== swipeId) return
+    const dx = e.clientX - swipeStartX
+    const dy = e.clientY - swipeStartY
+    if (!swiping) {
+      if (Math.abs(dx) < 8 || Math.abs(dx) <= Math.abs(dy)) return
+      swiping = true
+    }
+    e.preventDefault()
+    setZoomScrollX(swipeStartScroll - dx)
+    zoomUserScrolled = true
+  }, { capture: true, passive: false })
+
+  const endSwipe = (e) => {
+    if (swipeId === null || e.pointerId !== swipeId) return
+    swipeId = null
+    swiping = false
+  }
+  window.addEventListener('pointerup', endSwipe, true)
+  window.addEventListener('pointercancel', endSwipe, true)
 }
 
 // ── Epic 13 — Tablature synchronisée ──────────────────────────────────────
@@ -3259,6 +3314,7 @@ async function init() {
 
     // ── Zoom horizontal (epic 18) ──────────────
     initZoomControls()
+    initZoomScroll()
 
     // ── Tempo control ──────────────────────────
     tempoSliderEl.addEventListener('input', () => applyTempo(Number(tempoSliderEl.value)))

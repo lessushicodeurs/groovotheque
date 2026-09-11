@@ -338,6 +338,13 @@ body {
   overflow: hidden;
 }
 
+/* 18.3 — Le geste horizontal est traité par le player (défilement solidaire) ;
+   le geste vertical reste au navigateur (défilement de page). */
+.tracks-container--zoomed .timeline-wave-vp,
+.tracks-container--zoomed .track-wave-vp {
+  touch-action: pan-y;
+}
+
 .timeline-wave-col {
   width: 100%;
   display: flex;
