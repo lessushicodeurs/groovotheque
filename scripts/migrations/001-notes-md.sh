@@ -24,8 +24,16 @@ DRY_RUN="${DRY_RUN:-0}"
 
 [[ -d "$GROOVES_DIR" ]] || die "Dossier introuvable : $GROOVES_DIR"
 
+MIGRATED=0
+ALREADY=0
+AMBIGUOUS=0
+TRASH=0
+EMPTY=0
+
 # Critère identique à scripts/deploy-grooves.sh : un dossier est un groove s'il
 # contient directement au moins un fichier audio ou Guitar Pro.
+# Duplication volontaire : deploy-grooves.sh n'est pas versionné (il contient la
+# cible SSH), il ne peut donc pas être factorisé avec ce dépôt.
 is_groove() {
   local dir="$1"
   find -H "$dir" -maxdepth 1 -type f \( \
@@ -34,49 +42,62 @@ is_groove() {
   \) -print -quit | grep -q .
 }
 
-# grooves/ est un lien symbolique vers les vraies données : -H le fait suivre
-# pour l'argument de ligne de commande uniquement.
-
-# Un composant du chemin finissant par ~ marque une corbeille (ignorée côté serveur)
-is_trash() {
-  local rel="$1"
-  local part
-  local IFS='/'
-  for part in $rel; do
-    [[ "$part" == *~ ]] && return 0
+# Parcours calqué sur collect_local_grooves() de deploy-grooves.sh :
+# - on s'arrête au premier niveau qui est un groove (pas de groove imbriqué) ;
+# - le glob */ saute les dossiers cachés, comme le déploiement.
+# Seule différence assumée : deploy-grooves.sh ignore d'emblée les dossiers dont
+# le nom finit par ~ (corbeille) ; ici on y descend quand même, uniquement pour
+# les compter, jamais pour y renommer quoi que ce soit.
+# Émet des enregistrements "<0|1 corbeille>\t<chemin relatif>" séparés par \0.
+collect_grooves() {
+  local dir="$1" rel="$2" trash="$3"
+  local subdir name subrel subtrash
+  for subdir in "$dir"/*/; do
+    [[ -d "$subdir" ]] || continue
+    name="$(basename "$subdir")"
+    subrel="${rel:+$rel/}$name"
+    subtrash="$trash"
+    [[ "$name" == *~ ]] && subtrash=1
+    if is_groove "$subdir"; then
+      printf '%s\t%s\0' "$subtrash" "$subrel"
+    else
+      collect_grooves "$subdir" "$subrel" "$subtrash"
+    fi
   done
-  return 1
 }
 
 echo -e "${BOLD}Racine parcourue :${RESET} $GROOVES_DIR"
 [[ "$DRY_RUN" -eq 1 ]] && echo -e "${YELLOW}Mode dry-run — aucun renommage effectué${RESET}"
 echo
 
-MIGRATED=0
-ALREADY=0
-AMBIGUOUS=0
-TRASH=0
-EMPTY=0
+mapfile -d '' ENTRIES < <(collect_grooves "$GROOVES_DIR" "" 0 | sort -z)
 
-mapfile -d '' GROOVE_DIRS < <(find -H "$GROOVES_DIR" -mindepth 1 -type d -print0 | sort -z)
+for entry in "${ENTRIES[@]}"; do
+  [[ -n "$entry" ]] || continue
+  trash="${entry%%$'\t'*}"
+  rel="${entry#*$'\t'}"
+  dir="$GROOVES_DIR/$rel"
 
-for dir in "${GROOVE_DIRS[@]}"; do
-  [[ -n "$dir" ]] || continue
-  is_groove "$dir" || continue
-
-  rel="${dir#"$GROOVES_DIR"/}"
-
-  if is_trash "$rel"; then
+  if [[ "$trash" == "1" ]]; then
     TRASH=$((TRASH + 1))
     continue
   fi
 
-  mapfile -d '' MD_FILES < <(find -H "$dir" -maxdepth 1 -type f -name '*.md' -print0 | sort -z)
+  target="$dir/notes.md"
 
-  if [[ -f "$dir/notes.md" ]]; then
-    ALREADY=$((ALREADY + 1))
+  # -e (et non -f) : un notes.md qui serait un répertoire ferait passer -f à faux
+  # et `mv` déplacerait la fiche DANS ce répertoire.
+  if [[ -e "$target" || -L "$target" ]]; then
+    if [[ -f "$target" ]]; then
+      ALREADY=$((ALREADY + 1))
+    else
+      warn "notes.md n'est pas un fichier régulier dans $rel — décision humaine requise"
+      AMBIGUOUS=$((AMBIGUOUS + 1))
+    fi
     continue
   fi
+
+  mapfile -d '' MD_FILES < <(find -H "$dir" -maxdepth 1 -type f -name '*.md' -print0 | sort -z)
 
   case ${#MD_FILES[@]} in
     0)
@@ -87,11 +108,14 @@ for dir in "${GROOVE_DIRS[@]}"; do
       name="$(basename "$src")"
       if [[ "$DRY_RUN" -eq 1 ]]; then
         echo -e "  ${CYAN}→${RESET} $rel/$name  ➜  notes.md"
+        MIGRATED=$((MIGRATED + 1))
       else
-        mv "$src" "$dir/notes.md"
+        # -n : ne jamais écraser une cible apparue entre-temps.
+        # -T : la cible est le nouveau nom, jamais un répertoire de destination.
+        mv -n -T -- "$src" "$target"
         ok "$rel/$name  →  notes.md"
+        MIGRATED=$((MIGRATED + 1))
       fi
-      MIGRATED=$((MIGRATED + 1))
       ;;
     *)
       names=()
