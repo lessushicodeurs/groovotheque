@@ -1292,6 +1292,55 @@ function zoomTimeToPx(t) {
   return (t / totalDuration) * zoomContentWidth()
 }
 
+// Défilement de bord pendant un glisser en mode zoomé : sans lui, impossible
+// d'étendre ou de déplacer un marqueur (epic 17) au-delà de la portion visible
+// sans lâcher, défiler, reprendre — alors que c'est le cas d'usage annoncé du
+// zoom. `onScroll` rejoue le calcul du glisser quand la vue a bougé sous le
+// curseur resté immobile.
+const EDGE_SCROLL_ZONE  = 44   // largeur de la zone sensible, en pixels
+const EDGE_SCROLL_SPEED = 22   // déplacement maximal par image, en pixels
+
+function startEdgeScroll(onScroll) {
+  let clientX = null
+  let raf     = null
+
+  const step = () => {
+    raf = null
+    if (clientX === null || zoomLevel <= 1) return
+    const vp = timelineVpEl?.getBoundingClientRect()
+    if (vp) {
+      let delta = 0
+      if (clientX < vp.left + EDGE_SCROLL_ZONE) {
+        delta = -EDGE_SCROLL_SPEED *
+          Math.min(1, (vp.left + EDGE_SCROLL_ZONE - clientX) / EDGE_SCROLL_ZONE)
+      } else if (clientX > vp.right - EDGE_SCROLL_ZONE) {
+        delta = EDGE_SCROLL_SPEED *
+          Math.min(1, (clientX - (vp.right - EDGE_SCROLL_ZONE)) / EDGE_SCROLL_ZONE)
+      }
+      if (delta !== 0) {
+        const before = zoomScrollX
+        setZoomScrollX(zoomScrollX + delta)
+        if (zoomScrollX !== before) {
+          zoomUserScrolled = true
+          onScroll(clientX)
+        }
+      }
+    }
+    raf = requestAnimationFrame(step)
+  }
+
+  return {
+    update(x) {
+      clientX = x
+      if (raf === null) raf = requestAnimationFrame(step)
+    },
+    stop() {
+      clientX = null
+      if (raf !== null) { cancelAnimationFrame(raf); raf = null }
+    },
+  }
+}
+
 // Position courante de la tête de lecture, en secondes.
 function playheadTime() {
   return wavesurfers[0]?.getCurrentTime() ?? 0
@@ -2358,20 +2407,27 @@ function setupRegionInteraction(el, marker) {
     const startX = e.clientX
     const m = markers.find(mk => mk.id === marker.id)
     if (!m) return
-    const origStart = m.start
     const duration  = m.end - m.start
     const { minStart, maxEnd } = getMoveBounds(m.id)
+    // Décalage entre le début de la région et le point saisi, en secondes.
+    // Raisonner en temps absolu (et non en delta d'abscisse écran) rend le
+    // déplacement correct quand la vue défile sous un curseur immobile.
+    const grabOffset = m.start - laneXToTime(startX)
 
-    const onMove = (ev) => {
-      if (Math.abs(ev.clientX - startX) > 3) didDrag = true
-      const rect = markerLaneEl.getBoundingClientRect()
-      const dt   = ((ev.clientX - startX) / rect.width) * totalDuration
-      let ns = Math.max(minStart, Math.min(origStart + dt, maxEnd - duration))
+    const applyMove = (clientX) => {
+      const ns = Math.max(minStart, Math.min(laneXToTime(clientX) + grabOffset, maxEnd - duration))
       m.start = ns
       m.end   = ns + duration
       updateRegionElPosition(el, m)
     }
+    const edge = startEdgeScroll(applyMove)
+    const onMove = (ev) => {
+      if (Math.abs(ev.clientX - startX) > 3) didDrag = true
+      applyMove(ev.clientX)
+      edge.update(ev.clientX)
+    }
     const onUp = () => {
+      edge.stop()
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
       // Update cycle if this is the selected region
@@ -2391,13 +2447,19 @@ function setupRegionInteraction(el, marker) {
       if (!m) return
       const { leftBound, rightBound } = getResizeBounds(m.id)
 
-      const onMove = (ev) => {
-        const t = laneXToTime(ev.clientX)
+      const applyResize = (clientX) => {
+        const t = laneXToTime(clientX)
         if (isLeft) m.start = Math.max(leftBound,  Math.min(t, m.end - 0.1))
         else        m.end   = Math.min(rightBound, Math.max(t, m.start + 0.1))
         updateRegionElPosition(el, m)
       }
+      const edge = startEdgeScroll(applyResize)
+      const onMove = (ev) => {
+        applyResize(ev.clientX)
+        edge.update(ev.clientX)
+      }
       const onUp = () => {
+        edge.stop()
         window.removeEventListener('mousemove', onMove)
         window.removeEventListener('mouseup', onUp)
         if (isMarkerInSelection(m)) syncRegionToAll(markerSelectionIn, markerSelectionOut)
@@ -2575,15 +2637,22 @@ function setupLaneDragCreate() {
     ghost.style.width = '0%'
     markerLaneEl.appendChild(ghost)
 
-    const onMove = (ev) => {
-      const cur = laneXToTime(ev.clientX)
+    const applyGhost = (clientX) => {
+      const cur = laneXToTime(clientX)
       const s   = Math.max(bounds.minStart, Math.min(anchorTime, cur))
       const end = Math.min(bounds.maxEnd,   Math.max(anchorTime, cur))
+      if (!ghost) return
       ghost.style.left  = ((s / totalDuration) * 100) + '%'
       ghost.style.width = (((end - s) / totalDuration) * 100) + '%'
     }
+    const edge = startEdgeScroll(applyGhost)
+    const onMove = (ev) => {
+      applyGhost(ev.clientX)
+      edge.update(ev.clientX)
+    }
 
     const onUp = (ev) => {
+      edge.stop()
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
       ghost.remove()
