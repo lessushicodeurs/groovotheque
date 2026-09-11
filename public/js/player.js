@@ -809,6 +809,12 @@ function buildTimelineRow() {
 
   timelineExtEl = document.createElement('div')
   timelineExtEl.className = 'track-timeline-ext'
+  // 18.6 — la règle temporelle repositionne la tête ; la conversion px → s
+  // passe par laneXToTime() qui mesure le contenu zoomé et défilé.
+  timelineExtEl.addEventListener('click', (e) => {
+    if (!totalDuration) return
+    performSeek(laneXToTime(e.clientX))
+  })
 
   markerLaneEl = document.createElement('div')
   markerLaneEl.className = 'marker-lane'

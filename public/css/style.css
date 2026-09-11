@@ -449,6 +449,7 @@ body {
   background: #0f0f0f;
   overflow: hidden;
   flex-shrink: 0;
+  cursor: pointer;
 }
 
 /* Epic 18 — même découpage viewport / contenu que la rangée timeline. */
