@@ -18,6 +18,19 @@ git status --porcelain
 git fetch --tags origin
 ```
 
+Vérifier aussi que le compte `gh` a bien le droit d'écriture sur le dépôt — `git push`
+passe par SSH et `gh` par son propre token, les deux peuvent correspondre à des comptes
+différents :
+
+```bash
+gh api "repos/$(gh repo view --json nameWithOwner -q .nameWithOwner)" -q .permissions.push
+```
+
+Si la réponse est `false`, s'arrêter : les tags seraient poussés sans que les releases
+puissent être créées. Indiquer à l'utilisateur le compte `gh` courant (`gh api user -q .login`),
+l'identité SSH (`ssh -T git@github.com`), et lui proposer `gh auth login` avec le bon compte
+puis `gh auth switch`.
+
 **Bloquer et le dire à l'utilisateur si :**
 - la branche courante n'est pas `master`
 - l'arbre de travail n'est pas propre (commits ou stash à faire d'abord)
@@ -168,4 +181,5 @@ Annoncer :
 - Jamais de release depuis une branche autre que `master`
 - Jamais de `1.0.0` sans demande explicite de l'utilisateur
 - Jamais de `git push --force`, jamais de tag réécrit : une version publiée est immuable. Une erreur se corrige par une version suivante.
-- Si `gh` n'est pas authentifié (`gh auth status`), s'arrêter et le signaler plutôt que de contourner
+- Si `gh` n'est pas authentifié ou n'a pas le droit d'écriture, s'arrêter et le signaler plutôt que de contourner
+- Le message d'erreur de `gh` « workflow scope may be required » est trompeur : sur un 404 à la création de release, vérifier d'abord les droits du compte, pas les scopes
