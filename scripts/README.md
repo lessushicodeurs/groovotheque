@@ -116,6 +116,77 @@ Le script détecte automatiquement le séparateur (`_-_`, `_` ou `-`). Les sous-
 
 ---
 
+## migrate.sh — migrations de données
+
+Applique aux données (`grooves/`, non versionnées) les migrations qui n'ont pas encore
+tourné sur cette machine.
+
+```bash
+./scripts/migrate.sh [--dry-run]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--dry-run` | Affiche ce que feraient les migrations, sans rien modifier ni enregistrer |
+
+| Variable | Défaut | Rôle |
+|----------|--------|------|
+| `GROOVES_DIR` | `<racine>/grooves` | Racine parcourue par les migrations (sert aux tests) |
+| `MIGRATIONS_REGISTRY` | `<racine>/cache/migrations.json` | Emplacement du registre |
+
+### Registre — `cache/migrations.json`
+
+Hors git (`cache/` est ignoré) : chaque machine a donc son propre état. Le fichier est créé
+au premier run et liste les migrations déjà appliquées.
+
+```json
+{
+  "migrations": [
+    { "id": "001-notes-md", "date": "2026-09-11T17:04:00+02:00", "count": 86 }
+  ]
+}
+```
+
+Un registre illisible (JSON invalide, clé `migrations` absente) fait échouer le runner avec
+un message explicite — rien n'est appliqué en silence. En `--dry-run`, le registre n'est
+jamais écrit.
+
+### Ajouter une migration
+
+Créer `scripts/migrations/<NNN>-<nom>.sh`, exécutable. Les migrations sont appliquées par
+ordre alphabétique de leur nom de fichier ; l'id enregistré est le nom sans `.sh`.
+
+Le runner passe à la migration :
+
+- `GROOVES_DIR` — la racine à parcourir ;
+- `DRY_RUN` — `1` si le renommage doit seulement être affiché ;
+- `MIGRATION_RESULT_FILE` — fichier où écrire le nombre d'éléments traités (repris dans le registre).
+
+Une migration doit être **idempotente** : un second passage sur des données déjà migrées ne
+doit rien changer.
+
+### Migration 001 — `notes.md`
+
+Depuis l'epic 31, la fiche BPM d'un groove porte le nom fixe `notes.md`. Historiquement elle
+portait le nom du dossier, et parfois un nom décorrélé (séquelle de `strip-parent-prefix.sh`).
+
+Pour chaque dossier de groove (critère identique à `deploy-grooves.sh` : contient directement
+un fichier audio ou Guitar Pro) :
+
+| Cas | Action |
+|-----|--------|
+| `notes.md` déjà présent | Rien |
+| Exactement un `*.md`, quel que soit son nom | Renommé en `notes.md` |
+| Plusieurs `*.md` | Rien, avertissement listant les fichiers (décision humaine) |
+| Aucun `.md` | Rien |
+| Un composant du chemin finit par `~` (corbeille, ex. `Tmp~/`) | Ignoré, comme côté serveur |
+
+Le nettoyage des anciennes fiches **sur le serveur** est fait par `deploy-grooves.sh`, qui
+supprime les `*.md` autres que `notes.md` du dossier déployé — uniquement si `notes.md` a bien
+été transféré.
+
+---
+
 # process-rehearsal — pipeline d'import de répétitions
 
 Traite un dossier de répétition Soundcraft UI24R (FLAC multipistes + étiquettes Audacity) et produit des dossiers de grooves prêts à être consommés par la groovothèque.
