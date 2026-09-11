@@ -491,6 +491,18 @@ app.get('/api/loop/*', async (req, res) => {
   }
 });
 
+// 35.6 — une borne de boucle est soit des secondes (format historique),
+// soit une position musicale { bar, beat } 1-indexée quand le groove a un
+// fichier Guitar Pro et que l'affichage est en BBT.
+function normalizeLoopBound(v) {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (v && typeof v === 'object' &&
+      Number.isFinite(v.bar) && Number.isFinite(v.beat)) {
+    return { bar: Math.round(v.bar), beat: Math.round(v.beat) };
+  }
+  return null;
+}
+
 app.post('/api/loop/*', async (req, res) => {
   if (req.auth?.user !== 'admin') return res.status(403).json({ error: 'Réservé à l\'admin' });
   const groovePath = req.params[0];
@@ -499,10 +511,12 @@ app.post('/api/loop/*', async (req, res) => {
   const loopPath = path.join(grooveDir, 'loop.json');
   try {
     const { in: loopIn, out: loopOut } = req.body;
+    const normIn = normalizeLoopBound(loopIn);
+    const normOut = normalizeLoopBound(loopOut);
     // Si aucune borne fournie (loop effacé côté client), écrire {} pour
     // représenter "pas de loop" et écraser un éventuel loop.json existant.
-    const loopData = (typeof loopIn === 'number' && typeof loopOut === 'number')
-      ? { in: loopIn, out: loopOut }
+    const loopData = (normIn !== null && normOut !== null)
+      ? { in: normIn, out: normOut }
       : {};
     await fs.promises.writeFile(loopPath, JSON.stringify(loopData, null, 2), 'utf8');
     res.json({ ok: true });

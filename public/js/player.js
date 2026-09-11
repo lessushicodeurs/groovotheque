@@ -361,6 +361,8 @@ let scoreDurationSec = 0      // durée du score en secondes (axe temps audio)
 const TIME_MODE_KEY  = 'groovotheque:time_mode'
 let timeMode         = 'time'
 let bbtTimelineEl    = null  // graduations de mesures (mode BBT)
+// 35.6 — boucle lue en BBT dans loop.json, à convertir dès que le score est là
+let pendingBbtLoop   = null
 // 35.3 — lignes de pistes MIDI : { track, muted, soloed, volume, visible, btnMute, btnSolo, btnShow }
 let midiTracks       = []
 // Tolérance de dérive avant de re-caler une instance WaveSurfer sur l'horloge
@@ -775,11 +777,47 @@ function nudge(delta) {
 
 function updateLoopFields() {
   const hasRegion = activeLoopIn !== null && activeLoopOut !== null
-  loopInEl.value = hasRegion ? formatLoopTime(activeLoopIn) : '—'
-  loopOutEl.value = hasRegion ? formatLoopTime(activeLoopOut) : '—'
+  loopInEl.value = hasRegion ? formatLoopPosition(activeLoopIn) : '—'
+  loopOutEl.value = hasRegion ? formatLoopPosition(activeLoopOut) : '—'
   loopInEl.disabled = !hasRegion
   loopOutEl.disabled = !hasRegion
   btnLoopClear.disabled = !hasRegion
+}
+
+// 35.6 — IN/OUT affichés en mesure:temps quand le mode BBT est actif
+function formatLoopPosition(sec) {
+  return bbtEnabled() ? formatBBT(sec) : formatLoopTime(sec)
+}
+
+function parseLoopPosition(str) {
+  if (!bbtEnabled()) return parseLoopTime(str)
+  const m = str.trim().match(/^(\d+):(\d+)$/)
+  if (!m) return parseLoopTime(str)
+  return barBeatToSec(parseInt(m[1], 10) - 1, parseInt(m[2], 10) - 1)
+}
+
+// Arrondit une position au temps (beat) le plus proche du score.
+function snapSecToBeat(sec) {
+  const bars = tabScore?.masterBars
+  if (!bars || bars.length === 0) return sec
+  const tick = audioSecToTick(sec)
+  const bb   = tickToBarBeat(tick)
+  if (!bb) return sec
+  const mb  = bars[bb.bar]
+  const num = mb.timeSignatureNumerator || 4
+  const ticksPerBeat = mb.calculateDuration() / num
+  if (!(ticksPerBeat > 0)) return sec
+  let bar = bb.bar
+  let beat = bb.beat
+  if ((tick - mb.start) / ticksPerBeat - beat > 0.5) {
+    beat += 1
+    if (beat >= num) { beat = 0; bar += 1 }
+  }
+  if (bar >= bars.length) {
+    const last = bars[bars.length - 1]
+    return beatTickToAudioTimeSec(last.start + last.calculateDuration())
+  }
+  return barBeatToSec(bar, beat)
 }
 
 function clearLoop() {
@@ -794,9 +832,19 @@ function clearLoop() {
 // Attaches update-end listeners to each newly created region.
 // isSyncingRegion prevents re-entrancy: WaveSurfer v7 fires region-created
 // synchronously inside addRegion(), so this guard is essential.
-function syncRegionToAll(start, end) {
+// opts.snap : aligne les bornes sur le temps le plus proche (drag en mode BBT)
+function syncRegionToAll(start, end, opts = {}) {
   if (isSyncingRegion) return
   isSyncingRegion = true
+
+  if (opts.snap && bbtEnabled()) {
+    const snappedStart = snapSecToBeat(start)
+    const snappedEnd   = snapSecToBeat(end)
+    if (snappedEnd > snappedStart) {
+      start = snappedStart
+      end   = snappedEnd
+    }
+  }
 
   activeLoopIn = start
   activeLoopOut = end
@@ -811,7 +859,7 @@ function syncRegionToAll(start, end) {
       drag: true,
       resize: true,
     })
-    region.on('update-end', () => syncRegionToAll(region.start, region.end))
+    region.on('update-end', () => syncRegionToAll(region.start, region.end, { snap: true }))
   })
 
   isSyncingRegion = false
@@ -1025,7 +1073,7 @@ function buildTrackRow(track, idx, cachedPeaks = null, opts = {}) {
   // Creating a region on any track syncs to all other tracks.
   regionsPlugin.enableDragSelection({ color: 'rgba(255,255,255,0.2)' })
   regionsPlugin.on('region-created', (region) => {
-    syncRegionToAll(region.start, region.end)
+    syncRegionToAll(region.start, region.end, { snap: true })
   })
 
   // ── Seek sync ─────────────────────────────────
@@ -1067,6 +1115,8 @@ function buildTrackRow(track, idx, cachedPeaks = null, opts = {}) {
       if (pendingLoop) {
         syncRegionToAll(pendingLoop.in, pendingLoop.out)
         pendingLoop = null
+      } else if (activeLoopIn !== null && activeLoopOut !== null) {
+        syncRegionToAll(activeLoopIn, activeLoopOut)
       }
     }
   })
@@ -1894,6 +1944,9 @@ async function initTabDrawer(tabFile) {
       updateDurationDisplay()
     }
 
+    // 35.6 — boucle lue en BBT : convertible maintenant que le score est là
+    applyPendingBbtLoop()
+
     // 35.5 — le score est là : la bascule BBT ↔ mm:ss devient disponible
     btnTimeModeEl?.removeAttribute('hidden')
     updateTimeDisplay(currentTimeSec())
@@ -2041,6 +2094,13 @@ async function loadLoop() {
     const res = await fetch(`/api/loop/${encodePath(grooveSlug)}`)
     if (!res.ok) return
     const loop = await res.json()
+    // 35.6 — bornes musicales : conversion différée (score pas encore chargé)
+    if (loop && typeof loop.in === 'object' && loop.in !== null &&
+        typeof loop.out === 'object' && loop.out !== null) {
+      pendingBbtLoop = { in: loop.in, out: loop.out }
+      if (tabScore) applyPendingBbtLoop()
+      return
+    }
     if (loop && typeof loop.in === 'number' && typeof loop.out === 'number') {
       pendingLoop = { in: loop.in, out: loop.out }
       // Si toutes les waveforms sont déjà prêtes avant que le fetch revienne
@@ -2050,6 +2110,20 @@ async function loadLoop() {
       }
     }
   } catch { /* chargement silencieux */ }
+}
+
+// 35.6 — Convertit la boucle BBT de loop.json en secondes, une fois le score là
+function applyPendingBbtLoop() {
+  if (!pendingBbtLoop || !tabScore) return
+  const { in: bIn, out: bOut } = pendingBbtLoop
+  pendingBbtLoop = null
+  const inSec  = barBeatToSec((bIn.bar | 0) - 1, (bIn.beat | 0) - 1)
+  const outSec = barBeatToSec((bOut.bar | 0) - 1, (bOut.beat | 0) - 1)
+  if (!(outSec > inSec)) return
+  const allReady = wavesurfers.length > 0 &&
+    trackDurations.filter(d => d > 0).length === wavesurfers.length
+  if (allReady || wavesurfers.length === 0) syncRegionToAll(inSec, outSec)
+  else pendingLoop = { in: inSec, out: outSec }
 }
 
 // 30.3 — Chargement des marqueurs (groove-level uniquement)
@@ -2293,9 +2367,15 @@ async function saveMixTracks() {
 // 30.3 — Sauvegarde du loop courant
 // Si le loop est absent (null), envoie {} pour effacer le loop.json existant
 async function saveLoop() {
+  // 35.6 — boucle définie en mode BBT : stockée en { bar, beat } 1-indexés
+  const toBound = (sec) => {
+    if (!bbtEnabled()) return sec
+    const bb = tickToBarBeat(audioSecToTick(sec))
+    return bb ? { bar: bb.bar + 1, beat: bb.beat + 1 } : sec
+  }
   const body = (activeLoopIn === null || activeLoopOut === null)
     ? {}
-    : { in: activeLoopIn, out: activeLoopOut }
+    : { in: toBound(activeLoopIn), out: toBound(activeLoopOut) }
   try {
     const res = await fetch(`/api/loop/${encodePath(grooveSlug)}`, {
       method: 'POST',
@@ -3602,7 +3682,7 @@ async function init() {
     // after a programmatic .blur() call) from double-invoking commit when
     // the user presses Enter.
     function commitLoopIn() {
-      const val = parseLoopTime(loopInEl.value)
+      const val = parseLoopPosition(loopInEl.value)
       if (val !== null && activeLoopOut !== null && val < activeLoopOut) {
         syncRegionToAll(val, activeLoopOut)
       } else {
@@ -3610,7 +3690,7 @@ async function init() {
       }
     }
     function commitLoopOut() {
-      const val = parseLoopTime(loopOutEl.value)
+      const val = parseLoopPosition(loopOutEl.value)
       if (val !== null && activeLoopIn !== null && val > activeLoopIn) {
         syncRegionToAll(activeLoopIn, val)
       } else {
