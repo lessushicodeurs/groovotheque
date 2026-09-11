@@ -15,14 +15,14 @@ Faire des fichiers Guitar Pro des citoyens de première classe dans Groovotheque
 
 | Sujet | Décision |
 |---|---|
-| Master clock | AlphaTab master clock quand un GP est présent (tab-only ET mixte) — WaveSurfer devient follower |
+| Master clock | Dès qu'il y a de l'audio : les pistes WaveSurfer portent le temps, AlphaTab les suit en `PlayerMode.EnabledExternalMedia` et convertit lui-même temps audio ↔ position dans la partition, à partir des points de synchro du fichier GP. En tab-only sans audio : le synthétiseur MIDI (`EnabledSynthesizer`) porte l'horloge et WaveSurfer devient follower |
 | Mode tab-only | Transport fonctionnel en MIDI pur ; pas de WaveSurfer instances |
 | Ordre des pistes | Pistes MIDI → Backing track → Pistes audio |
 | Sidebar pistes MIDI | Identique aux pistes audio (nom, mute/solo/volume) + bouton « afficher dans la tab » |
 | Signe distinctif | Le bouton « afficher dans la tab » est l'indicateur visuel qu'une piste est MIDI (absent sur l'audio) |
 | Zone waveform des pistes MIDI | Aire vide colorée (v1) — piano-roll reporté à une epic suivante |
 | Backing track | Chargé comme instance WaveSurfer via `loadBlob(rawAudioFile)` ; pas de bouton « afficher dans la tab » |
-| Backing track + pistes MIDI | Jouent simultanément (AlphaTab `EnabledSynthesizer` + WaveSurfer pour l'audio) |
+| Backing track + pistes MIDI | Tab-only : le synthétiseur MIDI et le backing track jouent ensemble. Mode mixte (fichiers audio présents) : AlphaTab ne synthétise rien en `EnabledExternalMedia` — les pistes MIDI restent affichables dans la tablature mais sont muettes, et leurs réglages mute/solo/volume sont désactivés |
 | Coexistence backing + fichiers audio | Tout joue ensemble — pas de logique spéciale, l'utilisateur mute selon ses besoins |
 | Timecode | Switchable BBT (mesure:temps) ↔ mm:ss via bouton bascule |
 | BBT = « bars, beats, ticks » | Terme utilisé dans le code et la doc pour désigner le temps musical |
@@ -109,13 +109,14 @@ Stocker et afficher les boucles en coordonnées musicales quand un GP est prése
 - [ ] Un dossier contenant uniquement un `.gp` s'ouvre dans le player sans erreur
 - [ ] En mode tab-only, le bouton Play lance la lecture MIDI AlphaTab
 - [ ] En mode tab-only, les pistes du fichier GP apparaissent comme des lignes dans le player avec aire vide
-- [ ] Le bouton mute/solo/volume d'une piste MIDI affecte la lecture MIDI (AlphaTab `changeTrackMute/Solo/Volume`)
+- [ ] En tab-only, le bouton mute/solo/volume d'une piste MIDI affecte la lecture MIDI (AlphaTab `changeTrackMute/Solo/Volume`)
+- [ ] En mode mixte, ces mêmes réglages sont désactivés et expliqués : aucune synthèse MIDI n'a lieu quand la tablature suit des pistes audio
 - [ ] Le bouton « afficher dans la tab » masque / affiche la portée de la piste dans le drawer AlphaTab
 - [ ] En mode mixte, les pistes MIDI sont affichées au-dessus des pistes audio
 - [ ] Sur un fichier GP8 avec backing track, une piste WaveSurfer s'affiche entre les pistes MIDI et les pistes audio, avec forme d'onde
 - [ ] Le backing track joue synchronisé avec le MIDI synth et les pistes audio
 - [ ] Le timecode affiche un bouton bascule BBT ↔ mm:ss ; les deux modes sont fonctionnels
-- [ ] En mode BBT, la timeline affiche des marqueurs de mesures alignés sur les barres de `score.masterBars`
+- [ ] En mode BBT, la timeline affiche un marqueur par mesure jouée (reprises dépliées, via `api.tickCache.masterBars`)
 - [ ] Une boucle définie en mode BBT est stockée dans `loop.json` avec les champs `bar`/`beat` et rechargée correctement au prochain ouverture
 - [ ] En mode mixte avec AlphaTab master, la seek bar, le tempo et les contrôles de transport fonctionnent de manière identique à l'actuel
 - [ ] Sur mobile, le comportement est inchangé (message desktop-only, pas de tab chargée)
