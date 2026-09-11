@@ -1195,6 +1195,11 @@ function buildTrackRow(track, idx, cachedPeaks = null, opts = {}) {
 // ── Proportional track widths ──────────────────────────────────────────────
 
 function adjustTrackWidths() {
+  // 35.4 — la durée du score dépend de l'axe temps audio (sync points), donc de
+  // la durée des waveforms : elle doit être recalculée une fois celles-ci prêtes
+  // (le backing track embarqué arrive après scoreLoaded).
+  if (tabScore) scoreDurationSec = beatTickToAudioTimeSec(scoreTotalTicks(tabScore))
+
   const durs = trackDurations.filter(d => d > 0)
   // 35.2 — en tab-only il n'y a aucune waveform : la durée vient du score.
   let maxDur = durs.length > 0 ? Math.max(...durs) : 0
@@ -1566,6 +1571,16 @@ function setupTabHandleDrag() {
   tabHandleEl.addEventListener('touchend', commit)
 }
 
+// Fin de l'axe « audio » au-delà du dernier point de sync. Avec une waveform de
+// référence c'est sa durée ; sans aucune waveform (tab-only) il n'y a pas d'axe
+// audio réel : on prolonge le dernier point de sync à l'échelle 1:1, sinon le
+// temps se figerait sur tout le dernier segment.
+function tailAudioMs(sp0, totalSynthMs) {
+  const wsMs = (wavesurfers[0]?.getDuration() ?? 0) * 1000
+  if (wsMs > 0) return wsMs
+  return sp0.syncTime + Math.max(0, totalSynthMs - sp0.synthTime)
+}
+
 // 13.9 — Conversion audio↔synth time using GP sync markers.
 // BackingTrackSyncPoint: syncTime=ms in audio, synthTime=ms in score-tempo clock.
 // Piecewise-linear interpolation between anchor points.
@@ -1581,8 +1596,8 @@ function audioTimeToSynthTime(audioMs) {
   const sp1 = (i + 1 < sps.length) ? sps[i + 1] : null
 
   if (!sp1) {
-    const totalAudioMs  = (wavesurfers[0]?.getDuration() ?? 0) * 1000 || sp0.syncTime
     const totalSynthMs  = alphaTabApi?.endTime || sp0.synthTime
+    const totalAudioMs  = tailAudioMs(sp0, totalSynthMs)
     const dt = totalAudioMs - sp0.syncTime
     if (dt <= 0) return sp0.synthTime
     return sp0.synthTime + ((audioMs - sp0.syncTime) / dt) * (totalSynthMs - sp0.synthTime)
@@ -1625,8 +1640,8 @@ function synthTimeToAudioTime(synthMs) {
   const sp1 = (i + 1 < sps.length) ? sps[i + 1] : null
 
   if (!sp1) {
-    const totalAudioMs  = (wavesurfers[0]?.getDuration() ?? 0) * 1000 || sp0.syncTime
     const totalSynthMs  = alphaTabApi?.endTime || sp0.synthTime
+    const totalAudioMs  = tailAudioMs(sp0, totalSynthMs)
     const dt = totalSynthMs - sp0.synthTime
     if (dt <= 0) return sp0.syncTime
     return sp0.syncTime + ((synthMs - sp0.synthTime) / dt) * (totalAudioMs - sp0.syncTime)
