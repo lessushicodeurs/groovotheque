@@ -98,6 +98,11 @@ const tempoValueEl     = document.getElementById('tempo-value')
 const tempoBadgeEl     = document.getElementById('tempo-badge')
 const tempoPresets     = Array.from(document.querySelectorAll('.tempo-preset'))
 
+// ── Epic 18 — Contrôles de zoom ──────────────────────────────────────────
+const btnZoomOut   = document.getElementById('btn-zoom-out')
+const btnZoomIn    = document.getElementById('btn-zoom-in')
+const btnZoomLevel = document.getElementById('btn-zoom-level')
+
 // 13.2 — Tab drawer DOM elements
 const tabDrawerEl       = document.getElementById('tab-drawer')
 const tabHandleEl       = document.getElementById('tab-handle')
@@ -1189,6 +1194,37 @@ function setZoomScrollX(x) {
 function zoomTimeToPx(t) {
   if (!totalDuration) return 0
   return (t / totalDuration) * zoomContentWidth()
+}
+
+// 18.2 — Passage à un palier de zoom.
+function applyZoom(level) {
+  if (!ZOOM_LEVELS.includes(level) || level === zoomLevel) return
+  zoomLevel = level
+  updateZoomUI()
+  applyZoomWidths()
+}
+
+function updateZoomUI() {
+  if (btnZoomLevel) {
+    btnZoomLevel.textContent = `${zoomLevel}×`
+    btnZoomLevel.setAttribute('aria-label', `Niveau de zoom : ${zoomLevel}×`)
+    btnZoomLevel.classList.toggle('zoom-level-btn--active', zoomLevel > 1)
+  }
+  if (btnZoomOut) btnZoomOut.disabled = zoomLevel <= ZOOM_LEVELS[0]
+  if (btnZoomIn)  btnZoomIn.disabled  = zoomLevel >= ZOOM_LEVELS[ZOOM_LEVELS.length - 1]
+}
+
+function stepZoom(direction) {
+  const idx  = ZOOM_LEVELS.indexOf(zoomLevel)
+  const next = ZOOM_LEVELS[idx + direction]
+  if (next) applyZoom(next)
+}
+
+function initZoomControls() {
+  updateZoomUI()
+  btnZoomIn?.addEventListener('click', () => stepZoom(1))
+  btnZoomOut?.addEventListener('click', () => stepZoom(-1))
+  btnZoomLevel?.addEventListener('click', () => applyZoom(1))
 }
 
 // ── Epic 13 — Tablature synchronisée ──────────────────────────────────────
@@ -3220,6 +3256,9 @@ async function init() {
       }
     })
     btnLoopClear.addEventListener('click', clearLoop)
+
+    // ── Zoom horizontal (epic 18) ──────────────
+    initZoomControls()
 
     // ── Tempo control ──────────────────────────
     tempoSliderEl.addEventListener('input', () => applyTempo(Number(tempoSliderEl.value)))

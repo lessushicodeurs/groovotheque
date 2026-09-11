@@ -77,6 +77,14 @@
         </div>
       </div>
       <div class="transport-row transport-row--tempo">
+        <!-- 18.2 — Zoom horizontal des waveforms -->
+        <div class="zoom-controls" role="group" aria-label="Zoom des waveforms">
+          <button id="btn-zoom-out" class="zoom-btn" type="button" aria-label="Dézoomer" disabled>−</button>
+          <button id="btn-zoom-level" class="zoom-level-btn" type="button"
+                  title="Cliquer pour revenir à 1×" aria-label="Niveau de zoom : 1×">1×</button>
+          <button id="btn-zoom-in" class="zoom-btn" type="button" aria-label="Zoomer">+</button>
+        </div>
+        <span class="transport-sep" aria-hidden="true">|</span>
         <span class="tempo-label">TEMPO</span>
         <span id="tempo-badge" class="tempo-badge" hidden></span>
         <input id="tempo-slider" type="range" min="50" max="120" step="1" value="100"

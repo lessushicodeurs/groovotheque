@@ -714,6 +714,90 @@ body {
   color: #ff8c00;
 }
 
+/* ── Epic 18 — Contrôles de zoom (transport) ─ */
+
+.transport-sep {
+  color: #2a2a2a;
+  font-size: 0.7rem;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  flex-shrink: 0;
+}
+
+.zoom-btn {
+  background: #1c1c1c;
+  border: 1px solid #2a2a2a;
+  color: #777;
+  font-size: 1rem;
+  font-weight: 600;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  flex-shrink: 0;
+  transition: background 0.1s, border-color 0.1s, color 0.1s;
+}
+
+.zoom-btn:hover:not(:disabled) {
+  background: #252525;
+  border-color: #3a3a3a;
+  color: #ccc;
+}
+
+.zoom-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.zoom-level-btn {
+  min-width: 2.4rem;
+  height: 1.6rem;
+  padding: 0 0.3rem;
+  background: #1c1c1c;
+  border: 1px solid #2a2a2a;
+  border-radius: 4px;
+  color: #aaa;
+  font-size: 0.72rem;
+  font-family: monospace;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  text-align: center;
+  flex-shrink: 0;
+  transition: background 0.1s, color 0.1s;
+}
+
+.zoom-level-btn:hover {
+  background: #252525;
+  color: #ddd;
+}
+
+.zoom-level-btn--active {
+  color: #4fc3f7;
+  border-color: #1a3a4a;
+  background: #0a1a20;
+}
+
+@media (max-width: 767px) {
+  .zoom-btn,
+  .zoom-level-btn {
+    height: 2rem;
+  }
+
+  .zoom-btn {
+    width: 2rem;
+  }
+}
+
 /* ── Nav buttons ─────────────────────────── */
 
 .nav-btn {
