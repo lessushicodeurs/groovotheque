@@ -687,6 +687,9 @@ function stopAll() {
   btnPlay.textContent = '▶'
   timecodeEl.textContent = formatTimecode(0)
   seekFillEl.style.width = '0%'
+  // 18.4 — setTime() direct : il faut réancrer la vue nous-mêmes, sinon la tête
+  // repart à 0 hors écran dès que l'utilisateur avait défilé à la main.
+  ensurePlayheadVisible(0)
 }
 
 // Called when any track fires 'finish'. Stops and rewinds all tracks, or loops.
@@ -815,6 +818,7 @@ function buildTimelineRow() {
   // passe par laneXToTime() qui mesure le contenu zoomé et défilé.
   timelineExtEl.addEventListener('click', (e) => {
     if (!totalDuration) return
+    zoomUserScrolled = false  // 18.5 — repositionner la tête rend la main au suivi
     performSeek(laneXToTime(e.clientX))
   })
 
@@ -1310,6 +1314,7 @@ function applyZoom(level) {
   if (!ZOOM_LEVELS.includes(level) || level === zoomLevel) return
   const time = playheadTime()
   zoomLevel = level
+  zoomUserScrolled = false  // 18.5 — la vue est réancrée sur la tête, le suivi reprend
   updateZoomUI()
   applyZoomWidths()
   centerPlayhead(time)
@@ -3560,10 +3565,19 @@ async function init() {
   window.addEventListener('resize', () => {
     clearTimeout(resizeTimer)
     resizeTimer = setTimeout(() => {
+      // 18.4 — le décalage est en pixels : il doit être repris après un
+      // changement de largeur.
+      const maxBefore = zoomMaxScrollX()
+      const ratio     = maxBefore > 0 ? zoomScrollX / maxBefore : 0
       adjustTrackWidths()
-      // 18.4 — le décalage est en pixels : après un changement de largeur il
-      // faut réancrer la vue sur la tête de lecture.
-      centerPlayhead()
+      if (zoomUserScrolled) {
+        // L'utilisateur s'est positionné à la main : on conserve la portion
+        // qu'il regarde. Sur mobile, l'apparition de la barre d'URL déclenche
+        // des resize ; sauter sur la tête à chaque fois serait intenable.
+        setZoomScrollX(ratio * zoomMaxScrollX())
+      } else {
+        ensurePlayheadVisible()
+      }
     }, 150)
   }, { passive: true })
 })()
