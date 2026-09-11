@@ -1221,12 +1221,24 @@ function applyZoomWidths() {
   wavesurfers[0]?.emit('redraw')
 }
 
-// Paliers de graduation « ronds » pour la règle temporelle.
-const TIMELINE_INTERVALS = [0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120]
+// Paliers de graduation « ronds » pour la règle temporelle. Les deux plus fins
+// ne servent qu'aux forts grossissements sur les morceaux courts, où 0,1 s
+// passerait sous le seuil de lisibilité.
+const TIMELINE_INTERVALS = [0.02, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120]
 
 function pickTimelineInterval(pxPerSec, minPx) {
   return TIMELINE_INTERVALS.find(v => v * pxPerSec >= minPx)
       ?? TIMELINE_INTERVALS[TIMELINE_INTERVALS.length - 1]
+}
+
+// « a est-il un multiple entier de b ? » — le modulo flottant ne suffit pas en
+// dessous de la seconde : 0.25 % 0.05 vaut 0.049999…, ce qui ferait retomber
+// le libellé principal sur le secondaire et poserait un libellé sur chaque
+// graduation.
+function isMultipleOf(a, b) {
+  if (b <= 0) return false
+  const ratio = a / b
+  return Math.abs(ratio - Math.round(ratio)) < 1e-6
 }
 
 // Sans cela les graduations resteraient tous les 5 s : illisibles à 16×, où
@@ -1246,7 +1258,7 @@ function applyTimelineIntervals() {
   // Le libellé principal doit tomber sur un libellé secondaire, sinon la règle
   // alterne deux rythmes sans rapport (10 s / 15 s).
   const primary = TIMELINE_INTERVALS.find(
-    v => v * pxPerSec >= 110 && Math.abs(v % secondary) < 1e-9
+    v => v * pxPerSec >= 110 && isMultipleOf(v, secondary)
   ) ?? secondary
   timelinePluginRef.options.timeInterval           = pickTimelineInterval(pxPerSec, 18)
   timelinePluginRef.options.secondaryLabelInterval = secondary
