@@ -24,6 +24,10 @@ export GROOVES_DIR
 
 REGISTRY="${MIGRATIONS_REGISTRY:-$ROOT_DIR/cache/migrations.json}"
 
+# Dossier d'état partagé par le registre et les rapports des migrations
+MIGRATIONS_STATE_DIR="${MIGRATIONS_STATE_DIR:-$(dirname "$REGISTRY")}"
+export MIGRATIONS_STATE_DIR
+
 DRY_RUN=0
 
 for arg in "$@"; do
@@ -109,6 +113,7 @@ fi
 
 RUN=0
 SKIPPED=0
+INCOMPLETE=0
 
 for migration in "${MIGRATIONS[@]}"; do
   [[ -n "$migration" ]] || continue
@@ -131,7 +136,18 @@ for migration in "${MIGRATIONS[@]}"; do
   rm -f "$result_file"
   [[ -n "$count" ]] || count=0
 
-  if [[ $status -ne 0 ]]; then
+  if [[ $status -eq 2 ]]; then
+    # Sortie « incomplet » : des cas demandent une décision humaine.
+    warn "Migration $id non enregistrée — des cas restent à trancher à la main"
+    if [[ $DRY_RUN -eq 1 ]]; then
+      warn "Dry-run — $count élément(s) auraient été traités"
+    else
+      warn "$count élément(s) ont bien été traités ; relancez après arbitrage"
+    fi
+    INCOMPLETE=1
+    echo
+    break
+  elif [[ $status -ne 0 ]]; then
     err "Migration $id en échec (code $status) — registre inchangé"
     err "ATTENTION : $count élément(s) ont pu être modifiés avant l'échec ; les migrations sont idempotentes, relancez après correction"
     exit 1
@@ -148,3 +164,6 @@ for migration in "${MIGRATIONS[@]}"; do
 done
 
 echo -e "${BOLD}Résultat :${RESET} $RUN migration(s) appliquée(s), $SKIPPED déjà enregistrée(s)"
+
+[[ $INCOMPLETE -eq 1 ]] && exit 1
+exit 0

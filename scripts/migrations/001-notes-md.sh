@@ -10,6 +10,8 @@
 # Codes de sortie :
 #   0  tout est traité — le runner enregistre la migration
 #   1  au moins un renommage a échoué — des éléments ont pu être modifiés avant
+#   2  des dossiers ambigus restent à trancher — migration volontairement non
+#      enregistrée pour qu'on y revienne (liste dans le fichier des ambigus)
 set -euo pipefail
 
 RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
@@ -27,6 +29,16 @@ GROOVES_DIR="${GROOVES_DIR:-$ROOT_DIR/grooves}"
 DRY_RUN="${DRY_RUN:-0}"
 
 [[ -d "$GROOVES_DIR" ]] || die "Dossier introuvable : $GROOVES_DIR"
+
+# Dossier d'état (registre, rapports). Fourni par le runner ; à défaut, calculé
+# à côté des VRAIES données : GROOVES_DIR peut être un lien symbolique vers le
+# dépôt principal, on résout donc le lien avant de remonter d'un cran.
+if [[ -n "${MIGRATIONS_STATE_DIR:-}" ]]; then
+  STATE_DIR="$MIGRATIONS_STATE_DIR"
+else
+  STATE_DIR="$(dirname "$(readlink -f "$GROOVES_DIR")")/cache"
+fi
+AMBIGUOUS_FILE="$STATE_DIR/001-notes-md-ambigus.txt"
 
 MIGRATED=0
 ALREADY=0
@@ -85,6 +97,8 @@ echo
 
 mapfile -d '' ENTRIES < <(collect_grooves "$GROOVES_DIR" "" 0 | sort -z)
 
+AMBIGUOUS_LIST=()
+
 for entry in "${ENTRIES[@]}"; do
   [[ -n "$entry" ]] || continue
   trash="${entry%%$'\t'*}"
@@ -105,6 +119,7 @@ for entry in "${ENTRIES[@]}"; do
       ALREADY=$((ALREADY + 1))
     else
       warn "notes.md n'est pas un fichier régulier dans $rel — décision humaine requise"
+      AMBIGUOUS_LIST+=("$rel	notes.md n'est pas un fichier régulier")
       AMBIGUOUS=$((AMBIGUOUS + 1))
     fi
     continue
@@ -140,6 +155,7 @@ for entry in "${ENTRIES[@]}"; do
       names=()
       for f in "${MD_FILES[@]}"; do names+=("$(basename "$f")"); done
       warn "Plusieurs fiches dans $rel — décision humaine requise : ${names[*]}"
+      AMBIGUOUS_LIST+=("$rel	${names[*]}")
       AMBIGUOUS=$((AMBIGUOUS + 1))
       ;;
   esac
@@ -149,5 +165,23 @@ echo
 echo -e "${BOLD}Résultat :${RESET} $MIGRATED migré(s), $ALREADY déjà en notes.md, $AMBIGUOUS ambigu(s), $EMPTY sans fiche, $TRASH en corbeille (composant de chemin finissant par ~, ignoré)"
 [[ $FAILED -gt 0 ]] && err "$FAILED renommage(s) en échec"
 
+# Les ambigus doivent survivre à la sortie du script : sans trace écrite, ils se
+# noient dans le flot et personne n'y revient.
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  [[ $AMBIGUOUS -gt 0 ]] && warn "Dry-run — la liste des ambigus n'est pas écrite ($AMBIGUOUS_FILE)"
+elif [[ $AMBIGUOUS -gt 0 ]]; then
+  mkdir -p "$STATE_DIR"
+  {
+    echo "# Dossiers de grooves à trancher à la main — migration 001-notes-md"
+    echo "# Généré le $(date --iso-8601=seconds)"
+    echo "# Renommez la bonne fiche en notes.md, puis relancez ./scripts/migrate.sh"
+    printf '%s\n' "${AMBIGUOUS_LIST[@]}"
+  } > "$AMBIGUOUS_FILE"
+  warn "Liste des ambigus écrite dans $AMBIGUOUS_FILE"
+else
+  rm -f "$AMBIGUOUS_FILE"
+fi
+
 [[ $FAILED -gt 0 ]] && exit 1
+[[ $AMBIGUOUS -gt 0 ]] && exit 2
 exit 0
