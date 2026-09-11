@@ -722,6 +722,51 @@ body {
   color: #ff8c00;
 }
 
+/* ── Epic 18 — Scrollbar de la zone waveform ─ */
+
+.waveform-scrollbar {
+  height: 9px;
+  background: #0a0a0a;
+  position: relative;
+  border-bottom: 1px solid #161616;
+  margin-left: 176px;
+  cursor: pointer;
+}
+
+.waveform-scrollbar-thumb {
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  background: #2a2a2a;
+  border-radius: 3px;
+  cursor: grab;
+  min-width: 24px;
+  transition: background 0.15s;
+}
+
+.waveform-scrollbar-thumb:hover {
+  background: #3a3a3a;
+}
+
+.waveform-scrollbar-thumb--dragging {
+  background: #4a4a4a;
+  cursor: grabbing;
+}
+
+/* La sidebar des pistes passe pleine largeur : plus de décalage à compenser. */
+@media (max-width: 1023px) {
+  .waveform-scrollbar {
+    margin-left: 0;
+  }
+}
+
+/* Mobile : indicateur de position seulement, la navigation se fait au swipe. */
+@media (max-width: 767px) {
+  .waveform-scrollbar-thumb {
+    cursor: default;
+  }
+}
+
 /* ── Epic 18 — Contrôles de zoom (transport) ─ */
 
 .transport-sep {

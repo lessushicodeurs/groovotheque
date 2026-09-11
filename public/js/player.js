@@ -102,6 +102,8 @@ const tempoPresets     = Array.from(document.querySelectorAll('.tempo-preset'))
 const btnZoomOut   = document.getElementById('btn-zoom-out')
 const btnZoomIn    = document.getElementById('btn-zoom-in')
 const btnZoomLevel = document.getElementById('btn-zoom-level')
+const wfScrollbarEl    = document.getElementById('waveform-scrollbar')
+const wfScrollThumbEl  = document.getElementById('waveform-scrollbar-thumb')
 
 // 13.2 — Tab drawer DOM elements
 const tabDrawerEl       = document.getElementById('tab-drawer')
@@ -1192,6 +1194,7 @@ function applyZoomWidths() {
       : ''
   })
 
+  if (wfScrollbarEl) wfScrollbarEl.hidden = zoomLevel <= 1
   setZoomScrollX(zoomScrollX)
   // Le TimelinePlugin recalcule ses graduations depuis la largeur du wrapper.
   wavesurfers[0]?.emit('redraw')
@@ -1203,6 +1206,18 @@ function setZoomScrollX(x) {
   const transform = zoomLevel > 1 ? `translateX(${-zoomScrollX}px)` : ''
   if (timelineWaveColEl) timelineWaveColEl.style.transform = transform
   waveEls.forEach(el => { el.style.transform = transform })
+  updateScrollbarThumb()
+}
+
+// 18.7 — Le curseur reflète la portion visible du morceau.
+function updateScrollbarThumb() {
+  if (!wfScrollThumbEl || zoomLevel <= 1) return
+  const visible  = 1 / zoomLevel
+  const thumbPct = Math.max(4, visible * 100)
+  const maxScroll = zoomMaxScrollX()
+  const progress  = maxScroll > 0 ? zoomScrollX / maxScroll : 0
+  wfScrollThumbEl.style.width = `${thumbPct}%`
+  wfScrollThumbEl.style.left  = `${progress * (100 - thumbPct)}%`
 }
 
 // Conversion temps → pixel dans le repère du contenu zoomé.
@@ -1330,6 +1345,49 @@ function initZoomScroll() {
   }
   window.addEventListener('pointerup', endSwipe, true)
   window.addEventListener('pointercancel', endSwipe, true)
+}
+
+// 18.7 — Scrollbar horizontale sous les pistes. Sur mobile elle reste un simple
+// indicateur : la navigation se fait au swipe.
+function initZoomScrollbar() {
+  if (!wfScrollbarEl || !wfScrollThumbEl || isMobile) return
+
+  // Convertit une abscisse écran sur la barre en décalage de défilement.
+  const scrollFromBarX = (clientX) => {
+    const rect     = wfScrollbarEl.getBoundingClientRect()
+    const thumbW   = wfScrollThumbEl.getBoundingClientRect().width
+    const travel   = rect.width - thumbW
+    if (travel <= 0) return 0
+    const ratio = (clientX - rect.left - thumbW / 2) / travel
+    return Math.max(0, Math.min(1, ratio)) * zoomMaxScrollX()
+  }
+
+  let dragging = false
+
+  wfScrollThumbEl.addEventListener('mousedown', (e) => {
+    e.preventDefault()
+    dragging = true
+    wfScrollThumbEl.classList.add('waveform-scrollbar-thumb--dragging')
+  })
+
+  window.addEventListener('mousemove', (e) => {
+    if (!dragging) return
+    setZoomScrollX(scrollFromBarX(e.clientX))
+    zoomUserScrolled = true
+  })
+
+  window.addEventListener('mouseup', () => {
+    if (!dragging) return
+    dragging = false
+    wfScrollThumbEl.classList.remove('waveform-scrollbar-thumb--dragging')
+  })
+
+  // Clic sur la piste de la barre (hors curseur) : saut direct.
+  wfScrollbarEl.addEventListener('click', (e) => {
+    if (e.target === wfScrollThumbEl) return
+    setZoomScrollX(scrollFromBarX(e.clientX))
+    zoomUserScrolled = true
+  })
 }
 
 // ── Epic 13 — Tablature synchronisée ──────────────────────────────────────
@@ -3365,6 +3423,7 @@ async function init() {
     // ── Zoom horizontal (epic 18) ──────────────
     initZoomControls()
     initZoomScroll()
+    initZoomScrollbar()
 
     // ── Tempo control ──────────────────────────
     tempoSliderEl.addEventListener('input', () => applyTempo(Number(tempoSliderEl.value)))
