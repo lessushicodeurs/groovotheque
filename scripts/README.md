@@ -49,9 +49,9 @@ Libère le port si occupé, vérifie que `node_modules` est synchronisé avec `p
 
 ---
 
-## markers-to-md.py — injection de structure dans un .md de groove
+## markers-to-md.py — injection de structure dans le `notes.md` d'un groove
 
-Lit les marqueurs de `mix.json` d'un groove, détecte le BPM automatiquement (ou utilise un BPM fourni), et injecte une section `## Structure` dans le fichier `.md` du groove.
+Lit les marqueurs de `mix.json` d'un groove, détecte le BPM automatiquement (ou utilise un BPM fourni), et injecte une section `## Structure` dans la fiche `notes.md` du groove.
 
 ```bash
 python3 scripts/markers-to-md.py <chemin/du/groove> [options]
@@ -79,7 +79,8 @@ python3 scripts/markers-to-md.py grooves/Shook_Shook/02_-_Sexy_Man --skip 2
 
 **Comportement**
 
-- Si le `.md` est absent ou vide → crée le fichier avec un titre `# <nom du groove>` et la section Structure
+- Fiche ciblée : `notes.md` du dossier du groove. Si `notes.md` est absent mais qu'une autre fiche `.md` existe déjà (grooves antérieurs au nom fixe), celle-ci est utilisée.
+- Si la fiche est absente ou vide → crée `notes.md` avec un titre `# <nom du groove>` et la section Structure
 - Si `## Structure` existe déjà → la remplace (met aussi à jour la ligne BPM)
 - Sinon → ajoute la section en fin de fichier
 
@@ -115,6 +116,123 @@ Le script détecte automatiquement le séparateur (`_-_`, `_` ou `-`). Les sous-
 
 ---
 
+## migrate.sh — migrations de données
+
+Applique aux données (`grooves/`, non versionnées) les migrations qui n'ont pas encore
+tourné sur cette machine.
+
+```bash
+./scripts/migrate.sh [--dry-run]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--dry-run` | Affiche ce que feraient les migrations, sans rien modifier ni enregistrer |
+
+| Variable | Défaut | Rôle |
+|----------|--------|------|
+| `GROOVES_DIR` | `<racine>/grooves` | Racine parcourue par les migrations (sert aux tests) |
+| `MIGRATIONS_REGISTRY` | `cache/migrations.json` **à côté des vraies données** | Emplacement du registre |
+| `MIGRATIONS_STATE_DIR` | dossier du registre | Où les migrations déposent leurs rapports |
+
+### Registre — `migrations.json`
+
+Le registre suit les **données**, pas le dépôt. Dans un worktree, `grooves/` est un lien
+symbolique vers le dépôt principal alors que `cache/` est un vrai dossier local : un registre
+rangé dans le `cache/` du worktree disparaîtrait au `ship`, alors que les données, elles,
+resteraient migrées.
+
+Le lien de `grooves/` est donc résolu (`readlink -f`) et le registre rangé dans le `cache/`
+voisin des vraies données — volontairement **à côté** de `grooves/` et non dedans, pour ne
+pas risquer de le téléverser (`deploy-grooves.sh` envoie certaines extensions du dossier
+déployé).
+
+Hors git (`cache/` est ignoré) : chaque machine a donc son propre état. Le fichier est créé
+au premier run et liste les migrations déjà appliquées.
+
+```json
+{
+  "migrations": [
+    { "id": "001-notes-md", "date": "2026-09-11T17:04:00+02:00", "count": 86 }
+  ]
+}
+```
+
+Un registre illisible (JSON invalide, clé `migrations` absente) fait échouer le runner avec
+un message explicite — rien n'est appliqué en silence. En `--dry-run`, le registre n'est
+jamais écrit.
+
+### Ajouter une migration
+
+Créer `scripts/migrations/<NNN>-<nom>.sh`, exécutable. Les migrations sont appliquées par
+ordre alphabétique de leur nom de fichier ; l'id enregistré est le nom sans `.sh`.
+
+Le runner passe à la migration :
+
+- `GROOVES_DIR` — la racine à parcourir ;
+- `DRY_RUN` — `1` si le renommage doit seulement être affiché ;
+- `MIGRATION_RESULT_FILE` — fichier où écrire le nombre d'éléments traités (repris dans le registre) ;
+- `MIGRATIONS_STATE_DIR` — où déposer un rapport durable (liste de cas à trancher…).
+
+Une migration doit être **idempotente** : un second passage sur des données déjà migrées ne
+doit rien changer. Elle doit écrire `MIGRATION_RESULT_FILE` via un `trap EXIT`, pour que le
+compteur soit renseigné même si elle s'arrête en cours de route.
+
+Son code de sortie pilote le runner :
+
+| Code | Sens | Runner |
+|------|------|--------|
+| `0` | Tout est traité | Enregistre la migration |
+| `1` | Échec | N'enregistre pas, sort en erreur, **prévient que des éléments ont pu être modifiés avant l'échec** |
+| `2` | Incomplet — des cas demandent une décision humaine | N'enregistre pas, s'arrête, invite à relancer après arbitrage |
+
+Un échec au milieu d'une boucle ne doit pas avorter le reste : compter les échecs, continuer,
+sortir en `1` à la fin.
+
+### Migration 001 — `notes.md`
+
+Depuis l'epic 31, la fiche BPM d'un groove porte le nom fixe `notes.md`. Historiquement elle
+portait le nom du dossier, et parfois un nom décorrélé (séquelle de `strip-parent-prefix.sh`).
+
+Pour chaque dossier de groove (critère identique à `deploy-grooves.sh` : contient directement
+un fichier audio ou Guitar Pro) :
+
+| Cas | Action |
+|-----|--------|
+| `notes.md` déjà présent (fichier) | Rien |
+| `notes.md` présent mais **pas un fichier régulier** (répertoire, lien) | Rien, compté comme ambigu — un `mv` déplacerait la fiche *dans* ce répertoire |
+| Exactement un `*.md`, quel que soit son nom | Renommé en `notes.md` (`mv -n -T`, jamais d'écrasement) |
+| Plusieurs `*.md` | Rien, compté comme ambigu |
+| Aucun `.md` | Rien |
+| Un composant du chemin finit par `~` (corbeille, ex. `Tmp~/`) | Compté, jamais modifié — comme côté serveur |
+
+Le parcours reprend celui de `collect_local_grooves()` dans `deploy-grooves.sh` : on s'arrête
+au premier niveau qui est un groove (pas de descente dans un groove imbriqué) et les dossiers
+cachés sont ignorés. La définition est **dupliquée volontairement** : `deploy-grooves.sh`
+n'est pas versionné (il porte la cible SSH), il ne peut donc pas être factorisé ici. Seule
+différence assumée : le déploiement saute d'emblée les dossiers en `~`, la migration y descend
+pour les compter — jamais pour y toucher.
+
+#### Cas ambigus
+
+Un `⚠` dans la sortie se perd. Les dossiers à trancher sont donc écrits dans
+`<MIGRATIONS_STATE_DIR>/001-notes-md-ambigus.txt` (une ligne par dossier), et la migration
+sort en `2` : elle **n'est pas enregistrée** tant qu'il en reste, donc chaque `migrate.sh` la
+rejoue et les redit. Renommez à la main la bonne fiche en `notes.md`, relancez : le fichier
+est supprimé dès qu'il n'y a plus d'ambigu et la migration s'enregistre. Rien n'est écrit en
+`--dry-run`.
+
+#### Anciennes fiches sur le serveur
+
+`deploy-grooves.sh` **ne supprime rien à distance**. En fin de déploiement, il affiche deux
+blocs copiables-collables — un pour lister, un pour supprimer — que l'on exécute soi-même
+après vérification. La sélection reste prudente : seulement les grooves effectivement
+déployés, seulement les `*.md` à la racine du dossier, `notes.md` épargné, et rien pour un
+groove auquel aucun `notes.md` n'a été livré. Attention : rsync téléverse *tous* les `.md`,
+la liste peut donc contenir des fiches légitimes (`paroles.md`…) — d'où la vérification.
+
+---
+
 # process-rehearsal — pipeline d'import de répétitions
 
 Traite un dossier de répétition Soundcraft UI24R (FLAC multipistes + étiquettes Audacity) et produit des dossiers de grooves prêts à être consommés par la groovothèque.
@@ -138,7 +256,7 @@ Ou manuellement :
 sudo apt install ffmpeg bc python3-yaml aubio-tools
 ```
 
-Si `aubio-tools` est absent, le pipeline se termine normalement — les fiches `.md` ne sont simplement pas générées.
+Si `aubio-tools` est absent, le pipeline se termine normalement — les fiches `notes.md` ne sont simplement pas générées.
 
 ## Usage
 
@@ -179,6 +297,7 @@ grooves/
     02 GUIT.mp3
     04 KEYS.mp3               ← nom sans suffixe MIX
     11 DRUMS.mp3
+    notes.md                  ← fiche BPM (si aubio-tools présent)
   Ma Répétition - 02 - Break/ ← segment 2 (label nommé dans Audacity)
     ...
   Ma Répétition - 03/

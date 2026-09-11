@@ -170,8 +170,14 @@ def main():
     block    = build_structure_block(sorted_markers, bpm)
     bpm_line = f'- {round(bpm)} bpm\n\n' if bpm else ''
 
-    md_files = list(groove_dir.glob('*.md'))
-    md_path  = md_files[0] if md_files else groove_dir / f'{groove_dir.name}.md'
+    # Nom fixe attendu : notes.md. On tolère une fiche à l'ancien nom si elle
+    # existe déjà (grooves antérieurs), mais toute création utilise notes.md.
+    notes_path = groove_dir / 'notes.md'
+    if notes_path.exists():
+        md_path = notes_path
+    else:
+        md_files = sorted(groove_dir.glob('*.md'))
+        md_path  = md_files[0] if md_files else notes_path
     content  = md_path.read_text(encoding='utf-8') if md_path.exists() else ''
 
     if not content.strip():
