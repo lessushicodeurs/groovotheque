@@ -440,6 +440,36 @@ body {
   overflow: hidden;
 }
 
+/* ── Epic 35 — Pistes MIDI (AlphaTab) ────── */
+
+/* Aire vide colorée : v1 sans piano-roll. Le dégradé rappelle la couleur de
+   la piste sans imiter une forme d'onde. */
+.track-wave--midi {
+  flex: 1;
+  min-width: 0;
+  background:
+    repeating-linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--midi-color) 10%, transparent) 0 2px,
+      transparent 2px 5px
+    ),
+    color-mix(in srgb, var(--midi-color) 7%, #0f0f0f);
+  border-left: 2px solid color-mix(in srgb, var(--midi-color) 55%, transparent);
+}
+
+/* Bouton « afficher dans la tab » — seul signe distinctif d'une piste MIDI */
+.btn-tab-show {
+  padding: 0.1rem 0.35rem;
+  font-size: 0.75rem;
+  line-height: 1.1;
+}
+
+.btn-tab-show.active {
+  background: #1a2433;
+  border-color: #33668f;
+  color: #6db6ef;
+}
+
 /* ── Transport ───────────────────────────── */
 
 .transport {

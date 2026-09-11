@@ -356,6 +356,8 @@ let tabSyncPoints  = null  // BackingTrackSyncPoint[] from GP sync markers, or n
 let tabMaster        = false  // true dès qu'un score GP est chargé : AlphaTab pilote le transport
 let tabScore         = null   // Score AlphaTab chargé
 let scoreDurationSec = 0      // durée du score en secondes (axe temps audio)
+// 35.3 — lignes de pistes MIDI : { track, muted, soloed, volume, visible, btnMute, btnSolo, btnShow }
+let midiTracks       = []
 // Tolérance de dérive avant de re-caler une instance WaveSurfer sur l'horloge
 // AlphaTab. Trop bas → re-seek permanent (audio haché) ; trop haut → décalage
 // audible. 80 ms est sous le seuil de perception pour un accompagnement.
@@ -1155,6 +1157,146 @@ function adjustTrackWidths() {
   tryOpenDeepLinkComment()  // 37.4 — pistes prêtes, commentaires peut-être aussi
 }
 
+// ── Epic 35 — Pistes MIDI (AlphaTab) ──────────────────────────────────────
+// Une ligne par piste du score GP, insérée au-dessus des pistes audio.
+// Sidebar identique aux pistes audio (nom, mute/solo/volume) + bouton
+// « afficher dans la tab » qui est le seul signe distinctif d'une piste MIDI.
+// Aucune instance WaveSurfer : la zone waveform est une aire vide colorée (v1).
+
+// Première ligne devant laquelle insérer les pistes MIDI (= première piste
+// audio ou backing), ou null pour ajouter à la fin du conteneur.
+function firstAudioRowEl() {
+  return tracksContainer.querySelector('.track-row:not(.track-row--midi)')
+}
+
+function applyMidiTrackAudio(t) {
+  if (!alphaTabApi) return
+  try {
+    alphaTabApi.changeTrackMute([t.track], t.muted)
+    alphaTabApi.changeTrackSolo([t.track], t.soloed)
+    alphaTabApi.changeTrackVolume([t.track], t.volume)
+  } catch (err) {
+    console.warn('[tab] contrôle de piste MIDI indisponible:', err)
+  }
+}
+
+// Sélection des portées rendues dans le drawer AlphaTab.
+function applyTabTrackSelection() {
+  if (!alphaTabApi || !tabScore) return
+  const selected = midiTracks.filter(t => t.visible).map(t => t.track)
+  alphaTabApi.renderTracks(selected.length > 0 ? selected : [tabScore.tracks[0]])
+}
+
+// Source unique de vérité partagée par le bouton « afficher dans la tab »
+// de la sidebar et les cases à cocher du header du drawer.
+function setTabTrackVisible(idx, visible) {
+  const t = midiTracks[idx]
+  if (!t) return
+  t.visible = visible
+  t.btnShow.classList.toggle('active', visible)
+  t.btnShow.setAttribute('aria-pressed', String(visible))
+  const cb = tabTrackListEl?.querySelectorAll('input[type=checkbox]')[idx]
+  if (cb && cb.checked !== visible) cb.checked = visible
+  applyTabTrackSelection()
+}
+
+function buildMidiTrackRow(track, idx, color) {
+  const row = document.createElement('div')
+  row.className = 'track-row track-row--midi'
+
+  const sidebar = document.createElement('div')
+  sidebar.className = 'track-sidebar'
+
+  const dot = document.createElement('span')
+  dot.className = 'track-color-dot'
+  dot.style.background = color
+
+  const nameEl = document.createElement('span')
+  nameEl.className = 'track-name'
+  const label = track.name || `Piste ${idx + 1}`
+  nameEl.textContent = label
+  nameEl.title = label
+
+  const btnShow = document.createElement('button')
+  btnShow.className = 'track-btn btn-tab-show active'
+  btnShow.textContent = '♪'
+  btnShow.title = 'Afficher dans la tablature'
+  btnShow.setAttribute('aria-pressed', 'true')
+
+  const sidebarTop = document.createElement('div')
+  sidebarTop.className = 'track-sidebar-top'
+  sidebarTop.append(dot, nameEl, btnShow)
+
+  const btnMute = document.createElement('button')
+  btnMute.className = 'track-btn btn-mute'
+  btnMute.textContent = 'M'
+  btnMute.title = 'Mute'
+  btnMute.setAttribute('aria-pressed', 'false')
+
+  const btnSolo = document.createElement('button')
+  btnSolo.className = 'track-btn btn-solo'
+  btnSolo.textContent = 'S'
+  btnSolo.title = 'Solo'
+  btnSolo.setAttribute('aria-pressed', 'false')
+
+  const volSlider = document.createElement('input')
+  volSlider.type = 'range'
+  volSlider.className = 'track-volume'
+  volSlider.min = '0'
+  volSlider.max = '100'
+  volSlider.value = '100'
+  volSlider.setAttribute('aria-label', 'Volume')
+
+  const sidebarCtrl = document.createElement('div')
+  sidebarCtrl.className = 'track-sidebar-ctrl'
+  sidebarCtrl.append(btnMute, btnSolo, volSlider)
+  sidebar.append(sidebarTop, sidebarCtrl)
+
+  // Aire vide colorée (v1) — pas de piano-roll
+  const waveEl = document.createElement('div')
+  waveEl.className = 'track-wave track-wave--midi'
+  waveEl.style.setProperty('--midi-color', color)
+  waveEl.style.height = (isMobile ? 48 : 64) + 'px'
+
+  row.append(sidebar, waveEl)
+  tracksContainer.insertBefore(row, firstAudioRowEl())
+
+  const state = { track, muted: false, soloed: false, volume: 1, visible: true, btnShow }
+  midiTracks.push(state)
+  const myIdx = midiTracks.length - 1
+
+  btnMute.addEventListener('click', () => {
+    state.muted = !state.muted
+    btnMute.classList.toggle('active', state.muted)
+    btnMute.setAttribute('aria-pressed', String(state.muted))
+    applyMidiTrackAudio(state)
+  })
+
+  btnSolo.addEventListener('click', () => {
+    state.soloed = !state.soloed
+    btnSolo.classList.toggle('active', state.soloed)
+    btnSolo.setAttribute('aria-pressed', String(state.soloed))
+    applyMidiTrackAudio(state)
+  })
+
+  volSlider.addEventListener('input', () => {
+    state.volume = Number(volSlider.value) / 100
+    applyMidiTrackAudio(state)
+  })
+
+  btnShow.addEventListener('click', () => setTabTrackVisible(myIdx, !state.visible))
+}
+
+function buildMidiTrackRows(score) {
+  tracksContainer.querySelectorAll('.track-row--midi').forEach(el => el.remove())
+  midiTracks = []
+  // Couleurs : palette existante, indices après les pistes audio
+  const colorOffset = currentTracks.length
+  score.tracks.forEach((track, i) => {
+    buildMidiTrackRow(track, i, TRACK_COLORS[(colorOffset + i) % TRACK_COLORS.length])
+  })
+}
+
 // ── Epic 13 — Tablature synchronisée ──────────────────────────────────────
 
 const TAB_HEIGHTS = { collapsed: 40, strip: 280 }
@@ -1434,12 +1576,7 @@ function buildTrackSelector(score) {
     cb.type = 'checkbox'
     cb.checked = true
     cb.dataset.trackIdx = String(i)
-    cb.addEventListener('change', () => {
-      if (!alphaTabApi) return
-      const cbs = tabTrackListEl.querySelectorAll('input[type=checkbox]')
-      const selected = score.tracks.filter((_, j) => cbs[j]?.checked)
-      alphaTabApi.renderTracks(selected.length > 0 ? selected : [score.tracks[0]])
-    })
+    cb.addEventListener('change', () => setTabTrackVisible(i, cb.checked))
     label.append(cb, document.createTextNode(track.name || `Piste ${i + 1}`))
     tabTrackListEl.appendChild(label)
   })
@@ -1529,6 +1666,7 @@ async function initTabDrawer(tabFile) {
     tabScore   = score
     tabMaster  = true
     try { alphaTabApi.playbackSpeed = currentTempo / 100 } catch { /* player pas prêt */ }
+    buildMidiTrackRows(score)
     buildTrackSelector(score)
     // Generate sync points from embedded GP markers (mod.midi.MidiFileGenerator)
     try {
