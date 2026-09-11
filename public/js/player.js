@@ -352,6 +352,15 @@ let tabSyncRafId   = null
 let tabDragBeat    = null  // Beat object — start of drag selection
 let tabSyncPoints  = null  // BackingTrackSyncPoint[] from GP sync markers, or null
 
+// 35.1 — AlphaTab master clock
+let tabMaster        = false  // true dès qu'un score GP est chargé : AlphaTab pilote le transport
+let tabScore         = null   // Score AlphaTab chargé
+let scoreDurationSec = 0      // durée du score en secondes (axe temps audio)
+// Tolérance de dérive avant de re-caler une instance WaveSurfer sur l'horloge
+// AlphaTab. Trop bas → re-seek permanent (audio haché) ; trop haut → décalage
+// audible. 80 ms est sous le seuil de perception pour un accompagnement.
+const WS_DRIFT_TOL   = 0.08
+
 // ── PanKnob ────────────────────────────────────────────────────────────────
 // Custom SVG knob for stereo pan (-1 to +1).
 // Arc from 7 o'clock (L, pan=-1) to 5 o'clock (R, pan=+1), center at 12h.
@@ -602,6 +611,10 @@ function applyTempo(pct) {
   currentTempo = pct
   const ratio = pct / 100
   wavesurfers.forEach(ws => ws.setPlaybackRate(ratio, true))
+  // 35.1 — AlphaTab suit le même ratio quand il est master clock
+  if (alphaTabApi) {
+    try { alphaTabApi.playbackSpeed = ratio } catch { /* player pas encore prêt */ }
+  }
   tempoSliderEl.value = String(pct)
   tempoValueEl.textContent = `${pct}%`
   tempoValueEl.classList.toggle('tempo-value--active', pct !== 100)
@@ -631,21 +644,49 @@ function applyVolumes() {
   })
 }
 
+// 35.1 — Position courante en secondes sur l'axe temps « audio ».
+// AlphaTab est la source de vérité dès qu'un score est chargé.
+function currentTimeSec() {
+  if (tabMaster && alphaTabApi) return synthTimeToAudioTime(alphaTabApi.timePosition) / 1000
+  return wavesurfers[0]?.getCurrentTime() ?? 0
+}
+
+// Affichage timecode + seek bar, quelle que soit l'horloge maître.
+function updateTimeDisplay(t) {
+  timecodeEl.textContent = formatTimecode(t)
+  if (totalDuration > 0) {
+    const ratio = Math.max(0, Math.min(1, t / totalDuration))
+    seekFillEl.style.width = `${ratio * 100}%`
+    seekBarEl.setAttribute('aria-valuenow', Math.round(ratio * 100))
+  }
+}
+
+// Rebond de boucle : quand la tête de lecture atteint OUT, saut vers IN.
+// loopJumping évite le double déclenchement avant que le seek ait pris effet.
+function checkLoopRebound(t) {
+  if (loopEnabled && activeLoopOut !== null && t >= activeLoopOut && !loopJumping && isPlaying) {
+    loopJumping = true
+    seekAllTo(activeLoopIn ?? 0)
+    setTimeout(() => { loopJumping = false }, 50)
+  }
+}
+
 async function playAll() {
   if (isPlaying) return
   // Resume Web Audio graph if suspended (requires prior user gesture — satisfied by this click)
   if (sharedAudioCtx.state === 'suspended') await sharedAudioCtx.resume()
   if (loopEnabled && activeLoopIn !== null && activeLoopOut !== null) {
-    const cur = wavesurfers[0]?.getCurrentTime() ?? 0
+    const cur = currentTimeSec()
     if (cur < activeLoopIn || cur >= activeLoopOut) seekAllTo(activeLoopIn)
   }
   isPlaying = true
   btnPlay.textContent = '⏸'
+  if (tabMaster && alphaTabApi) alphaTabApi.play()
   try {
     await Promise.all(wavesurfers.map(ws => ws.play()))
   } catch (err) {
     console.warn('play failed:', err)
-    if (!wavesurfers.some(ws => ws.isPlaying())) {
+    if (!tabMaster && !wavesurfers.some(ws => ws.isPlaying())) {
       isPlaying = false
       btnPlay.textContent = '▶'
     }
@@ -654,17 +695,18 @@ async function playAll() {
 
 function pauseAll() {
   if (!isPlaying) return
+  if (tabMaster && alphaTabApi) alphaTabApi.pause()
   wavesurfers.forEach(ws => ws.pause())
   isPlaying = false
   btnPlay.textContent = '▶'
 }
 
 function stopAll() {
+  if (tabMaster && alphaTabApi) alphaTabApi.stop()
   wavesurfers.forEach(ws => { ws.pause(); ws.setTime(0) })
   isPlaying = false
   btnPlay.textContent = '▶'
-  timecodeEl.textContent = formatTimecode(0)
-  seekFillEl.style.width = '0%'
+  updateTimeDisplay(0)
 }
 
 // Called when any track fires 'finish'. Stops and rewinds all tracks, or loops.
@@ -683,16 +725,17 @@ function onFinish() {
   }
 
   btnPlay.textContent = '▶'
+  if (tabMaster && alphaTabApi) alphaTabApi.stop()
   wavesurfers.forEach(w => { w.pause(); w.setTime(0) })
-  timecodeEl.textContent = formatTimecode(0)
-  seekFillEl.style.width = '0%'
+  updateTimeDisplay(0)
 }
 
 function seekAllTo(time) {
   wavesurfers.forEach(ws => ws.setTime(time))
-  if (alphaTabApi && tabState !== 'collapsed') {
+  if (alphaTabApi && (tabMaster || tabState !== 'collapsed')) {
     alphaTabApi.timePosition = audioTimeToSynthTime(time * 1000)
   }
+  if (tabMaster) updateTimeDisplay(time)
 }
 
 // Shared seek-with-resume logic: pauses if playing, seeks all tracks, then
@@ -701,9 +744,14 @@ function seekAllTo(time) {
 async function performSeek(time) {
   const myGen = ++seekGen
   const wasPlaying = isPlaying
-  if (wasPlaying) { isPlaying = false; wavesurfers.forEach(ws => ws.pause()) }
+  if (wasPlaying) {
+    isPlaying = false
+    if (tabMaster && alphaTabApi) alphaTabApi.pause()
+    wavesurfers.forEach(ws => ws.pause())
+  }
   seekAllTo(time)
   if (wasPlaying) {
+    if (tabMaster && alphaTabApi) alphaTabApi.play()
     try {
       await Promise.all(wavesurfers.map(ws => ws.play()))
       if (myGen === seekGen) { isPlaying = true; btnPlay.textContent = '⏸' }
@@ -712,8 +760,8 @@ async function performSeek(time) {
 }
 
 function nudge(delta) {
-  if (!wavesurfers.length) return
-  const current = wavesurfers[0].getCurrentTime()
+  if (!wavesurfers.length && !tabMaster) return
+  const current = currentTimeSec()
   const next = Math.max(0, Math.min(totalDuration, current + delta))
   performSeek(next)
 }
@@ -960,10 +1008,12 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
     const wasPlaying = isPlaying
     if (wasPlaying) { isPlaying = false; wavesurfers.forEach(w => w.pause()) }
     wavesurfers.forEach((w, j) => { if (j !== idx) w.setTime(newTime) })
-    if (alphaTabApi && tabState !== 'collapsed') {
+    if (alphaTabApi && (tabMaster || tabState !== 'collapsed')) {
       alphaTabApi.timePosition = audioTimeToSynthTime(newTime * 1000)
     }
+    if (tabMaster) updateTimeDisplay(newTime)
     if (wasPlaying) {
+      if (tabMaster && alphaTabApi) alphaTabApi.play()
       try {
         await Promise.all(wavesurfers.map(w => w.play()))
         if (myGen === seekGen) { isPlaying = true; btnPlay.textContent = '⏸' }
@@ -1000,23 +1050,17 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
   if (idx === 0) {
 
     ws.on('timeupdate', (t) => {
-      timecodeEl.textContent = formatTimecode(t)
-      if (totalDuration > 0) {
-        seekFillEl.style.width = `${(t / totalDuration) * 100}%`
-        seekBarEl.setAttribute('aria-valuenow', Math.round((t / totalDuration) * 100))
-      }
-      // Loop rebounding: when playhead reaches loop out, jump to loop in.
-      // loopJumping flag prevents double-trigger when timeupdate fires again
-      // before setTime() has advanced the playhead past activeLoopOut.
-      if (loopEnabled && activeLoopOut !== null && t >= activeLoopOut && !loopJumping && isPlaying) {
-        loopJumping = true
-        seekAllTo(activeLoopIn ?? 0)
-        setTimeout(() => { loopJumping = false }, 50)
-      }
+      // 35.1 — quand AlphaTab est master, c'est playerPositionChanged qui pilote
+      // l'affichage et le rebond de boucle.
+      if (tabMaster) return
+      updateTimeDisplay(t)
+      checkLoopRebound(t)
     })
   }
 
   ws.on('finish', () => {
+    // 35.1 — AlphaTab master : la fin est signalée par playerFinished
+    if (tabMaster) return
     // Ignore finish from tracks shorter than the longest track — a short track
     // (e.g. metronome) reaching its end must not stop the whole playback.
     const maxDur = Math.max(...trackDurations.filter(d => d > 0))
@@ -1053,8 +1097,11 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
 // ── Proportional track widths ──────────────────────────────────────────────
 
 function adjustTrackWidths() {
-  const maxDur = Math.max(...trackDurations.filter(d => d > 0))
-  if (!maxDur) return
+  const durs = trackDurations.filter(d => d > 0)
+  // 35.2 — en tab-only il n'y a aucune waveform : la durée vient du score.
+  let maxDur = durs.length > 0 ? Math.max(...durs) : 0
+  if (tabMaster && scoreDurationSec > maxDur) maxDur = scoreDurationSec
+  if (!(maxDur > 0)) return
 
   // Track 0 may be shorter than others (e.g. a metronome). Always sync
   // totalDuration and the timeline to the actual longest track.
@@ -1274,7 +1321,7 @@ function beatTickToAudioTimeSec(tick) {
   const sps = tabSyncPoints
   if (!sps || sps.length === 0) {
     // No sync data: use score tempo directly
-    const tempo    = alphaTabApi?.score?.tempo || 120
+    const tempo    = alphaTabApi?.score?.tempo || tabScore?.tempo || 120
     const synthMs  = tick * 60000 / (tempo * 960)
     return synthMs / 1000
   }
@@ -1283,7 +1330,7 @@ function beatTickToAudioTimeSec(tick) {
     if (tick < sps[j + 1].synthTick) { i = j; break }
   }
   const sp0      = sps[i]
-  const bpm      = sp0.synthBpm || alphaTabApi?.score?.tempo || 98.5
+  const bpm      = sp0.synthBpm || alphaTabApi?.score?.tempo || tabScore?.tempo || 98.5
   const deltaTick = tick - sp0.synthTick
   const synthMs  = sp0.synthTime + deltaTick * 60000 / (bpm * 960)
   return synthTimeToAudioTime(synthMs) / 1000
@@ -1351,12 +1398,9 @@ function enforceTabCursorVisible() {
 function startTabSync() {
   if (tabSyncRafId !== null) return
   const loop = () => {
+    // 35.1 — AlphaTab est master clock : le RAF ne sert plus qu'au défilement
+    // téléprompteur du curseur (plus de push WaveSurfer → AlphaTab).
     if (alphaTabApi && tabState !== 'collapsed') {
-      // window.__tabTestMode = true suspend la sync audio pour les tests Playwright
-      if (!window.__tabTestMode && wavesurfers.length > 0) {
-        const audioMs = wavesurfers[0].getCurrentTime() * 1000
-        alphaTabApi.timePosition = audioTimeToSynthTime(audioMs)
-      }
       enforceTabCursorVisible()
     }
     tabSyncRafId = requestAnimationFrame(loop)
@@ -1369,6 +1413,15 @@ function stopTabSync() {
     cancelAnimationFrame(tabSyncRafId)
     tabSyncRafId = null
   }
+}
+
+// 35.1 / 35.5 — Repères musicaux du score (masterBars)
+// Durée totale du score en ticks MIDI (dernier masterBar + sa durée).
+function scoreTotalTicks(score) {
+  const bars = score?.masterBars
+  if (!bars || bars.length === 0) return 0
+  const last = bars[bars.length - 1]
+  return last.start + last.calculateDuration()
 }
 
 function buildTrackSelector(score) {
@@ -1472,6 +1525,10 @@ async function initTabDrawer(tabFile) {
 
   // Track selector + sync points after score load
   alphaTabApi.scoreLoaded.on(score => {
+    // 35.1 — dès qu'un score est chargé, AlphaTab devient l'horloge maître
+    tabScore   = score
+    tabMaster  = true
+    try { alphaTabApi.playbackSpeed = currentTempo / 100 } catch { /* player pas prêt */ }
     buildTrackSelector(score)
     // Generate sync points from embedded GP markers (mod.midi.MidiFileGenerator)
     try {
@@ -1486,6 +1543,31 @@ async function initTabDrawer(tabFile) {
     } catch (e) {
       console.warn('[tab] sync points extraction failed:', e)
     }
+
+    // Durée du score (après les sync points : ils redéfinissent l'axe temps)
+    scoreDurationSec = beatTickToAudioTimeSec(scoreTotalTicks(score))
+    if (scoreDurationSec > totalDuration) {
+      totalDuration = scoreDurationSec
+      durationEl.textContent = formatTimecode(totalDuration)
+    }
+  })
+
+  // 35.1 — AlphaTab master clock : sa position pilote l'affichage, la boucle
+  // et le recalage des instances WaveSurfer (followers).
+  alphaTabApi.playerPositionChanged.on(args => {
+    if (!tabMaster) return
+    const audioSec = synthTimeToAudioTime(args.currentTime) / 1000
+    updateTimeDisplay(audioSec)
+    for (const ws of wavesurfers) {
+      if (args.isSeek || Math.abs(ws.getCurrentTime() - audioSec) > WS_DRIFT_TOL) {
+        ws.setTime(audioSec)
+      }
+    }
+    checkLoopRebound(audioSec)
+  })
+
+  alphaTabApi.playerFinished.on(() => {
+    if (tabMaster) onFinish()
   })
 
   // 13.6 — Drag-to-select loop: mousedown → drag → mouseup
