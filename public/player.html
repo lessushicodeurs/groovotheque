@@ -65,28 +65,7 @@
         <button id="btn-play" class="transport-btn" aria-label="Lecture / Pause">▶</button>
         <button id="btn-stop" class="transport-btn transport-btn--stop" aria-label="Stop">■</button>
         <button id="btn-loop-go-out" class="transport-btn transport-btn--marker-nav" aria-label="Région suivante">⏭</button>
-        <button id="btn-add-comment" class="transport-btn transport-btn--marker-nav" aria-label="Ajouter un commentaire" title="Ajouter un commentaire" hidden>✚</button>
-        <button id="btn-toggle-comments" class="transport-btn btn-comments" aria-label="Afficher/masquer les commentaires" aria-pressed="true" title="Commentaires" hidden>
-          💬<span id="comment-badge" class="comment-badge" hidden>0</span>
-        </button>
-        <div class="transport-time">
-          <span id="timecode" class="timecode">0:00.000</span>
-          <span class="timecode-sep">/</span>
-          <span id="duration" class="timecode timecode--dim">—</span>
-        </div>
-        <div id="seek-bar" class="seek-bar" role="slider" aria-label="Position" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-          <div id="seek-fill" class="seek-fill"></div>
-        </div>
-        <div class="transport-loop">
-          <span class="loop-label">IN</span>
-          <input id="loop-in" class="loop-input" type="text" value="—" aria-label="Point IN" disabled>
-          <span class="loop-label">OUT</span>
-          <input id="loop-out" class="loop-input" type="text" value="—" aria-label="Point OUT" disabled>
-          <button id="btn-loop" class="transport-btn transport-btn--loop" aria-label="Boucle" aria-pressed="false">⟳</button>
-          <button id="btn-loop-clear" class="transport-btn transport-btn--loop-clear" aria-label="Supprimer la boucle" disabled>✕</button>
-        </div>
-      </div>
-      <div class="transport-row transport-row--tempo">
+        <span class="transport-sep" aria-hidden="true">|</span>
         <!-- 18.2 — Zoom horizontal des waveforms -->
         <div class="zoom-controls" role="group" aria-label="Zoom des waveforms">
           <button id="btn-zoom-out" class="zoom-btn" type="button" aria-label="Dézoomer" title="Dézoomer" disabled>
@@ -107,7 +86,38 @@
             </svg>
           </button>
         </div>
-        <span class="transport-sep" aria-hidden="true">|</span>
+        <!-- Les commentaires ne sont révélés qu'une fois chargés : le séparateur
+             qui les précède vit dans le même groupe pour apparaître avec eux. -->
+        <div id="transport-comments" class="transport-comments" hidden>
+          <span class="transport-sep" aria-hidden="true">|</span>
+          <button id="btn-add-comment" class="transport-btn transport-btn--marker-nav" aria-label="Ajouter un commentaire" title="Ajouter un commentaire">✚</button>
+          <button id="btn-toggle-comments" class="transport-btn btn-comments" aria-label="Afficher/masquer les commentaires" aria-pressed="true" title="Commentaires">
+            💬<span id="comment-badge" class="comment-badge" hidden>0</span>
+          </button>
+        </div>
+        <!-- Le séparateur reste solidaire du temps pour ne pas se retrouver
+             seul en fin de ligne quand la rangée se replie. -->
+        <div class="transport-time-group">
+          <span class="transport-sep" aria-hidden="true">|</span>
+          <div class="transport-time">
+            <span id="timecode" class="timecode">0:00.000</span>
+            <span class="timecode-sep">/</span>
+            <span id="duration" class="timecode timecode--dim">—</span>
+          </div>
+        </div>
+        <div id="seek-bar" class="seek-bar" role="slider" aria-label="Position" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <div id="seek-fill" class="seek-fill"></div>
+        </div>
+        <div class="transport-loop">
+          <span class="loop-label">IN</span>
+          <input id="loop-in" class="loop-input" type="text" value="—" aria-label="Point IN" disabled>
+          <span class="loop-label">OUT</span>
+          <input id="loop-out" class="loop-input" type="text" value="—" aria-label="Point OUT" disabled>
+          <button id="btn-loop" class="transport-btn transport-btn--loop" aria-label="Boucle" aria-pressed="false">⟳</button>
+          <button id="btn-loop-clear" class="transport-btn transport-btn--loop-clear" aria-label="Supprimer la boucle" disabled>✕</button>
+        </div>
+      </div>
+      <div class="transport-row transport-row--tempo">
         <span class="tempo-label">TEMPO</span>
         <span id="tempo-badge" class="tempo-badge" hidden></span>
         <input id="tempo-slider" type="range" min="50" max="120" step="1" value="100"

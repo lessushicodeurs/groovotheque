@@ -786,6 +786,28 @@ body {
   flex-shrink: 0;
 }
 
+/* Groupe commentaires : il porte son propre séparateur pour apparaître et
+   disparaître d'un bloc. `gap: inherit` reprend l'espacement de la rangée,
+   y compris sa valeur mobile. */
+.transport-comments {
+  display: flex;
+  align-items: center;
+  gap: inherit;
+  flex-shrink: 0;
+}
+
+/* display:flex ci-dessus l'emporterait sur le display:none du navigateur. */
+.transport-comments[hidden] {
+  display: none;
+}
+
+.transport-time-group {
+  display: flex;
+  align-items: center;
+  gap: inherit;
+  flex-shrink: 0;
+}
+
 .zoom-btn {
   background: #1c1c1c;
   border: 1px solid #2a2a2a;

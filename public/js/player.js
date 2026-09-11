@@ -68,6 +68,7 @@ const downloadStatusEl = document.getElementById('download-status')
 // ── Epic 22 — DOM refs commentaires ──────────────────────────────────────
 const btnAddComment        = document.getElementById('btn-add-comment')
 const btnToggleComments    = document.getElementById('btn-toggle-comments')
+const transportCommentsEl  = document.getElementById('transport-comments')
 const commentBadgeEl       = document.getElementById('comment-badge')
 const commentModalBackdrop = document.getElementById('comment-modal-backdrop')
 const commentModalPosition = document.getElementById('comment-modal-position')
@@ -3196,9 +3197,10 @@ async function loadComments() {
   renderCommentMarkers()
   updateCommentBadge()
 
-  // Révéler les boutons dans le transport
-  btnToggleComments.removeAttribute('hidden')
-  btnAddComment.removeAttribute('hidden')
+  // Révéler les boutons dans le transport. C'est le groupe entier qui est
+  // masqué, séparateur compris : sans cela il resterait deux « | » collés
+  // entre le zoom et le temps quand les commentaires ne sont pas affichés.
+  transportCommentsEl?.removeAttribute('hidden')
 
   // 37.4 — commentaires prêts, pistes peut-être aussi
   commentsLoaded = true
