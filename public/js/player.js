@@ -355,6 +355,10 @@ let tabSyncPoints  = null  // BackingTrackSyncPoint[] from GP sync markers, or n
 
 // 35.1 — AlphaTab master clock
 let tabMaster        = false  // true dès qu'un score GP est chargé : AlphaTab pilote le transport
+// Le synthé n'avance son horloge qu'une fois la soundfont chargée. Tant que
+// playerReady / playerPositionChanged n'ont rien émis, WaveSurfer reste la
+// source de temps : sinon un synthé lent ou en échec fige tout le transport.
+let tabClockLive     = false
 let tabScore         = null   // Score AlphaTab chargé
 let scoreDurationSec = 0      // durée du score en secondes (axe temps audio)
 // 35.5 — affichage du temps : 'time' (mm:ss) ou 'bbt' (mesure:temps)
@@ -653,10 +657,23 @@ function applyVolumes() {
   })
 }
 
+// 35.1 — L'horloge AlphaTab ne fait autorité que lorsqu'elle avance vraiment,
+// ou qu'il n'y a aucune waveform pour prendre le relais (groove tab-only).
+function tabClockDrives() {
+  return tabMaster && !!alphaTabApi && (tabClockLive || wavesurfers.length === 0)
+}
+
+// L'audio peut être plus long que le score (mixte) : passé la fin du score, le
+// synthé n'émet plus rien et c'est la piste audio qui pilote la fin.
+function audioOutlastsScore() {
+  return wavesurfers.length > 0 && totalDuration - scoreDurationSec > 0.25
+}
+
 // 35.1 — Position courante en secondes sur l'axe temps « audio ».
-// AlphaTab est la source de vérité dès qu'un score est chargé.
+// AlphaTab est la source de vérité dès qu'un score est chargé et que son
+// horloge tourne.
 function currentTimeSec() {
-  if (tabMaster && alphaTabApi) return synthTimeToAudioTime(alphaTabApi.timePosition) / 1000
+  if (tabClockDrives()) return synthTimeToAudioTime(alphaTabApi.timePosition) / 1000
   return wavesurfers[0]?.getCurrentTime() ?? 0
 }
 
@@ -1129,17 +1146,19 @@ function buildTrackRow(track, idx, cachedPeaks = null, opts = {}) {
   if (idx === 0) {
 
     ws.on('timeupdate', (t) => {
-      // 35.1 — quand AlphaTab est master, c'est playerPositionChanged qui pilote
-      // l'affichage et le rebond de boucle.
-      if (tabMaster) return
+      // 35.1 — quand l'horloge AlphaTab tourne, c'est playerPositionChanged qui
+      // pilote l'affichage et le rebond de boucle. WaveSurfer reprend la main
+      // tant que le synthé n'a rien émis, et au-delà de la fin du score.
+      if (tabClockDrives() && t < scoreDurationSec - 0.05) return
       updateTimeDisplay(t)
       checkLoopRebound(t)
     })
   }
 
   ws.on('finish', () => {
-    // 35.1 — AlphaTab master : la fin est signalée par playerFinished
-    if (tabMaster) return
+    // 35.1 — AlphaTab master : la fin est signalée par playerFinished, sauf si
+    // l'horloge du synthé ne tourne pas ou si l'audio dépasse le score.
+    if (tabClockDrives() && !audioOutlastsScore()) return
     // Ignore finish from tracks shorter than the longest track — a short track
     // (e.g. metronome) reaching its end must not stop the whole playback.
     const maxDur = Math.max(...trackDurations.filter(d => d > 0))
@@ -1895,7 +1914,13 @@ async function initTabDrawer(tabFile) {
   })
 
   window.__alphaTabApi = alphaTabApi
-  alphaTabApi.error.on(err => console.error('[AlphaTab]', err))
+
+  // 35.1 — le synthé est prêt : son horloge peut piloter le transport.
+  alphaTabApi.playerReady.on(() => { tabClockLive = true })
+
+  alphaTabApi.error.on(err => {
+    console.error('[AlphaTab]', err)
+  })
 
   // Auto-fit strip height once rendering is complete (postRenderFinished = once, not per partial)
   alphaTabApi.postRenderFinished.on(() => {
@@ -1973,6 +1998,7 @@ async function initTabDrawer(tabFile) {
   // et le recalage des instances WaveSurfer (followers).
   alphaTabApi.playerPositionChanged.on(args => {
     if (!tabMaster) return
+    tabClockLive = true
     const audioSec = synthTimeToAudioTime(args.currentTime) / 1000
     updateTimeDisplay(audioSec)
     for (const ws of wavesurfers) {
@@ -1984,7 +2010,11 @@ async function initTabDrawer(tabFile) {
   })
 
   alphaTabApi.playerFinished.on(() => {
-    if (tabMaster) onFinish()
+    if (!tabMaster) return
+    // Mixte avec un score plus court que l'audio : la fin du synthé n'est pas la
+    // fin du morceau, c'est la piste audio la plus longue qui la signalera.
+    if (audioOutlastsScore()) return
+    onFinish()
   })
 
   // 13.6 — Drag-to-select loop: mousedown → drag → mouseup
