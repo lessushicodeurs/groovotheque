@@ -3,8 +3,9 @@
 # Usage: ./scripts/migrate.sh [--dry-run]
 #
 # Les migrations vivent dans scripts/migrations/<id>.sh et sont appliquées dans
-# l'ordre croissant de leur nom. Le registre cache/migrations.json (hors git)
-# mémorise les migrations déjà appliquées : id, date ISO, nombre d'éléments traités.
+# l'ordre croissant de leur nom. Le registre migrations.json (hors git) mémorise
+# les migrations déjà appliquées : id, date ISO, nombre d'éléments traités.
+# Il est rangé à côté des VRAIES données, pas dans le worktree courant.
 set -euo pipefail
 
 RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
@@ -22,7 +23,14 @@ MIGRATIONS_DIR="$SCRIPT_DIR/migrations"
 GROOVES_DIR="${GROOVES_DIR:-$ROOT_DIR/grooves}"
 export GROOVES_DIR
 
-REGISTRY="${MIGRATIONS_REGISTRY:-$ROOT_DIR/cache/migrations.json}"
+# Le registre suit les DONNÉES, pas le dépôt : dans un worktree, grooves/ est un
+# lien vers le dépôt principal alors que cache/ est un vrai dossier local, qui
+# disparaît avec le worktree. On résout donc le lien et on range le registre dans
+# le cache/ voisin des vraies données. Volontairement à côté de grooves/ et non
+# dedans : deploy-grooves.sh téléverse certaines extensions du dossier déployé,
+# le registre n'a rien à faire sur le serveur.
+DATA_ROOT="$(dirname "$(readlink -f "$GROOVES_DIR")")"
+REGISTRY="${MIGRATIONS_REGISTRY:-$DATA_ROOT/cache/migrations.json}"
 
 # Dossier d'état partagé par le registre et les rapports des migrations
 MIGRATIONS_STATE_DIR="${MIGRATIONS_STATE_DIR:-$(dirname "$REGISTRY")}"
@@ -40,6 +48,7 @@ done
 export DRY_RUN
 
 [[ -d "$MIGRATIONS_DIR" ]] || die "Dossier de migrations introuvable : $MIGRATIONS_DIR"
+[[ -d "$GROOVES_DIR" ]] || die "Dossier de données introuvable : $GROOVES_DIR"
 
 command -v python3 >/dev/null 2>&1 || die "python3 est requis"
 
