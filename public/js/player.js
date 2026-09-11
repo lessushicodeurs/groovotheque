@@ -215,7 +215,11 @@ let markerIdCounter   = 0
 // contenu, il suit donc le zoom sans calcul supplémentaire. Le défilement est
 // une simple translation appliquée identiquement à toutes les rangées, ce qui
 // garantit un alignement au pixel près.
-const ZOOM_LEVELS = [1, 2, 4, 8, 16]
+// Le plafond n'est pas le navigateur mais le cache de peaks, figé à 8000 points
+// par piste : au-delà de 8000 × (barWidth + barGap) / largeur du viewport, le
+// zoom n'affiche plus d'information supplémentaire. 32× est le dernier palier
+// qui apporte encore de la précision de pointage.
+const ZOOM_LEVELS = [1, 2, 4, 8, 16, 32]
 let zoomLevel        = 1      // palier courant (session uniquement, jamais persisté)
 let zoomScrollX      = 0      // décalage horizontal courant, en pixels
 let zoomUserScrolled = false  // 18.5 — l'utilisateur a repris la main sur le défilement
@@ -1167,7 +1171,7 @@ function adjustTrackWidths() {
 // ── Epic 18 — Zoom horizontal ──────────────────────────────────────────────
 
 // Largeur visible d'un viewport, en pixels *fractionnaires*. clientWidth arrondit
-// à l'entier : à 16× cette demi-pixel perdue devient 8 px de décalage, et une
+// à l'entier : à 32× cette demi-pixel perdue devient 16 px de décalage, et une
 // piste plus courte que le morceau retrouve la largeur d'une piste pleine — donc
 // une waveform étirée et un clic qui ne tombe plus sur l'instant visé.
 function vpWidth(el) {
@@ -1241,7 +1245,7 @@ function isMultipleOf(a, b) {
   return Math.abs(ratio - Math.round(ratio)) < 1e-6
 }
 
-// Sans cela les graduations resteraient tous les 5 s : illisibles à 16×, où
+// Sans cela les graduations resteraient tous les 5 s : illisibles à 32×, où
 // l'utilisateur cherche justement la seconde près. À 1× on restaure exactement
 // les valeurs d'origine.
 function applyTimelineIntervals() {
