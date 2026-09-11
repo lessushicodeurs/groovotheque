@@ -2829,8 +2829,8 @@ function initMarkerLane() {
 
 // Navigate to the previous/next marker from current playhead (17.6)
 function navigatePrevMarker() {
-  if (!markers.length || !wavesurfers.length) return false
-  const cur    = wavesurfers[0].getCurrentTime()
+  if (!markers.length) return false
+  const cur    = currentTimeSec()
   const sorted = [...markers].sort((a, b) => a.start - b.start)
   const prev   = sorted.filter(m => m.start < cur - 0.05).pop()
   if (prev) { performSeek(prev.start); return true }
@@ -2838,8 +2838,8 @@ function navigatePrevMarker() {
 }
 
 function navigateNextMarker() {
-  if (!markers.length || !wavesurfers.length) return false
-  const cur    = wavesurfers[0].getCurrentTime()
+  if (!markers.length) return false
+  const cur    = currentTimeSec()
   const sorted = [...markers].sort((a, b) => a.start - b.start)
   const next   = sorted.find(m => m.start > cur + 0.05)
   if (next) { performSeek(next.start); return true }
@@ -3206,7 +3206,7 @@ function initCommentPopover() {
 
 // ── Modal de création ────────────────────────────────────────────────────
 function openCommentModal() {
-  const pos = wavesurfers[0]?.getCurrentTime() ?? 0
+  const pos = currentTimeSec()
 
   // Si un commentaire existe déjà à ce timestamp, passer en modification
   const TOLERANCE = 0.5
