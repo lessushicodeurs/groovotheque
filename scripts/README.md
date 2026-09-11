@@ -16,6 +16,25 @@ Installe également Audacity via Flatpak.
 > Après installation, activer `mod-script-pipe` dans Audacity :
 > Edit → Preferences → Modules → mod-script-pipe: Enabled → redémarrer Audacity.
 
+### ⚠️ Rester en Audacity 3.x — ne pas passer en 4.x
+
+Le pipeline pilote Audacity par `mod-script-pipe`. **Audacity 4.0 est sorti sans
+scripting pipe ni Macro Manager** : il n'existe aucune API de remplacement, donc
+`audacity_process.py` cesse de fonctionner dès que l'instance passe en 4.x.
+L'équipe Audacity annonce leur retour « dans une version future », sans calendrier.
+
+Conserver impérativement une instance **Audacity 3.x** (testé avec 3.7.8), et bloquer
+sa mise à jour Flatpak :
+
+```bash
+flatpak mask org.audacityteam.Audacity     # gèle Audacity en 3.x
+flatpak mask                               # vérifie les masques actifs
+flatpak mask --remove org.audacityteam.Audacity   # pour lever le blocage
+```
+
+Audacity 4 peut être installé en parallèle (AppImage par exemple) pour l'édition à la
+main — il ne sert simplement à rien aux scripts de ce dépôt.
+
 ---
 
 ## restart-server.sh — redémarrage du serveur

@@ -32,6 +32,11 @@ Tous les scripts sont dans `scripts/`.
 | `strip-parent-prefix.sh` | Supprime le préfixe parent des sous-dossiers de grooves |
 | `markers-to-md.py` | Injecte la section Structure (marqueurs + BPM) dans le .md d'un groove |
 
+> **Audacity 3.x requis.** `process-rehearsal.sh` pilote Audacity par `mod-script-pipe`,
+> supprimé dans Audacity 4.0 et sans remplacement. Garder une instance 3.x et geler sa
+> mise à jour : `flatpak mask org.audacityteam.Audacity`.
+> Détails dans [scripts/README.md](scripts/README.md).
+
 ## Licence
 
 [AGPL v3](LICENSE) — libre d'utiliser, modifier et redistribuer, à condition de publier tes modifications sous la même licence (y compris si tu en fais un service en ligne).
