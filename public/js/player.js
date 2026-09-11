@@ -1498,8 +1498,8 @@ async function buildBackingTrackRow(score) {
       colorIndex: currentTracks.length + midiTracks.length,
     },
   )
-  // Tab-only : le backing track est la seule piste exportable du groove.
-  initDownloadMenu()
+  // Tab-only : le backing track est la seule piste mixable du groove.
+  setMixDownloadsAvailable(true)
 }
 
 // ── Epic 13 — Tablature synchronisée ──────────────────────────────────────
@@ -2310,19 +2310,21 @@ let downloadBusy = false
 let downloadStatusTimer = null
 
 // 38.1 — Menu déroulant : ouverture/fermeture, clic extérieur, Échap
-// Le menu n'est proposé que s'il y a quelque chose à exporter : en tab-only
-// sans backing track, audibleTracks() est vide et tout export échouerait.
+// Le zip serveur contient toujours quelque chose (les pistes audio, le fichier
+// Guitar Pro, ou les deux). Les exports de mix, eux, demandent de l'audio
+// décodable : en tab-only sans backing track, audibleTracks() est vide et tout
+// rendu échouerait — les entrées correspondantes restent masquées.
+function setMixDownloadsAvailable(available) {
+  downloadMenu.querySelectorAll('.download-menu-item:not([data-format="zip"])')
+    .forEach(el => el.closest('li')?.toggleAttribute('hidden', !available))
+}
+
 let downloadMenuReady = false
 function initDownloadMenu() {
   if (downloadMenuReady) return
   downloadMenuReady = true
   downloadWrap.removeAttribute('hidden')
-  // Le zip vient du serveur : il ne contient que les fichiers du dossier, donc
-  // rien en tab-only (le backing track est embarqué dans le fichier GP).
-  if (currentTracks.length === 0) {
-    downloadMenu.querySelector('.download-menu-item[data-format="zip"]')
-      ?.closest('li')?.setAttribute('hidden', '')
-  }
+  setMixDownloadsAvailable(currentTracks.length > 0)
 
   btnDownloadAll.addEventListener('click', (e) => {
     e.stopPropagation()
@@ -3754,10 +3756,9 @@ async function init() {
     )
 
     currentTracks = groove.tracks ?? []
-    // En tab-only, le menu n'apparaît que si un backing track exportable arrive
-    // (voir buildBackingTrackRow). Après l'affectation de currentTracks, dont
-    // initDownloadMenu() a besoin pour savoir si le zip serveur a du contenu.
-    if (!tabOnly) initDownloadMenu()
+    // Après l'affectation de currentTracks, dont initDownloadMenu() a besoin
+    // pour savoir s'il y a de l'audio à mixer.
+    initDownloadMenu()
     buildTimelineRow()
     currentTracks.forEach((track, i) => {
       buildTrackRow(track, track.index, cachedPeaksArr[i])

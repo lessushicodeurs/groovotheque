@@ -363,7 +363,9 @@ app.get('/api/grooves/*/download', async (req, res) => {
     for (const entry of entries) {
       if (!entry.isFile() || entry.name.endsWith('~')) continue;
       const ext = path.extname(entry.name).toLowerCase();
-      if (AUDIO_EXTENSIONS.has(ext) || ext === '.md') {
+      // Le fichier Guitar Pro accompagne les pistes : il embarque sa tablature et
+      // son éventuel backing track, qu'aucun fichier du dossier ne contient.
+      if (AUDIO_EXTENSIONS.has(ext) || GP_EXTENSIONS.has(ext) || ext === '.md') {
         archive.file(path.join(grooveDir, entry.name), { name: entry.name });
       }
     }
