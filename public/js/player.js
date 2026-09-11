@@ -49,6 +49,7 @@ const btnPlay          = document.getElementById('btn-play')
 const btnStop          = document.getElementById('btn-stop')
 const timecodeEl       = document.getElementById('timecode')
 const durationEl       = document.getElementById('duration')
+const btnTimeModeEl    = document.getElementById('btn-time-mode')
 const seekBarEl        = document.getElementById('seek-bar')
 const seekFillEl       = document.getElementById('seek-fill')
 const loopInEl         = document.getElementById('loop-in')
@@ -356,6 +357,10 @@ let tabSyncPoints  = null  // BackingTrackSyncPoint[] from GP sync markers, or n
 let tabMaster        = false  // true dès qu'un score GP est chargé : AlphaTab pilote le transport
 let tabScore         = null   // Score AlphaTab chargé
 let scoreDurationSec = 0      // durée du score en secondes (axe temps audio)
+// 35.5 — affichage du temps : 'time' (mm:ss) ou 'bbt' (mesure:temps)
+const TIME_MODE_KEY  = 'groovotheque:time_mode'
+let timeMode         = 'time'
+let bbtTimelineEl    = null  // graduations de mesures (mode BBT)
 // 35.3 — lignes de pistes MIDI : { track, muted, soloed, volume, visible, btnMute, btnSolo, btnShow }
 let midiTracks       = []
 // Tolérance de dérive avant de re-caler une instance WaveSurfer sur l'horloge
@@ -655,7 +660,7 @@ function currentTimeSec() {
 
 // Affichage timecode + seek bar, quelle que soit l'horloge maître.
 function updateTimeDisplay(t) {
-  timecodeEl.textContent = formatTimecode(t)
+  timecodeEl.textContent = formatPosition(t)
   if (totalDuration > 0) {
     const ratio = Math.max(0, Math.min(1, t / totalDuration))
     seekFillEl.style.width = `${ratio * 100}%`
@@ -835,6 +840,12 @@ function buildTimelineRow() {
   timelineExtEl = document.createElement('div')
   timelineExtEl.className = 'track-timeline-ext'
 
+  // 35.5 — graduations de mesures, affichées à la place du TimelinePlugin
+  // quand le mode BBT est actif
+  bbtTimelineEl = document.createElement('div')
+  bbtTimelineEl.className = 'bbt-timeline'
+  bbtTimelineEl.hidden = true
+
   markerLaneEl = document.createElement('div')
   markerLaneEl.className = 'marker-lane'
   markerLaneEl.setAttribute('aria-label', 'Bande de marqueurs')
@@ -842,7 +853,7 @@ function buildTimelineRow() {
   commentMarkersLaneEl = document.createElement('div')
   commentMarkersLaneEl.className = 'comment-markers-lane'
 
-  waveCol.append(timelineExtEl, markerLaneEl, commentMarkersLaneEl)
+  waveCol.append(timelineExtEl, bbtTimelineEl, markerLaneEl, commentMarkersLaneEl)
   row.append(sidebar, waveCol)
   tracksContainer.appendChild(row)
 }
@@ -1048,7 +1059,7 @@ function buildTrackRow(track, idx, cachedPeaks = null, opts = {}) {
     }
     if (idx === 0) {
       totalDuration = ws.getDuration()
-      durationEl.textContent = formatTimecode(totalDuration)
+      updateDurationDisplay()
     }
     trackDurations[idx] = ws.getDuration()
     if (trackDurations.filter(d => d > 0).length === wavesurfers.length) {
@@ -1124,7 +1135,7 @@ function adjustTrackWidths() {
   // Track 0 may be shorter than others (e.g. a metronome). Always sync
   // totalDuration and the timeline to the actual longest track.
   totalDuration = maxDur
-  durationEl.textContent = formatTimecode(maxDur)
+  updateDurationDisplay()
   if (timelinePluginRef) {
     timelinePluginRef.options.duration = maxDur
     wavesurfers[0]?.emit('redraw')
@@ -1167,6 +1178,7 @@ function adjustTrackWidths() {
     }
   })
 
+  renderBbtTimeline()
   renderMarkers()
   renderCommentMarkers()
   animateSeenComments()
@@ -1620,6 +1632,144 @@ function scoreTotalTicks(score) {
   return last.start + last.calculateDuration()
 }
 
+// Temps « synth » (ms) → tick MIDI. Inverse de beatTickToAudioTimeSec.
+function synthTimeToTick(synthMs) {
+  const sps = tabSyncPoints
+  const fallbackBpm = alphaTabApi?.score?.tempo || tabScore?.tempo || 120
+  if (!sps || sps.length === 0) return synthMs * fallbackBpm * 960 / 60000
+
+  let i = sps.length - 1
+  for (let j = 0; j < sps.length - 1; j++) {
+    if (synthMs < sps[j + 1].synthTime) { i = j; break }
+  }
+  const sp0 = sps[i]
+  const bpm = sp0.synthBpm || fallbackBpm
+  return sp0.synthTick + (synthMs - sp0.synthTime) * bpm * 960 / 60000
+}
+
+function audioSecToTick(sec) {
+  return synthTimeToTick(audioTimeToSynthTime(sec * 1000))
+}
+
+// Tick MIDI → { bar, beat } 0-indexés (recherche dichotomique sur masterBars)
+function tickToBarBeat(tick) {
+  const bars = tabScore?.masterBars
+  if (!bars || bars.length === 0) return null
+  let lo = 0, hi = bars.length - 1, idx = 0
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (bars[mid].start <= tick) { idx = mid; lo = mid + 1 } else { hi = mid - 1 }
+  }
+  const mb  = bars[idx]
+  const num = mb.timeSignatureNumerator || 4
+  const ticksPerBeat = mb.calculateDuration() / num
+  const beat = ticksPerBeat > 0
+    ? Math.max(0, Math.min(num - 1, Math.floor((tick - mb.start) / ticksPerBeat)))
+    : 0
+  return { bar: idx, beat }
+}
+
+// { bar, beat } 0-indexés → tick MIDI
+function barBeatToTick(bar, beat) {
+  const bars = tabScore?.masterBars
+  if (!bars || bars.length === 0) return 0
+  const i = Math.max(0, Math.min(bars.length - 1, bar))
+  const mb  = bars[i]
+  const num = mb.timeSignatureNumerator || 4
+  const ticksPerBeat = mb.calculateDuration() / num
+  return mb.start + Math.max(0, Math.min(num - 1, beat)) * ticksPerBeat
+}
+
+function barBeatToSec(bar, beat) {
+  return beatTickToAudioTimeSec(barBeatToTick(bar, beat))
+}
+
+// Le mode BBT n'a de sens qu'avec un score chargé.
+function bbtEnabled() {
+  return timeMode === 'bbt' && tabMaster && !!tabScore?.masterBars?.length
+}
+
+// Position en secondes → « mesure:temps » 1-indexé (ex. 5:3)
+function formatBBT(sec) {
+  const bb = tickToBarBeat(audioSecToTick(Math.max(0, sec)))
+  if (!bb) return formatTimecode(sec)
+  return `${bb.bar + 1}:${bb.beat + 1}`
+}
+
+// Formatage du timecode selon le mode actif
+function formatPosition(sec) {
+  return bbtEnabled() ? formatBBT(sec) : formatTimecode(sec)
+}
+
+function updateDurationDisplay() {
+  if (bbtEnabled()) {
+    durationEl.textContent = `${tabScore.masterBars.length} mes.`
+  } else {
+    durationEl.textContent = totalDuration > 0 ? formatTimecode(totalDuration) : '—'
+  }
+}
+
+// 35.5 — Graduations de mesures, reconstruites depuis score.masterBars.
+// Positions converties en % de la durée totale : insensibles au redimensionnement.
+function renderBbtTimeline() {
+  if (!bbtTimelineEl) return
+  const on = bbtEnabled()
+  bbtTimelineEl.hidden = !on
+  if (timelineExtEl) timelineExtEl.hidden = on
+  if (!on || !(totalDuration > 0)) return
+
+  bbtTimelineEl.innerHTML = ''
+  const bars    = tabScore.masterBars
+  const width   = bbtTimelineEl.getBoundingClientRect().width || 800
+  const pxPerBar = width / bars.length
+  // Une étiquette tous les N marqueurs pour garder ~36 px entre deux libellés
+  const labelStep = Math.max(1, Math.ceil(36 / Math.max(pxPerBar, 1)))
+
+  for (let i = 0; i < bars.length; i++) {
+    const sec = beatTickToAudioTimeSec(bars[i].start)
+    if (sec > totalDuration) break
+    const tick = document.createElement('div')
+    tick.className = 'bbt-tick'
+    tick.style.left = `${(sec / totalDuration) * 100}%`
+    if (i % labelStep === 0) {
+      tick.classList.add('bbt-tick--labeled')
+      const label = document.createElement('span')
+      label.className = 'bbt-tick-label'
+      label.textContent = String(i + 1)
+      tick.appendChild(label)
+    }
+    bbtTimelineEl.appendChild(tick)
+  }
+}
+
+function setTimeMode(mode) {
+  timeMode = mode === 'bbt' ? 'bbt' : 'time'
+  try { localStorage.setItem(TIME_MODE_KEY, timeMode) } catch { /* ignore */ }
+  if (btnTimeModeEl) {
+    btnTimeModeEl.textContent = timeMode === 'bbt' ? 'BBT' : 'm:s'
+    btnTimeModeEl.setAttribute('aria-pressed', String(timeMode === 'bbt'))
+    btnTimeModeEl.classList.toggle('active', timeMode === 'bbt')
+  }
+  updateTimeDisplay(currentTimeSec())
+  updateDurationDisplay()
+  updateLoopFields()
+  renderBbtTimeline()
+}
+
+function initTimeMode() {
+  let saved = 'time'
+  try { saved = localStorage.getItem(TIME_MODE_KEY) || 'time' } catch { /* ignore */ }
+  timeMode = saved === 'bbt' ? 'bbt' : 'time'
+  if (btnTimeModeEl) {
+    btnTimeModeEl.textContent = timeMode === 'bbt' ? 'BBT' : 'm:s'
+    btnTimeModeEl.setAttribute('aria-pressed', String(timeMode === 'bbt'))
+    btnTimeModeEl.classList.toggle('active', timeMode === 'bbt')
+    btnTimeModeEl.addEventListener('click', () => {
+      setTimeMode(timeMode === 'bbt' ? 'time' : 'bbt')
+    })
+  }
+}
+
 function buildTrackSelector(score) {
   if (!tabTrackListEl) return
   tabTrackListEl.innerHTML = ''
@@ -1741,8 +1891,15 @@ async function initTabDrawer(tabFile) {
     scoreDurationSec = beatTickToAudioTimeSec(scoreTotalTicks(score))
     if (scoreDurationSec > totalDuration) {
       totalDuration = scoreDurationSec
-      durationEl.textContent = formatTimecode(totalDuration)
+      updateDurationDisplay()
     }
+
+    // 35.5 — le score est là : la bascule BBT ↔ mm:ss devient disponible
+    btnTimeModeEl?.removeAttribute('hidden')
+    updateTimeDisplay(currentTimeSec())
+    updateDurationDisplay()
+    updateLoopFields()
+    renderBbtTimeline()
 
     // 35.2 — tab-only : aucune waveform ne viendra terminer le chargement
     if (currentTracks.length === 0) {
@@ -3346,6 +3503,7 @@ async function init() {
     drawerEl.removeAttribute('hidden')
     initDrawer()
     initDownloadMenu()
+    initTimeMode()
 
     // 6.3 — Fetch all cached peaks in parallel before building tracks
     const cachedPeaksArr = await Promise.all(

@@ -440,6 +440,65 @@ body {
   overflow: hidden;
 }
 
+/* ── Epic 35 — Timeline en mesures (BBT) ─── */
+
+.bbt-timeline {
+  position: relative;
+  height: 18px;
+  background: #0f0f0f;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.bbt-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: #2e2e2e;
+}
+
+.bbt-tick--labeled {
+  background: #555;
+}
+
+.bbt-tick-label {
+  position: absolute;
+  left: 3px;
+  top: 2px;
+  font-family: monospace;
+  font-size: 10px;
+  line-height: 1;
+  color: #555;
+  white-space: nowrap;
+}
+
+/* Bascule BBT ↔ mm:ss sur le timecode */
+.timecode-toggle {
+  background: #1c1c1c;
+  border: 1px solid #2a2a2a;
+  color: #555;
+  font-family: monospace;
+  font-size: 0.62rem;
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+  cursor: pointer;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.timecode-toggle:hover {
+  background: #242424;
+  color: #999;
+  border-color: #383838;
+}
+
+.timecode-toggle.active {
+  background: #1a2433;
+  border-color: #33668f;
+  color: #6db6ef;
+}
+
 /* ── Epic 35 — Pistes MIDI (AlphaTab) ────── */
 
 /* Aire vide colorée : v1 sans piano-roll. Le dégradé rappelle la couleur de
