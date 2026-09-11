@@ -138,7 +138,7 @@ Ou manuellement :
 sudo apt install ffmpeg bc python3-yaml aubio-tools
 ```
 
-Si `aubio-tools` est absent, le pipeline se termine normalement — les fiches `.md` ne sont simplement pas générées.
+Si `aubio-tools` est absent, le pipeline se termine normalement — les fiches `notes.md` ne sont simplement pas générées.
 
 ## Usage
 
@@ -179,6 +179,7 @@ grooves/
     02 GUIT.mp3
     04 KEYS.mp3               ← nom sans suffixe MIX
     11 DRUMS.mp3
+    notes.md                  ← fiche BPM (si aubio-tools présent)
   Ma Répétition - 02 - Break/ ← segment 2 (label nommé dans Audacity)
     ...
   Ma Répétition - 03/

@@ -902,9 +902,9 @@ create_md_sheets() {
 
     [[ "$out_dir_name" == *blabla* ]] && continue
 
-    local md_file="${out_dir}/${out_dir_name}.md"
+    local md_file="${out_dir}/notes.md"
     if [[ -f "$md_file" ]]; then
-      warn "fiche existante, ignorée : ${out_dir_name}.md"
+      warn "fiche existante, ignorée : ${out_dir_name}/notes.md"
       continue
     fi
 
@@ -951,7 +951,7 @@ if len(times) >= 2:
       "$bpm_median" "$title" "$bpm_median" > "$md_file"
 
     SEG_BPM["$out_dir_name"]="$bpm_median"
-    ok "→ ${out_dir_name}.md (BPM : ${bpm_median})"
+    ok "→ ${out_dir_name}/notes.md (BPM : ${bpm_median})"
   done
 }
 
