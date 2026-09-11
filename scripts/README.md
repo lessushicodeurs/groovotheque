@@ -204,6 +204,16 @@ Entrées FLAC  →  Mix stéréo  →  Chaîne effects  →  Découpe  →  MP3
 
 ## Référence de configuration — `process-rehearsal.yaml`
 
+Le dépôt ne suit que le modèle `process-rehearsal.yaml.example`. La config réelle est
+locale et ignorée par git (elle décrit ton matériel : pistes, mixes, réglages). À créer
+au premier usage :
+
+```bash
+cp scripts/process-rehearsal.yaml.example scripts/process-rehearsal.yaml
+```
+
+Puis l'adapter. Quand le modèle évolue, reporter les nouveautés à la main dans ta copie.
+
 ### Section `audio`
 
 ```yaml

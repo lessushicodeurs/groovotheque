@@ -37,6 +37,10 @@ Tous les scripts sont dans `scripts/`.
 > mise à jour : `flatpak mask org.audacityteam.Audacity`.
 > Détails dans [scripts/README.md](scripts/README.md).
 
+> **Config locale.** `process-rehearsal.sh` lit `scripts/process-rehearsal.yaml`, ignoré par
+> git. Le créer depuis le modèle suivi :
+> `cp scripts/process-rehearsal.yaml.example scripts/process-rehearsal.yaml`
+
 ## Licence
 
 [AGPL v3](LICENSE) — libre d'utiliser, modifier et redistribuer, à condition de publier tes modifications sous la même licence (y compris si tu en fais un service en ligne).

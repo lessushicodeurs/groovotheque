@@ -211,7 +211,7 @@ load_config_yq() {
 }
 
 load_config() {
-  [[ -f "$CONFIG_FILE" ]] || die "Config introuvable : $CONFIG_FILE"
+  [[ -f "$CONFIG_FILE" ]] || die "Config introuvable : ${CONFIG_FILE}. La créer depuis le modèle : cp ${CONFIG_FILE}.example ${CONFIG_FILE}"
   if [[ "$YAML_PARSER" == "python3" ]]; then
     load_config_python "$CONFIG_FILE"
   else
