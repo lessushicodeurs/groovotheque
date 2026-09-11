@@ -173,6 +173,9 @@ const panNodes     = []   // StereoPannerNode per track
 const panKnobs       = []   // PanKnob UI per track
 const webAudioRouted = []   // true if MediaElementSource successfully connected
 const waveEls        = []   // .track-wave div per track (for proportional width)
+// Source décodable de chaque piste pour l'export (URL serveur, ou URL d'objet
+// pour le backing track embarqué dans le fichier GP), null si non exportable.
+const trackSourceUrls = []
 const trackDurations = []   // duration in seconds per track, set on 'ready'
 let timelinePluginRef = null  // TimelinePlugin instance (track 0), for duration correction
 let timelineExtEl     = null  // container DOM element for TimelinePlugin (in .timeline-row)
@@ -1094,6 +1097,7 @@ function buildTrackRow(track, idx, cachedPeaks = null, opts = {}) {
 
   const state = { volume: 1, muted: false, soloed: false }
   trackStates.push(state)
+  trackSourceUrls.push(track.url ?? (opts.blob ? URL.createObjectURL(opts.blob) : null))
   volSliders.push(volSlider)
   wavesurfers.push(ws)
   ws.setPlaybackRate(currentTempo / 100, true)
@@ -1478,6 +1482,8 @@ async function buildBackingTrackRow(score) {
       colorIndex: currentTracks.length + midiTracks.length,
     },
   )
+  // Tab-only : le backing track est la seule piste exportable du groove.
+  initDownloadMenu()
 }
 
 // ── Epic 13 — Tablature synchronisée ──────────────────────────────────────
@@ -2270,8 +2276,19 @@ let downloadBusy = false
 let downloadStatusTimer = null
 
 // 38.1 — Menu déroulant : ouverture/fermeture, clic extérieur, Échap
+// Le menu n'est proposé que s'il y a quelque chose à exporter : en tab-only
+// sans backing track, audibleTracks() est vide et tout export échouerait.
+let downloadMenuReady = false
 function initDownloadMenu() {
+  if (downloadMenuReady) return
+  downloadMenuReady = true
   downloadWrap.removeAttribute('hidden')
+  // Le zip vient du serveur : il ne contient que les fichiers du dossier, donc
+  // rien en tab-only (le backing track est embarqué dans le fichier GP).
+  if (currentTracks.length === 0) {
+    downloadMenu.querySelector('.download-menu-item[data-format="zip"]')
+      ?.closest('li')?.setAttribute('hidden', '')
+  }
 
   btnDownloadAll.addEventListener('click', (e) => {
     e.stopPropagation()
@@ -2388,17 +2405,19 @@ function downloadTracksZip() {
 
 // 38.2 — Pistes audibles avec leurs réglages courants (mémoire, pas mix.json).
 // Même règle que applyVolumes() : le solo l'emporte sur le mute.
+// Toutes les lignes audio sont prises, backing track embarqué compris (il est
+// audible, il doit être dans l'export). Les pistes MIDI, elles, sont rendues par
+// le synthétiseur d'AlphaTab et restent hors de l'export.
 function audibleTracks() {
-  const anySolo = trackStates.some(s => s.soloed)
-  return currentTracks.map((track, i) => {
-    const s = trackStates[i]
+  const anySolo = anySoloActive()
+  return trackStates.map((s, i) => {
     const volume = anySolo ? (s.soloed ? s.volume : 0) : (s.muted ? 0 : s.volume)
     // Le pan n'est audible que si le routage Web Audio a abouti ; sinon le player
     // se rabat sur ws.setVolume() et n'applique aucun pan. L'export doit rendre ce
     // que l'on entend, donc pan neutre dans ce cas.
     const pan = webAudioRouted[i] ? (panNodes[i]?.pan.value ?? 0) : 0
-    return { url: track.url, volume, pan }
-  }).filter(t => t.volume > 0)
+    return { url: trackSourceUrls[i], volume, pan }
+  }).filter(t => t.url && t.volume > 0)
 }
 
 // 38.2 à 38.6 — Rendu du mix, encodage et téléchargement
@@ -3692,7 +3711,9 @@ async function init() {
     tracksContainer.removeAttribute('hidden')
     drawerEl.removeAttribute('hidden')
     initDrawer()
-    initDownloadMenu()
+    // En tab-only, le menu n'apparaît que si un backing track exportable arrive
+    // (voir buildBackingTrackRow).
+    if (!tabOnly) initDownloadMenu()
     initTimeMode()
 
     // 6.3 — Fetch all cached peaks in parallel before building tracks
