@@ -35,8 +35,10 @@ function encodePath(p) {
   return p.split('/').map(encodeURIComponent).join('/')
 }
 
-// 13.7 — Desktop only: tablature désactivée sur mobile
-const IS_DESKTOP = window.matchMedia('(min-width: 769px)').matches
+// 13.7 — Desktop only: tablature désactivée sur mobile.
+// Même seuil que isMobile : à 768 px exactement, un groove tab-only affichait
+// sinon le message « ouvrez-le sur desktop » sur un affichage desktop.
+const IS_DESKTOP = window.matchMedia('(min-width: 768px)').matches
 
 const titleEl          = document.getElementById('groove-title')
 const loadBarEl        = document.getElementById('load-bar')
@@ -1075,7 +1077,13 @@ function buildTrackRow(track, idx, cachedPeaks = null, opts = {}) {
   // en cache doivent être passés explicitement à loadBlob().
   if (opts.blob) {
     ws.loadBlob(opts.blob, cachedPeaks?.length > 0 ? cachedPeaks : undefined)
-      .catch(err => console.warn('[backing] chargement impossible:', err))
+      .catch(err => {
+        console.warn('[backing] chargement impossible:', err)
+        // Format audio non lu par le navigateur : le dire sur la ligne plutôt
+        // que de laisser une piste muette et vide.
+        waveEl.classList.add('track-wave--error')
+        waveEl.textContent = 'Backing track illisible par le navigateur'
+      })
   }
 
   // ── Web Audio routing ─────────────────────────

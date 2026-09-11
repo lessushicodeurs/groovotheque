@@ -5,9 +5,8 @@
  *  1. Démarre le serveur sur un port de test avec un user de test temporaire
  *  2. Ouvre le player sur un groove avec un fichier GP
  *  3. Attend le rendu AlphaTab (.at-surface visible) + isReadyForPlayback
- *  4. Active __tabTestMode pour suspendre la sync audio (empêche RAF d'écraser timePosition)
- *  5. Avance timePosition via window.__alphaTabApi
- *  6. Attend que le curseur ait bougé, puis vérifie scrollLeft/scrollTop
+ *  4. Avance timePosition via window.__alphaTabApi
+ *  5. Attend que le curseur ait bougé, puis vérifie scrollLeft/scrollTop
  *
  * Usage : npx playwright test tests/tab-scroll.spec.js
  */
@@ -107,7 +106,6 @@ async function openPlayer(browser, groove = GROOVE_SLUG) {
 
 /**
  * Attend que AlphaTab ait rendu ET que le soundfont soit chargé (isReadyForPlayback).
- * Aussi active __tabTestMode pour empêcher le RAF d'écraser timePosition.
  */
 async function waitForTabReady(page, timeout = 60000) {
   await page.waitForSelector('.tab-drawer:not([hidden])', { timeout })
@@ -118,9 +116,6 @@ async function waitForTabReady(page, timeout = 60000) {
     () => window.__alphaTabApi?.score != null,
     { timeout }
   )
-
-  // Activer le mode test AVANT de charger le soundfont (ou au plus tôt)
-  await page.evaluate(() => { window.__tabTestMode = true })
 
   // Attendre isReadyForPlayback (soundfont + MIDI chargés)
   await page.waitForFunction(
@@ -270,9 +265,6 @@ test('fullscreen — scrollTop augmente quand le curseur descend', async ({ brow
   )
   // Attendre le re-render complet (Page layout peut prendre du temps)
   await page.waitForTimeout(4000)
-
-  // Réactiver test mode (peut avoir été levé lors du re-render)
-  await page.evaluate(() => { window.__tabTestMode = true })
 
   await page.evaluate(() => { window.__alphaTabApi.timePosition = 0 })
   await page.waitForTimeout(200)
