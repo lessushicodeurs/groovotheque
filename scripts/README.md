@@ -132,9 +132,20 @@ tourné sur cette machine.
 | Variable | Défaut | Rôle |
 |----------|--------|------|
 | `GROOVES_DIR` | `<racine>/grooves` | Racine parcourue par les migrations (sert aux tests) |
-| `MIGRATIONS_REGISTRY` | `<racine>/cache/migrations.json` | Emplacement du registre |
+| `MIGRATIONS_REGISTRY` | `cache/migrations.json` **à côté des vraies données** | Emplacement du registre |
+| `MIGRATIONS_STATE_DIR` | dossier du registre | Où les migrations déposent leurs rapports |
 
-### Registre — `cache/migrations.json`
+### Registre — `migrations.json`
+
+Le registre suit les **données**, pas le dépôt. Dans un worktree, `grooves/` est un lien
+symbolique vers le dépôt principal alors que `cache/` est un vrai dossier local : un registre
+rangé dans le `cache/` du worktree disparaîtrait au `ship`, alors que les données, elles,
+resteraient migrées.
+
+Le lien de `grooves/` est donc résolu (`readlink -f`) et le registre rangé dans le `cache/`
+voisin des vraies données — volontairement **à côté** de `grooves/` et non dedans, pour ne
+pas risquer de le téléverser (`deploy-grooves.sh` envoie certaines extensions du dossier
+déployé).
 
 Hors git (`cache/` est ignoré) : chaque machine a donc son propre état. Le fichier est créé
 au premier run et liste les migrations déjà appliquées.
@@ -160,10 +171,23 @@ Le runner passe à la migration :
 
 - `GROOVES_DIR` — la racine à parcourir ;
 - `DRY_RUN` — `1` si le renommage doit seulement être affiché ;
-- `MIGRATION_RESULT_FILE` — fichier où écrire le nombre d'éléments traités (repris dans le registre).
+- `MIGRATION_RESULT_FILE` — fichier où écrire le nombre d'éléments traités (repris dans le registre) ;
+- `MIGRATIONS_STATE_DIR` — où déposer un rapport durable (liste de cas à trancher…).
 
 Une migration doit être **idempotente** : un second passage sur des données déjà migrées ne
-doit rien changer.
+doit rien changer. Elle doit écrire `MIGRATION_RESULT_FILE` via un `trap EXIT`, pour que le
+compteur soit renseigné même si elle s'arrête en cours de route.
+
+Son code de sortie pilote le runner :
+
+| Code | Sens | Runner |
+|------|------|--------|
+| `0` | Tout est traité | Enregistre la migration |
+| `1` | Échec | N'enregistre pas, sort en erreur, **prévient que des éléments ont pu être modifiés avant l'échec** |
+| `2` | Incomplet — des cas demandent une décision humaine | N'enregistre pas, s'arrête, invite à relancer après arbitrage |
+
+Un échec au milieu d'une boucle ne doit pas avorter le reste : compter les échecs, continuer,
+sortir en `1` à la fin.
 
 ### Migration 001 — `notes.md`
 
@@ -175,15 +199,37 @@ un fichier audio ou Guitar Pro) :
 
 | Cas | Action |
 |-----|--------|
-| `notes.md` déjà présent | Rien |
-| Exactement un `*.md`, quel que soit son nom | Renommé en `notes.md` |
-| Plusieurs `*.md` | Rien, avertissement listant les fichiers (décision humaine) |
+| `notes.md` déjà présent (fichier) | Rien |
+| `notes.md` présent mais **pas un fichier régulier** (répertoire, lien) | Rien, compté comme ambigu — un `mv` déplacerait la fiche *dans* ce répertoire |
+| Exactement un `*.md`, quel que soit son nom | Renommé en `notes.md` (`mv -n -T`, jamais d'écrasement) |
+| Plusieurs `*.md` | Rien, compté comme ambigu |
 | Aucun `.md` | Rien |
-| Un composant du chemin finit par `~` (corbeille, ex. `Tmp~/`) | Ignoré, comme côté serveur |
+| Un composant du chemin finit par `~` (corbeille, ex. `Tmp~/`) | Compté, jamais modifié — comme côté serveur |
 
-Le nettoyage des anciennes fiches **sur le serveur** est fait par `deploy-grooves.sh`, qui
-supprime les `*.md` autres que `notes.md` du dossier déployé — uniquement si `notes.md` a bien
-été transféré.
+Le parcours reprend celui de `collect_local_grooves()` dans `deploy-grooves.sh` : on s'arrête
+au premier niveau qui est un groove (pas de descente dans un groove imbriqué) et les dossiers
+cachés sont ignorés. La définition est **dupliquée volontairement** : `deploy-grooves.sh`
+n'est pas versionné (il porte la cible SSH), il ne peut donc pas être factorisé ici. Seule
+différence assumée : le déploiement saute d'emblée les dossiers en `~`, la migration y descend
+pour les compter — jamais pour y toucher.
+
+#### Cas ambigus
+
+Un `⚠` dans la sortie se perd. Les dossiers à trancher sont donc écrits dans
+`<MIGRATIONS_STATE_DIR>/001-notes-md-ambigus.txt` (une ligne par dossier), et la migration
+sort en `2` : elle **n'est pas enregistrée** tant qu'il en reste, donc chaque `migrate.sh` la
+rejoue et les redit. Renommez à la main la bonne fiche en `notes.md`, relancez : le fichier
+est supprimé dès qu'il n'y a plus d'ambigu et la migration s'enregistre. Rien n'est écrit en
+`--dry-run`.
+
+#### Anciennes fiches sur le serveur
+
+`deploy-grooves.sh` **ne supprime rien à distance**. En fin de déploiement, il affiche deux
+blocs copiables-collables — un pour lister, un pour supprimer — que l'on exécute soi-même
+après vérification. La sélection reste prudente : seulement les grooves effectivement
+déployés, seulement les `*.md` à la racine du dossier, `notes.md` épargné, et rien pour un
+groove auquel aucun `notes.md` n'a été livré. Attention : rsync téléverse *tous* les `.md`,
+la liste peut donc contenir des fiches légitimes (`paroles.md`…) — d'où la vérification.
 
 ---
 
