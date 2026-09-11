@@ -927,7 +927,7 @@ function buildTimelineRow() {
 // opts.insertBefore : ligne devant laquelle insérer (ordre MIDI → backing → audio)
 // opts.isBacking    : marque la ligne comme backing track embarqué
 function buildTrackRow(track, idx, cachedPeaks = null, opts = {}) {
-  const color         = TRACK_COLORS[idx % TRACK_COLORS.length]
+  const color         = TRACK_COLORS[(opts.colorIndex ?? idx) % TRACK_COLORS.length]
   const waveColor     = color + '55'  // dim = unplayed
   const progressColor = color         // bright = played
 
@@ -1216,47 +1216,63 @@ function adjustTrackWidths() {
   }
 
   waveEls.forEach((el, i) => {
-    const ratio = (trackDurations[i] ?? maxDur) / maxDur
-    if (ratio < 1) {
-      el.style.flex = 'none'
-      // Measure the actual available width at runtime so the calc remains
-      // correct on all screen sizes (desktop sidebar = 176px fixed, but on
-      // tablet/mobile the sidebar becomes a full-width strip and must not be
-      // subtracted).  getBoundingClientRect() reflects the live CSS geometry
-      // after media-query reflows.
-      const row     = el.parentElement
-      const sidebar = row?.querySelector('.track-sidebar')
-      if (row && sidebar) {
-        // En layout colonne (tablet/mobile), la sidebar est empilée au-dessus
-        // de la waveform : sidebarW ≈ rowW donc availW ≈ 0. Laisser le CSS
-        // (flex: 1 / width: 100%) gérer la largeur dans ce cas.
-        const rowStyle = window.getComputedStyle(row)
-        if (rowStyle.flexDirection === 'column') {
-          el.style.width = ''
-          return
-        }
-        const rowW     = row.getBoundingClientRect().width
-        const sidebarW = sidebar.getBoundingClientRect().width
-        const availW   = rowW - sidebarW
-        if (availW > 0) {
-          el.style.width = `${(ratio * availW).toFixed(2)}px`
-        } else {
-          // DOM masqué ou onglet inactif : getBoundingClientRect() peut
-          // retourner 0. Fallback sur le calc CSS desktop.
-          el.style.width = `calc(${ratio.toFixed(6)} * (100% - 176px))`
-        }
-      } else {
-        // Fallback: CSS calc with desktop constant
-        el.style.width = `calc(${ratio.toFixed(6)} * (100% - 176px))`
-      }
-    }
+    setWaveWidth(el, (trackDurations[i] ?? maxDur) / maxDur)
   })
+
+  // 35.3 — les aires MIDI couvrent la durée du score, pas celle du groove :
+  // sans ce calage elles resteraient pleine largeur en mode mixte et ne
+  // s'aligneraient plus avec la timeline BBT ni avec les pistes audio.
+  if (scoreDurationSec > 0) {
+    midiTracks.forEach(t => setWaveWidth(t.waveEl, scoreDurationSec / maxDur))
+  }
 
   renderBbtTimeline()
   renderMarkers()
   renderCommentMarkers()
   animateSeenComments()
   tryOpenDeepLinkComment()  // 37.4 — pistes prêtes, commentaires peut-être aussi
+}
+
+// Largeur d'une aire de piste proportionnelle à la durée totale du groove.
+function setWaveWidth(el, ratio) {
+  if (!el) return
+  if (!(ratio < 1)) {
+    // Piste la plus longue (ou durée inconnue) : largeur gérée par le CSS.
+    el.style.flex = ''
+    el.style.width = ''
+    return
+  }
+  el.style.flex = 'none'
+  // Measure the actual available width at runtime so the calc remains
+  // correct on all screen sizes (desktop sidebar = 176px fixed, but on
+  // tablet/mobile the sidebar becomes a full-width strip and must not be
+  // subtracted).  getBoundingClientRect() reflects the live CSS geometry
+  // after media-query reflows.
+  const row     = el.parentElement
+  const sidebar = row?.querySelector('.track-sidebar')
+  if (row && sidebar) {
+    // En layout colonne (tablet/mobile), la sidebar est empilée au-dessus
+    // de la waveform : sidebarW ≈ rowW donc availW ≈ 0. Laisser le CSS
+    // (flex: 1 / width: 100%) gérer la largeur dans ce cas.
+    const rowStyle = window.getComputedStyle(row)
+    if (rowStyle.flexDirection === 'column') {
+      el.style.width = ''
+      return
+    }
+    const rowW     = row.getBoundingClientRect().width
+    const sidebarW = sidebar.getBoundingClientRect().width
+    const availW   = rowW - sidebarW
+    if (availW > 0) {
+      el.style.width = `${(ratio * availW).toFixed(2)}px`
+    } else {
+      // DOM masqué ou onglet inactif : getBoundingClientRect() peut
+      // retourner 0. Fallback sur le calc CSS desktop.
+      el.style.width = `calc(${ratio.toFixed(6)} * (100% - 176px))`
+    }
+  } else {
+    // Fallback: CSS calc with desktop constant
+    el.style.width = `calc(${ratio.toFixed(6)} * (100% - 176px))`
+  }
 }
 
 // ── Epic 35 — Pistes MIDI (AlphaTab) ──────────────────────────────────────
@@ -1363,7 +1379,7 @@ function buildMidiTrackRow(track, idx, color) {
   row.append(sidebar, waveEl)
   tracksContainer.insertBefore(row, firstAudioRowEl())
 
-  const state = { track, muted: false, soloed: false, volume: 1, visible: true, btnShow }
+  const state = { track, muted: false, soloed: false, volume: 1, visible: true, btnShow, waveEl }
   midiTracks.push(state)
   const myIdx = midiTracks.length - 1
 
@@ -1433,7 +1449,13 @@ async function buildBackingTrackRow(score) {
     { index: idx, filename: BACKING_PEAKS_NAME, displayName: 'Backing Track', url: null },
     idx,
     cachedPeaks,
-    { blob, isBacking: true, insertBefore: firstPlainAudioRowEl() },
+    {
+      blob, isBacking: true, insertBefore: firstPlainAudioRowEl(),
+      // Les pistes MIDI ont déjà consommé les couleurs suivant les pistes audio :
+      // sans décalage le backing aurait la même couleur que la 1re piste MIDI,
+      // dont il est voisin.
+      colorIndex: currentTracks.length + midiTracks.length,
+    },
   )
 }
 
