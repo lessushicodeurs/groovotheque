@@ -724,8 +724,12 @@ body {
 
 /* ── Epic 18 — Scrollbar de la zone waveform ─ */
 
+/* .tracks-container est une colonne flex et les rangées y sont ajoutées au fil
+   du chargement : `order` garde la barre sous les pistes sans arbitrage JS. */
 .waveform-scrollbar {
+  order: 1;
   height: 9px;
+  flex-shrink: 0;
   background: #0a0a0a;
   position: relative;
   border-bottom: 1px solid #161616;

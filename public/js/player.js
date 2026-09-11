@@ -1180,6 +1180,13 @@ function zoomMaxScrollX() {
 // strictement identique à l'avant-epic.
 function applyZoomWidths() {
   tracksContainer.classList.toggle('tracks-container--zoomed', zoomLevel > 1)
+  setScrollbarVisible(zoomLevel > 1)
+
+  // Conteneur masqué (tablature plein écran) ou pas encore mis en page : toutes
+  // les mesures valent 0 et un recalcul écraserait les largeurs à zéro, sans
+  // que rien ne les restaure ensuite. On garde les dernières valeurs connues ;
+  // adjustTrackWidths() repasse dès que les pistes redeviennent visibles.
+  if (zoomLevel > 1 && zoomViewportWidth() <= 0) return
 
   if (timelineVpEl && timelineWaveColEl) {
     timelineWaveColEl.style.width = zoomLevel > 1
@@ -1189,12 +1196,11 @@ function applyZoomWidths() {
   waveVpEls.forEach((vp, i) => {
     const el = waveEls[i]
     if (!el) return
-    el.style.width = zoomLevel > 1
-      ? `${(vp.clientWidth * zoomLevel).toFixed(2)}px`
-      : ''
+    if (zoomLevel <= 1) { el.style.width = ''; return }
+    if (vp.clientWidth <= 0) return
+    el.style.width = `${(vp.clientWidth * zoomLevel).toFixed(2)}px`
   })
 
-  if (wfScrollbarEl) wfScrollbarEl.hidden = zoomLevel <= 1
   setZoomScrollX(zoomScrollX)
   applyTimelineIntervals()
   // Le TimelinePlugin recalcule ses graduations depuis la largeur du wrapper.
@@ -1240,6 +1246,12 @@ function setZoomScrollX(x) {
   if (timelineWaveColEl) timelineWaveColEl.style.transform = transform
   waveEls.forEach(el => { el.style.transform = transform })
   updateScrollbarThumb()
+}
+
+// 18.7 — Affiche ou masque la scrollbar de la zone waveform.
+function setScrollbarVisible(visible) {
+  if (!wfScrollbarEl) return
+  wfScrollbarEl.hidden = !visible
 }
 
 // 18.7 — Le curseur reflète la portion visible du morceau.
@@ -1469,8 +1481,11 @@ function setTabState(newState) {
   const tracksEl  = document.getElementById('tracks-container')
   if (newState === 'fullscreen') {
     tracksEl?.classList.add('tab-hidden')
-  } else {
-    tracksEl?.classList.remove('tab-hidden')
+  } else if (tracksEl?.classList.contains('tab-hidden')) {
+    tracksEl.classList.remove('tab-hidden')
+    // Epic 18 — les largeurs n'ont pas pu être mesurées tant que le conteneur
+    // était masqué : les recalculer une fois la mise en page rétablie.
+    requestAnimationFrame(adjustTrackWidths)
   }
 
   const stateMap = { fullscreen: btnTabFullscreen, strip: btnTabStrip, collapsed: btnTabCollapse }

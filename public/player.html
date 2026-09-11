@@ -43,10 +43,13 @@
   </div>
   <div id="note-panel" class="note-panel" role="region" aria-label="Notes"></div>
   <main id="player-main" class="loading">
-    <div id="tracks-container" class="tracks-container" hidden></div>
-    <!-- 18.7 — Scrollbar horizontale, visible uniquement quand le zoom > 1× -->
-    <div id="waveform-scrollbar" class="waveform-scrollbar" hidden aria-hidden="true">
-      <div id="waveform-scrollbar-thumb" class="waveform-scrollbar-thumb"></div>
+    <div id="tracks-container" class="tracks-container" hidden>
+      <!-- 18.7 — Scrollbar horizontale, visible uniquement quand le zoom > 1×.
+           Placée dans le conteneur des pistes pour disparaître avec elles
+           (tablature plein écran). -->
+      <div id="waveform-scrollbar" class="waveform-scrollbar" hidden aria-hidden="true">
+        <div id="waveform-scrollbar-thumb" class="waveform-scrollbar-thumb"></div>
+      </div>
     </div>
   </main>
   <div id="transport-drawer" class="transport-drawer" hidden>
