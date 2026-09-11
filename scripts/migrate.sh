@@ -17,11 +17,12 @@ die()  { err "$*"; exit 1; }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MIGRATIONS_DIR="$SCRIPT_DIR/migrations"
-REGISTRY="${MIGRATIONS_REGISTRY:-$ROOT_DIR/cache/migrations.json}"
 
 # Racine des données parcourues par les migrations (surchargeable pour les tests)
 GROOVES_DIR="${GROOVES_DIR:-$ROOT_DIR/grooves}"
 export GROOVES_DIR
+
+REGISTRY="${MIGRATIONS_REGISTRY:-$ROOT_DIR/cache/migrations.json}"
 
 DRY_RUN=0
 
@@ -121,14 +122,20 @@ for migration in "${MIGRATIONS[@]}"; do
   echo -e "${BOLD}${CYAN}▶ Migration $id${RESET}"
 
   result_file="$(mktemp)"
-  MIGRATION_RESULT_FILE="$result_file" bash "$migration" || {
-    rm -f "$result_file"
-    die "Migration $id en échec — registre inchangé"
-  }
+  status=0
+  MIGRATION_RESULT_FILE="$result_file" bash "$migration" || status=$?
 
+  # La migration écrit son compteur via un trap EXIT : il est renseigné même
+  # quand elle s'arrête en cours de route.
   count="$(tr -dc '0-9' < "$result_file")"
   rm -f "$result_file"
   [[ -n "$count" ]] || count=0
+
+  if [[ $status -ne 0 ]]; then
+    err "Migration $id en échec (code $status) — registre inchangé"
+    err "ATTENTION : $count élément(s) ont pu être modifiés avant l'échec ; les migrations sont idempotentes, relancez après correction"
+    exit 1
+  fi
 
   if [[ $DRY_RUN -eq 1 ]]; then
     warn "Dry-run — migration $id non enregistrée ($count élément(s) auraient été traités)"

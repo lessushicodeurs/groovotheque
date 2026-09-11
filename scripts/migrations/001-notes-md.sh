@@ -6,6 +6,10 @@
 # Historiquement elle portait le nom du dossier — et parfois un nom décorrélé,
 # séquelle de scripts/strip-parent-prefix.sh. Cette migration renomme l'unique
 # `*.md` de chaque dossier de groove en `notes.md`, quel que soit son nom.
+#
+# Codes de sortie :
+#   0  tout est traité — le runner enregistre la migration
+#   1  au moins un renommage a échoué — des éléments ont pu être modifiés avant
 set -euo pipefail
 
 RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
@@ -29,6 +33,15 @@ ALREADY=0
 AMBIGUOUS=0
 TRASH=0
 EMPTY=0
+FAILED=0
+
+# Le nombre d'éléments traités doit toujours remonter au runner, y compris si le
+# script s'arrête en cours de route : un renommage déjà fait reste fait.
+report_result() {
+  [[ -n "${MIGRATION_RESULT_FILE:-}" ]] && echo "$MIGRATED" > "$MIGRATION_RESULT_FILE"
+  return 0
+}
+trap report_result EXIT
 
 # Critère identique à scripts/deploy-grooves.sh : un dossier est un groove s'il
 # contient directement au moins un fichier audio ou Guitar Pro.
@@ -112,9 +125,15 @@ for entry in "${ENTRIES[@]}"; do
       else
         # -n : ne jamais écraser une cible apparue entre-temps.
         # -T : la cible est le nouveau nom, jamais un répertoire de destination.
-        mv -n -T -- "$src" "$target"
-        ok "$rel/$name  →  notes.md"
-        MIGRATED=$((MIGRATED + 1))
+        # mv -n sort en 0 même quand il ne fait rien : on vérifie le résultat.
+        if mv -n -T -- "$src" "$target" 2>/dev/null && [[ -f "$target" && ! -e "$src" ]]; then
+          ok "$rel/$name  →  notes.md"
+          MIGRATED=$((MIGRATED + 1))
+        else
+          err "Échec du renommage de $rel/$name en notes.md"
+          FAILED=$((FAILED + 1))
+          continue
+        fi
       fi
       ;;
     *)
@@ -128,8 +147,7 @@ done
 
 echo
 echo -e "${BOLD}Résultat :${RESET} $MIGRATED migré(s), $ALREADY déjà en notes.md, $AMBIGUOUS ambigu(s), $EMPTY sans fiche, $TRASH en corbeille (composant de chemin finissant par ~, ignoré)"
+[[ $FAILED -gt 0 ]] && err "$FAILED renommage(s) en échec"
 
-# Nombre d'éléments traités, remonté au runner
-[[ -n "${MIGRATION_RESULT_FILE:-}" ]] && echo "$MIGRATED" > "$MIGRATION_RESULT_FILE"
-
+[[ $FAILED -gt 0 ]] && exit 1
 exit 0
