@@ -171,10 +171,13 @@ const gainNodes    = []   // GainNode per track (volume in Web Audio graph)
 const panNodes     = []   // StereoPannerNode per track
 const panKnobs       = []   // PanKnob UI per track
 const webAudioRouted = []   // true if MediaElementSource successfully connected
-const waveEls        = []   // .track-wave div per track (for proportional width)
+const waveEls        = []   // .track-wave div per track (contenu à la largeur effective)
+const waveVpEls      = []   // .track-wave-vp div per track (viewport, largeur proportionnelle)
 const trackDurations = []   // duration in seconds per track, set on 'ready'
 let timelinePluginRef = null  // TimelinePlugin instance (track 0), for duration correction
 let timelineExtEl     = null  // container DOM element for TimelinePlugin (in .timeline-row)
+let timelineVpEl      = null  // .timeline-wave-vp (viewport de la rangée timeline)
+let timelineWaveColEl = null  // .timeline-wave-col (contenu à la largeur effective)
 let currentTracks  = []   // groove.tracks list, set at init time
 let pendingLoop    = null // loop à restaurer dès que toutes les waveforms sont prêtes
 let isPlaying       = false
@@ -197,6 +200,16 @@ let markerAnchorId    = null  // premier marqueur cliqué (ancre de la sélectio
 let markerSelectionIn = null  // borne gauche de la sélection courante (peut couvrir N marqueurs)
 let markerSelectionOut= null  // borne droite
 let markerIdCounter   = 0
+
+// ── Epic 18 — Zoom horizontal ─────────────────────────────────────────────
+// Le zoom élargit le *contenu* (timeline, bande de marqueurs, waveforms) à
+// `largeurViewport × zoomLevel`. Tout le positionnement existant est en % du
+// contenu, il suit donc le zoom sans calcul supplémentaire. Le défilement est
+// une simple translation appliquée identiquement à toutes les rangées, ce qui
+// garantit un alignement au pixel près.
+const ZOOM_LEVELS = [1, 2, 4, 8, 16]
+let zoomLevel     = 1   // palier courant (session uniquement, jamais persisté)
+let zoomScrollX   = 0   // décalage horizontal courant, en pixels
 
 // ── Epic 22 — Comments state ──────────────────────────────────────────────
 let commentMarkersLaneEl  = null  // div dans .timeline-wave-col pour les triangles
@@ -779,8 +792,12 @@ function buildTimelineRow() {
   const sidebar = document.createElement('div')
   sidebar.className = 'timeline-sidebar'
 
+  timelineVpEl = document.createElement('div')
+  timelineVpEl.className = 'timeline-wave-vp'
+
   const waveCol = document.createElement('div')
   waveCol.className = 'timeline-wave-col'
+  timelineWaveColEl = waveCol
 
   timelineExtEl = document.createElement('div')
   timelineExtEl.className = 'track-timeline-ext'
@@ -793,7 +810,8 @@ function buildTimelineRow() {
   commentMarkersLaneEl.className = 'comment-markers-lane'
 
   waveCol.append(timelineExtEl, markerLaneEl, commentMarkersLaneEl)
-  row.append(sidebar, waveCol)
+  timelineVpEl.appendChild(waveCol)
+  row.append(sidebar, timelineVpEl)
   tracksContainer.appendChild(row)
 }
 
@@ -862,12 +880,19 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
   sidebar.append(sidebarTop, sidebarCtrl)
 
   // ── Waveform container ────────────────────────
+  // Epic 18 — .track-wave-vp est le viewport (largeur proportionnelle à la
+  // durée de la piste) ; .track-wave est le contenu, élargi par le zoom.
+  const waveVp = document.createElement('div')
+  waveVp.className = 'track-wave-vp'
+
   const waveEl = document.createElement('div')
   waveEl.className = 'track-wave'
+  waveVp.appendChild(waveEl)
 
-  row.append(sidebar, waveEl)
+  row.append(sidebar, waveVp)
   tracksContainer.appendChild(row)
   waveEls.push(waveEl)
+  waveVpEls.push(waveVp)
 
   // ── Plugins ───────────────────────────────────
   const regionsPlugin = RegionsPlugin.create()
@@ -1065,7 +1090,9 @@ function adjustTrackWidths() {
     wavesurfers[0]?.emit('redraw')
   }
 
-  waveEls.forEach((el, i) => {
+  // Epic 18 — la largeur proportionnelle s'applique au viewport ; le contenu
+  // (.track-wave) en dérive via applyZoomWidths().
+  waveVpEls.forEach((el, i) => {
     const ratio = (trackDurations[i] ?? maxDur) / maxDur
     if (ratio < 1) {
       el.style.flex = 'none'
@@ -1102,10 +1129,66 @@ function adjustTrackWidths() {
     }
   })
 
+  applyZoomWidths()  // 18.1 — largeur effective = largeur viewport × zoomLevel
+
   renderMarkers()
   renderCommentMarkers()
   animateSeenComments()
   tryOpenDeepLinkComment()  // 37.4 — pistes prêtes, commentaires peut-être aussi
+}
+
+// ── Epic 18 — Zoom horizontal ──────────────────────────────────────────────
+
+// Largeur visible de la zone waveform (rangée timeline = piste la plus longue).
+function zoomViewportWidth() {
+  return timelineVpEl?.clientWidth ?? 0
+}
+
+// Largeur effective du contenu à zoomLevel.
+function zoomContentWidth() {
+  return zoomViewportWidth() * zoomLevel
+}
+
+function zoomMaxScrollX() {
+  return Math.max(0, zoomContentWidth() - zoomViewportWidth())
+}
+
+// Applique la largeur effective à la colonne timeline et à chaque piste.
+// À 1× les largeurs sont remises à leur valeur CSS (100 %) : comportement
+// strictement identique à l'avant-epic.
+function applyZoomWidths() {
+  tracksContainer.classList.toggle('tracks-container--zoomed', zoomLevel > 1)
+
+  if (timelineVpEl && timelineWaveColEl) {
+    timelineWaveColEl.style.width = zoomLevel > 1
+      ? `${(timelineVpEl.clientWidth * zoomLevel).toFixed(2)}px`
+      : ''
+  }
+  waveVpEls.forEach((vp, i) => {
+    const el = waveEls[i]
+    if (!el) return
+    el.style.width = zoomLevel > 1
+      ? `${(vp.clientWidth * zoomLevel).toFixed(2)}px`
+      : ''
+  })
+
+  setZoomScrollX(zoomScrollX)
+  // Le TimelinePlugin recalcule ses graduations depuis la largeur du wrapper.
+  wavesurfers[0]?.emit('redraw')
+}
+
+// Applique le décalage horizontal, identique pour toutes les rangées.
+function setZoomScrollX(x) {
+  zoomScrollX = Math.max(0, Math.min(zoomMaxScrollX(), x))
+  const transform = zoomLevel > 1 ? `translateX(${-zoomScrollX}px)` : ''
+  if (timelineWaveColEl) timelineWaveColEl.style.transform = transform
+  waveEls.forEach(el => { el.style.transform = transform })
+}
+
+// Conversion temps → pixel dans le repère du contenu zoomé.
+function zoomTimeToPx(t) {
+  if (!totalDuration) return 0
+  return (t / totalDuration) * zoomContentWidth()
 }
 
 // ── Epic 13 — Tablature synchronisée ──────────────────────────────────────

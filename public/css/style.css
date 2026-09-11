@@ -326,9 +326,20 @@ body {
   border-right: 1px solid #1a1a1a;
 }
 
-.timeline-wave-col {
+/* Epic 18 — le viewport occupe la place disponible et masque le débordement
+   quand le zoom > 1 ; la colonne interne porte la largeur effective (× zoom)
+   et la translation de scroll. */
+.timeline-wave-vp {
   flex: 1;
   min-width: 0;
+}
+
+.tracks-container--zoomed .timeline-wave-vp {
+  overflow: hidden;
+}
+
+.timeline-wave-col {
+  width: 100%;
   display: flex;
   flex-direction: column;
 }
@@ -433,11 +444,16 @@ body {
   flex-shrink: 0;
 }
 
-.track-wave {
+/* Epic 18 — même découpage viewport / contenu que la rangée timeline. */
+.track-wave-vp {
   flex: 1;
   min-width: 0;
   background: #0f0f0f;
   overflow: hidden;
+}
+
+.track-wave {
+  width: 100%;
 }
 
 /* ── Transport ───────────────────────────── */
