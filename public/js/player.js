@@ -847,13 +847,16 @@ function buildTimelineRow() {
   tracksContainer.appendChild(row)
 }
 
-function buildTrackRow(track, idx, cachedPeaks = null) {
+// opts.blob        : Blob audio à charger via loadBlob() au lieu de track.url
+// opts.insertBefore : ligne devant laquelle insérer (ordre MIDI → backing → audio)
+// opts.isBacking    : marque la ligne comme backing track embarqué
+function buildTrackRow(track, idx, cachedPeaks = null, opts = {}) {
   const color         = TRACK_COLORS[idx % TRACK_COLORS.length]
   const waveColor     = color + '55'  // dim = unplayed
   const progressColor = color         // bright = played
 
   const row = document.createElement('div')
-  row.className = 'track-row'
+  row.className = opts.isBacking ? 'track-row track-row--backing' : 'track-row'
 
   // ── Sidebar ──────────────────────────────────
   const sidebar = document.createElement('div')
@@ -868,16 +871,21 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
   nameEl.textContent = track.displayName
   nameEl.title = track.displayName
 
-  const dlLink = document.createElement('a')
-  dlLink.href = track.url
-  dlLink.download = track.filename
-  dlLink.className = 'btn-track-download'
-  dlLink.title = `Télécharger ${track.filename}`
-  dlLink.textContent = '↓'
-
   const sidebarTop = document.createElement('div')
   sidebarTop.className = 'track-sidebar-top'
-  sidebarTop.append(dot, nameEl, dlLink)
+  sidebarTop.append(dot, nameEl)
+
+  // Le backing track est embarqué dans le fichier GP : pas de fichier à
+  // télécharger, donc pas de lien de téléchargement.
+  if (track.url) {
+    const dlLink = document.createElement('a')
+    dlLink.href = track.url
+    dlLink.download = track.filename
+    dlLink.className = 'btn-track-download'
+    dlLink.title = `Télécharger ${track.filename}`
+    dlLink.textContent = '↓'
+    sidebarTop.append(dlLink)
+  }
 
   const btnMute = document.createElement('button')
   btnMute.className = 'track-btn btn-mute'
@@ -916,7 +924,8 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
   waveEl.className = 'track-wave'
 
   row.append(sidebar, waveEl)
-  tracksContainer.appendChild(row)
+  if (opts.insertBefore) tracksContainer.insertBefore(row, opts.insertBefore)
+  else                   tracksContainer.appendChild(row)
   waveEls.push(waveEl)
 
   // ── Plugins ───────────────────────────────────
@@ -951,7 +960,6 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
     container: waveEl,
     waveColor,
     progressColor,
-    url: track.url,
     height: isMobile ? 48 : 64,
     barWidth: isMobile ? 1 : 2,
     barGap: 1,
@@ -960,8 +968,16 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
     interact: true,
     plugins,
   }
+  if (track.url) wsOpts.url = track.url
   if (cachedPeaks?.length > 0) wsOpts.peaks = cachedPeaks
   const ws = WaveSurfer.create(wsOpts)
+  // Backing track : les octets viennent du fichier GP, pas d'une URL serveur.
+  // wsOpts.peaks n'est pris en compte que par le chargement d'URL : les peaks
+  // en cache doivent être passés explicitement à loadBlob().
+  if (opts.blob) {
+    ws.loadBlob(opts.blob, cachedPeaks?.length > 0 ? cachedPeaks : undefined)
+      .catch(err => console.warn('[backing] chargement impossible:', err))
+  }
 
   // ── Web Audio routing ─────────────────────────
   // WaveSurfer v7 plays through an HTML5 audio element. Routing it through the
@@ -1295,6 +1311,44 @@ function buildMidiTrackRows(score) {
   score.tracks.forEach((track, i) => {
     buildMidiTrackRow(track, i, TRACK_COLORS[(colorOffset + i) % TRACK_COLORS.length])
   })
+}
+
+// ── 35.4 — Backing track embarqué dans le fichier GP ──────────────────────
+
+// Nom de cache des peaks du backing track (pas de fichier sur disque).
+const BACKING_PEAKS_NAME = '_backing'
+
+// Les octets bruts n'ont pas de type MIME : sans lui certains navigateurs
+// refusent de lire le Blob. Déduction depuis les octets d'en-tête.
+function sniffAudioMime(bytes) {
+  const ascii = (off, len) => String.fromCharCode(...bytes.slice(off, off + len))
+  if (ascii(0, 3) === 'ID3')  return 'audio/mpeg'
+  if (ascii(0, 4) === 'OggS') return 'audio/ogg'
+  if (ascii(0, 4) === 'fLaC') return 'audio/flac'
+  if (ascii(0, 4) === 'RIFF') return 'audio/wav'
+  if (ascii(4, 4) === 'ftyp') return 'audio/mp4'
+  if (bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0) return 'audio/mpeg'
+  return 'audio/mpeg'
+}
+
+// Première ligne de piste audio « fichier » (ni MIDI, ni backing)
+function firstPlainAudioRowEl() {
+  return tracksContainer.querySelector('.track-row:not(.track-row--midi):not(.track-row--backing)')
+}
+
+async function buildBackingTrackRow(score) {
+  const raw = score?.backingTrack?.rawAudioFile
+  if (!raw || raw.length === 0) return
+  const blob = new Blob([raw], { type: sniffAudioMime(raw) })
+  const cachedPeaks = await fetchPeaks(grooveSlug, BACKING_PEAKS_NAME)
+  const idx = wavesurfers.length
+  buildTrackRow(
+    // Le format GP n'expose aucun libellé pour le backing track : nom par défaut.
+    { index: idx, filename: BACKING_PEAKS_NAME, displayName: 'Backing Track', url: null },
+    idx,
+    cachedPeaks,
+    { blob, isBacking: true, insertBefore: firstPlainAudioRowEl() },
+  )
 }
 
 // ── Epic 13 — Tablature synchronisée ──────────────────────────────────────
@@ -1667,6 +1721,7 @@ async function initTabDrawer(tabFile) {
     tabMaster  = true
     try { alphaTabApi.playbackSpeed = currentTempo / 100 } catch { /* player pas prêt */ }
     buildMidiTrackRows(score)
+    buildBackingTrackRow(score).catch(err => console.warn('[tab] backing track:', err))
     buildTrackSelector(score)
     // Generate sync points from embedded GP markers (mod.midi.MidiFileGenerator)
     try {
