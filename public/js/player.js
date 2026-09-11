@@ -1877,7 +1877,11 @@ async function initTabDrawer(tabFile) {
       logLevel:      alphaTabMod.LogLevel.Warning,
     },
     player: {
-      enablePlayer:         true,
+      // 35.1 / 35.4 — le synthétiseur MIDI est toujours utilisé, même quand le
+      // fichier embarque un backing track : celui-ci est joué en parallèle par
+      // WaveSurfer. En mode automatique, AlphaTab basculerait en lecture du
+      // backing track et n'avancerait plus son horloge de synthèse.
+      playerMode:           alphaTabMod.PlayerMode.EnabledSynthesizer,
       enableCursor:         true,
       enableUserInteraction: true,
       soundFont:            `${AT_BASE}/soundfont/sonivox.sf2`,
