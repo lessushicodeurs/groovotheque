@@ -712,6 +712,7 @@ function seekAllTo(time) {
   if (alphaTabApi && tabState !== 'collapsed') {
     alphaTabApi.timePosition = audioTimeToSynthTime(time * 1000)
   }
+  ensurePlayheadVisible(time)  // 18.4 — la tête reste visible en mode zoomé
 }
 
 // Shared seek-with-resume logic: pauses if playing, seeks all tracks, then
@@ -994,6 +995,9 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
     if (alphaTabApi && tabState !== 'collapsed') {
       alphaTabApi.timePosition = audioTimeToSynthTime(newTime * 1000)
     }
+    // 18.5 — repositionner la tête à la main rend la main à l'auto-défilement.
+    // Pas de recentrage ici : l'endroit cliqué est déjà sous les yeux.
+    zoomUserScrolled = false
     if (wasPlaying) {
       try {
         await Promise.all(wavesurfers.map(w => w.play()))
@@ -1197,12 +1201,36 @@ function zoomTimeToPx(t) {
   return (t / totalDuration) * zoomContentWidth()
 }
 
-// 18.2 — Passage à un palier de zoom.
+// Position courante de la tête de lecture, en secondes.
+function playheadTime() {
+  return wavesurfers[0]?.getCurrentTime() ?? 0
+}
+
+// 18.4 — Recentre la vue sur la tête de lecture, en restant dans les bornes.
+function centerPlayhead(time = playheadTime()) {
+  if (zoomLevel <= 1) return
+  setZoomScrollX(zoomTimeToPx(time) - zoomViewportWidth() / 2)
+}
+
+// 18.4 — Ne bouge que si la tête sort de la zone visible (marge de 10 %).
+function ensurePlayheadVisible(time = playheadTime(), margin = 0.1) {
+  if (zoomLevel <= 1) return
+  const vpW = zoomViewportWidth()
+  const px  = zoomTimeToPx(time)
+  if (px < zoomScrollX + vpW * margin || px > zoomScrollX + vpW * (1 - margin)) {
+    centerPlayhead(time)
+  }
+}
+
+// 18.2 — Passage à un palier de zoom. L'ancrage se fait sur la tête de lecture :
+// elle reste au centre de l'écran (ou au plus près que les bornes permettent).
 function applyZoom(level) {
   if (!ZOOM_LEVELS.includes(level) || level === zoomLevel) return
+  const time = playheadTime()
   zoomLevel = level
   updateZoomUI()
   applyZoomWidths()
+  centerPlayhead(time)
 }
 
 function updateZoomUI() {
