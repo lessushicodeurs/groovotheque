@@ -2053,6 +2053,10 @@ async function initTabDrawer(tabFile) {
     buildMidiTrackRows(score)
     buildBackingTrackRow(score).catch(err => console.warn('[tab] backing track:', err))
     buildTrackSelector(score)
+    // 35.3 — les boutons « afficher dans la tab » et les cases du drawer sont
+    // tous actifs au départ : AlphaTab, lui, ne rend que sa piste par défaut.
+    // Sans cet appel l'UI annoncerait des portées absentes de la tablature.
+    applyTabTrackSelection()
     // Generate sync points from embedded GP markers (mod.midi.MidiFileGenerator)
     try {
       const mod = window.__alphaTabModule
