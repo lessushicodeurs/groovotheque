@@ -356,13 +356,26 @@ let alphaTabApi    = null  // AlphaTabApi instance
 let tabState       = 'strip'  // 'collapsed' | 'strip' | 'fullscreen'
 let tabSyncRafId   = null
 let tabDragBeat    = null  // Beat object — start of drag selection
-let tabSyncPoints  = null  // BackingTrackSyncPoint[] from GP sync markers, or null
+// Points de synchro natifs du fichier GP (MidiFileGenerator.generateSyncPoints).
+// Chacun porte le couple (synthTick, syncTime) : position en ticks MIDI et
+// instant correspondant dans l'audio. Sert aux conversions hors lecture
+// (règle de mesures, bornes de boucle) ; pendant la lecture c'est AlphaTab
+// lui-même qui convertit, via le mode EnabledExternalMedia.
+let tabSyncPoints  = null  // BackingTrackSyncPoint[] triés par synthTick, ou null
 
-// 35.1 — AlphaTab master clock
-let tabMaster        = false  // true dès qu'un score GP est chargé : AlphaTab pilote le transport
-// Le synthé n'avance son horloge qu'une fois la soundfont chargée. Tant que
-// playerReady / playerPositionChanged n'ont rien émis, WaveSurfer reste la
-// source de temps : sinon un synthé lent ou en échec fige tout le transport.
+// 35.1 — AlphaTab pilote la position musicale
+let tabMaster        = false  // true dès qu'un score GP est chargé
+// Mode « média externe » : nos instances WaveSurfer sont l'axe temps d'AlphaTab.
+// C'est AlphaTab qui convertit temps audio ↔ position dans la partition, à
+// partir des points de synchro du fichier. Faux en tab-only sans aucun audio,
+// où le synthétiseur MIDI joue et porte sa propre horloge.
+let tabExternal      = false
+// Vrai pendant que le player déplace lui-même les waveforms : les ordres
+// renvoyés par AlphaTab au média externe sont alors ignorés (anti-boucle).
+let extSuppress      = false
+// En mode synthétiseur, l'horloge n'avance qu'une fois la soundfont chargée.
+// Tant que playerReady / playerPositionChanged n'ont rien émis, WaveSurfer
+// reste la source de temps : sinon un synthé lent ou en échec fige tout.
 let tabClockLive     = false
 let tabScore         = null   // Score AlphaTab chargé
 let scoreDurationSec = 0      // durée du score en secondes (axe temps audio)
@@ -632,9 +645,12 @@ function applyTempo(pct) {
   currentTempo = pct
   const ratio = pct / 100
   wavesurfers.forEach(ws => ws.setPlaybackRate(ratio, true))
-  // 35.1 — AlphaTab suit le même ratio quand il est master clock
+  // AlphaTab suit le même ratio. Le changement de vitesse déclenche chez lui
+  // un recalage de position : on l'inhibe pour ne pas déplacer les waveforms.
   if (alphaTabApi) {
+    extSuppress = true
     try { alphaTabApi.playbackSpeed = ratio } catch { /* player pas encore prêt */ }
+    finally { extSuppress = false }
   }
   tempoSliderEl.value = String(pct)
   tempoValueEl.textContent = `${pct}%`
@@ -655,7 +671,9 @@ function applyTempo(pct) {
 // 35.3 — Le solo porte sur l'ensemble des lignes du player, MIDI comprises :
 // soloer une piste MIDI doit couper les pistes audio, et inversement.
 function anySoloActive() {
-  return trackStates.some(s => s.soloed) || midiTracks.some(t => t.soloed)
+  // En média externe les pistes MIDI n'ont pas de son : leur solo ne doit pas
+  // couper les pistes audio, il n'isolerait rien.
+  return trackStates.some(s => s.soloed) || (!tabExternal && midiTracks.some(t => t.soloed))
 }
 
 // Applique l'état mute/solo/volume aux pistes audio ET aux pistes MIDI.
@@ -677,10 +695,66 @@ function applyVolumes() {
   })
 }
 
-// 35.1 — L'horloge AlphaTab ne fait autorité que lorsqu'elle avance vraiment,
-// ou qu'il n'y a aucune waveform pour prendre le relais (groove tab-only).
+// L'horloge du synthétiseur MIDI ne fait autorité qu'en tab-only : elle avance
+// au tempo écrit, sans rapport avec la durée réelle des enregistrements. En
+// présence d'audio c'est le média qui porte le temps et AlphaTab le suit.
 function tabClockDrives() {
-  return tabMaster && !!alphaTabApi && (tabClockLive || wavesurfers.length === 0)
+  return tabMaster && !!alphaTabApi && !tabExternal && (tabClockLive || wavesurfers.length === 0)
+}
+
+// Sortie « média externe » d'AlphaTab, une fois le mode actif et le player prêt.
+function externalOutput() {
+  const out = alphaTabApi?.player?.output
+  return (out && typeof out.updatePosition === 'function') ? out : null
+}
+
+// Pousse la position audio courante dans AlphaTab : c'est lui qui en déduit la
+// position dans la partition, via les points de synchro du fichier.
+function pushExternalPosition(sec) {
+  if (!tabExternal) return
+  const out = externalOutput()
+  if (!out) return
+  const t = (sec !== undefined) ? sec : wavesurfers[0]?.getCurrentTime()
+  if (t === undefined) return
+  out.updatePosition(t * 1000)
+}
+
+// Média externe piloté par AlphaTab : nos instances WaveSurfer.
+// Les temps échangés sont en millisecondes sur l'axe du fichier audio, comme
+// les `syncTime` des points de synchro. `extSuppress` évite le retour de
+// boucle quand c'est le player qui vient de déplacer les waveforms.
+const externalMediaHandler = {
+  get backingTrackDuration() { return (wavesurfers[0]?.getDuration() ?? 0) * 1000 },
+  get playbackRate() { return currentTempo / 100 },
+  set playbackRate(value) {
+    if (!(value > 0)) return
+    wavesurfers.forEach(ws => ws.setPlaybackRate(value, true))
+  },
+  // Le mixage se fait piste par piste (mute/solo/volume) : rien à faire ici.
+  get masterVolume() { return 1 },
+  set masterVolume(_value) { /* volume global non utilisé */ },
+  seekTo(ms) {
+    if (extSuppress) return
+    const sec = ms / 1000
+    wavesurfers.forEach(ws => ws.setTime(sec))
+  },
+  play() {
+    if (extSuppress) return
+    wavesurfers.forEach(ws => { ws.play().catch(() => { /* geste utilisateur requis */ }) })
+  },
+  pause() {
+    if (extSuppress) return
+    wavesurfers.forEach(ws => ws.pause())
+  },
+}
+
+// Branche le média externe dès que le player AlphaTab correspondant existe.
+function attachExternalMedia() {
+  const out = externalOutput()
+  if (!out) return false
+  out.handler = externalMediaHandler
+  pushExternalPosition(wavesurfers[0]?.getCurrentTime() ?? 0)
+  return true
 }
 
 // L'audio peut être plus long que le score (mixte) : passé la fin du score, le
@@ -693,7 +767,7 @@ function audioOutlastsScore() {
 // AlphaTab est la source de vérité dès qu'un score est chargé et que son
 // horloge tourne.
 function currentTimeSec() {
-  if (tabClockDrives()) return synthTimeToAudioTime(alphaTabApi.timePosition) / 1000
+  if (tabClockDrives()) return tickToAudioSec(alphaTabApi.tickPosition)
   return wavesurfers[0]?.getCurrentTime() ?? 0
 }
 
@@ -777,9 +851,12 @@ function onFinish() {
 }
 
 function seekAllTo(time) {
-  wavesurfers.forEach(ws => ws.setTime(time))
-  if (alphaTabApi && (tabMaster || tabState !== 'collapsed')) {
-    alphaTabApi.timePosition = audioTimeToSynthTime(time * 1000)
+  extSuppress = true
+  try { wavesurfers.forEach(ws => ws.setTime(time)) } finally { extSuppress = false }
+  if (tabExternal) {
+    pushExternalPosition(time)
+  } else if (alphaTabApi && (tabMaster || tabState !== 'collapsed')) {
+    alphaTabApi.tickPosition = audioSecToTick(time)
   }
   if (tabMaster) updateTimeDisplay(time)
 }
@@ -840,20 +917,18 @@ function snapSecToBeat(sec) {
   const tick = audioSecToTick(sec)
   const bb   = tickToBarBeat(tick)
   if (!bb) return sec
-  const mb  = bars[bb.bar]
-  const num = mb.timeSignatureNumerator || 4
-  const ticksPerBeat = mb.calculateDuration() / num
+  const r = barTickRange(bb.bar)
+  if (!r) return sec
+  const num = r.masterBar.timeSignatureNumerator || 4
+  const ticksPerBeat = r.span / num
   if (!(ticksPerBeat > 0)) return sec
   let bar = bb.bar
   let beat = bb.beat
-  if ((tick - mb.start) / ticksPerBeat - beat > 0.5) {
+  if ((tick - r.start) / ticksPerBeat - beat > 0.5) {
     beat += 1
     if (beat >= num) { beat = 0; bar += 1 }
   }
-  if (bar >= bars.length) {
-    const last = bars[bars.length - 1]
-    return beatTickToAudioTimeSec(last.start + last.calculateDuration())
-  }
+  if (bar >= bars.length) return tickToAudioSec(scoreTotalTicks(tabScore))
   return barBeatToSec(bar, beat)
 }
 
@@ -1134,8 +1209,10 @@ function buildTrackRow(track, idx, cachedPeaks = null, opts = {}) {
     const wasPlaying = isPlaying
     if (wasPlaying) { isPlaying = false; wavesurfers.forEach(w => w.pause()) }
     wavesurfers.forEach((w, j) => { if (j !== idx) w.setTime(newTime) })
-    if (alphaTabApi && (tabMaster || tabState !== 'collapsed')) {
-      alphaTabApi.timePosition = audioTimeToSynthTime(newTime * 1000)
+    if (tabExternal) {
+      pushExternalPosition(newTime)
+    } else if (alphaTabApi && (tabMaster || tabState !== 'collapsed')) {
+      alphaTabApi.tickPosition = audioSecToTick(newTime)
     }
     if (tabMaster) updateTimeDisplay(newTime)
     if (wasPlaying) {
@@ -1230,7 +1307,7 @@ function adjustTrackWidths() {
   // 35.4 — la durée du score dépend de l'axe temps audio (sync points), donc de
   // la durée des waveforms : elle doit être recalculée une fois celles-ci prêtes
   // (le backing track embarqué arrive après scoreLoaded).
-  if (tabScore) scoreDurationSec = beatTickToAudioTimeSec(scoreTotalTicks(tabScore))
+  if (tabScore) scoreDurationSec = tickToAudioSec(scoreTotalTicks(tabScore))
 
   const durs = trackDurations.filter(d => d > 0)
   // 35.2 — en tab-only il n'y a aucune waveform : la durée vient du score.
@@ -1408,6 +1485,20 @@ function buildMidiTrackRow(track, idx, color) {
   sidebarCtrl.append(btnMute, btnSolo, volSlider)
   sidebar.append(sidebarTop, sidebarCtrl)
 
+  // Le son des pistes MIDI vient du synthétiseur d'AlphaTab, qui ne tourne
+  // qu'en tab-only. Dès qu'il y a de l'audio, la tablature suit l'enregistrement
+  // et rien n'est synthétisé : mute/solo/volume n'auraient aucun effet, on les
+  // désactive plutôt que de laisser croire qu'ils agissent. Le bouton
+  // « afficher dans la tablature » reste actif, c'est de l'affichage.
+  if (tabExternal) {
+    const why = 'Son MIDI indisponible : la tablature suit les pistes audio'
+    for (const el of [btnMute, btnSolo, volSlider]) {
+      el.disabled = true
+      el.title = why
+    }
+    sidebarCtrl.classList.add('track-sidebar-ctrl--inert')
+  }
+
   // Aire vide colorée (v1) — pas de piano-roll
   const waveEl = document.createElement('div')
   waveEl.className = 'track-wave track-wave--midi'
@@ -1560,8 +1651,10 @@ function setTabState(newState) {
   stateMap[newState]?.classList.add('active')
   stateMap[newState]?.setAttribute('aria-pressed', 'true')
 
+  // En média externe la boucle continue même drawer replié : elle alimente
+  // AlphaTab en position audio (le défilement du curseur, lui, est déjà inhibé).
   if (newState === 'collapsed') {
-    stopTabSync()
+    if (!tabExternal) stopTabSync()
   } else {
     startTabSync()
     if (alphaTabApi) {
@@ -1636,85 +1729,67 @@ function setupTabHandleDrag() {
   tabHandleEl.addEventListener('touchend', commit)
 }
 
-// Fin de l'axe « audio » au-delà du dernier point de sync. Avec une waveform de
-// référence c'est sa durée ; sans aucune waveform (tab-only) il n'y a pas d'axe
-// audio réel : on prolonge le dernier point de sync à l'échelle 1:1, sinon le
-// temps se figerait sur tout le dernier segment.
-function tailAudioMs(sp0, totalSynthMs) {
-  const wsMs = (wavesurfers[0]?.getDuration() ?? 0) * 1000
-  if (wsMs > 0) return wsMs
-  return sp0.syncTime + Math.max(0, totalSynthMs - sp0.synthTime)
+// ── Axe temps : ticks MIDI ↔ secondes audio ───────────────────────────────
+// Les points de synchro du fichier GP portent, chacun, un tick MIDI
+// (`synthTick`) et l'instant correspondant dans l'audio (`syncTime`, en ms).
+// La conversion est donc une interpolation linéaire par morceaux sur ces
+// couples. Au-delà du dernier point, on prolonge au tempo de synchro du
+// fichier (`syncBpm`) : la durée d'une waveform n'a aucun rapport avec la fin
+// du score et ne doit jamais servir d'ancre.
+//
+// Pendant la lecture ces fonctions ne servent pas : AlphaTab fait lui-même la
+// conversion (mode EnabledExternalMedia). Elles alimentent l'affichage hors
+// lecture — règle de mesures, bornes de boucle, durée du score.
+
+const MIDI_QUARTER_TICKS = 960
+
+function scoreTempoBpm() {
+  return alphaTabApi?.score?.tempo || tabScore?.tempo || 120
 }
 
-// 13.9 — Conversion audio↔synth time using GP sync markers.
-// BackingTrackSyncPoint: syncTime=ms in audio, synthTime=ms in score-tempo clock.
-// Piecewise-linear interpolation between anchor points.
-function audioTimeToSynthTime(audioMs) {
-  const sps = tabSyncPoints
-  if (!sps || sps.length === 0) return audioMs
-
-  let i = sps.length - 1
-  for (let j = 0; j < sps.length - 1; j++) {
-    if (audioMs < sps[j + 1].syncTime) { i = j; break }
-  }
-  const sp0 = sps[i]
-  const sp1 = (i + 1 < sps.length) ? sps[i + 1] : null
-
-  if (!sp1) {
-    const totalSynthMs  = alphaTabApi?.endTime || sp0.synthTime
-    const totalAudioMs  = tailAudioMs(sp0, totalSynthMs)
-    const dt = totalAudioMs - sp0.syncTime
-    if (dt <= 0) return sp0.synthTime
-    return sp0.synthTime + ((audioMs - sp0.syncTime) / dt) * (totalSynthMs - sp0.synthTime)
-  }
-
-  const dt = sp1.syncTime - sp0.syncTime
-  if (dt <= 0) return sp0.synthTime
-  return sp0.synthTime + ((audioMs - sp0.syncTime) / dt) * (sp1.synthTime - sp0.synthTime)
+function ticksToSec(ticks, bpm) {
+  return ticks * 60 / ((bpm || scoreTempoBpm()) * MIDI_QUARTER_TICKS)
 }
 
-// Converts a MIDI tick position to audio seconds using sync points + synthBpm.
-function beatTickToAudioTimeSec(tick) {
+// Segment de la table de synchro contenant `tick` (ou le dernier).
+function syncSegmentForTick(tick) {
   const sps = tabSyncPoints
-  if (!sps || sps.length === 0) {
-    // No sync data: use score tempo directly
-    const tempo    = alphaTabApi?.score?.tempo || tabScore?.tempo || 120
-    const synthMs  = tick * 60000 / (tempo * 960)
-    return synthMs / 1000
-  }
   let i = sps.length - 1
   for (let j = 0; j < sps.length - 1; j++) {
     if (tick < sps[j + 1].synthTick) { i = j; break }
   }
-  const sp0      = sps[i]
-  const bpm      = sp0.synthBpm || alphaTabApi?.score?.tempo || tabScore?.tempo || 98.5
-  const deltaTick = tick - sp0.synthTick
-  const synthMs  = sp0.synthTime + deltaTick * 60000 / (bpm * 960)
-  return synthTimeToAudioTime(synthMs) / 1000
+  return [sps[i], (i + 1 < sps.length) ? sps[i + 1] : null]
 }
 
-function synthTimeToAudioTime(synthMs) {
+// Tick MIDI (axe de lecture, reprises dépliées) → seconde sur l'axe audio.
+function tickToAudioSec(tick) {
   const sps = tabSyncPoints
-  if (!sps || sps.length === 0) return synthMs
+  if (!sps || sps.length === 0) return ticksToSec(tick, scoreTempoBpm())
+  const [a, b] = syncSegmentForTick(tick)
+  if (!b) return a.syncTime / 1000 + ticksToSec(tick - a.synthTick, a.syncBpm || a.synthBpm)
+  const dTick = b.synthTick - a.synthTick
+  if (dTick <= 0) return a.syncTime / 1000
+  return (a.syncTime + (tick - a.synthTick) / dTick * (b.syncTime - a.syncTime)) / 1000
+}
 
+// Seconde sur l'axe audio → tick MIDI. Inverse exact de tickToAudioSec.
+function audioSecToTick(sec) {
+  const sps = tabSyncPoints
+  const ms  = sec * 1000
+  if (!sps || sps.length === 0) return ms * scoreTempoBpm() * MIDI_QUARTER_TICKS / 60000
   let i = sps.length - 1
   for (let j = 0; j < sps.length - 1; j++) {
-    if (synthMs < sps[j + 1].synthTime) { i = j; break }
+    if (ms < sps[j + 1].syncTime) { i = j; break }
   }
-  const sp0 = sps[i]
-  const sp1 = (i + 1 < sps.length) ? sps[i + 1] : null
-
-  if (!sp1) {
-    const totalSynthMs  = alphaTabApi?.endTime || sp0.synthTime
-    const totalAudioMs  = tailAudioMs(sp0, totalSynthMs)
-    const dt = totalSynthMs - sp0.synthTime
-    if (dt <= 0) return sp0.syncTime
-    return sp0.syncTime + ((synthMs - sp0.synthTime) / dt) * (totalAudioMs - sp0.syncTime)
+  const a = sps[i]
+  const b = (i + 1 < sps.length) ? sps[i + 1] : null
+  if (!b) {
+    const bpm = a.syncBpm || a.synthBpm || scoreTempoBpm()
+    return a.synthTick + (ms - a.syncTime) * bpm * MIDI_QUARTER_TICKS / 60000
   }
-
-  const dt = sp1.synthTime - sp0.synthTime
-  if (dt <= 0) return sp0.syncTime
-  return sp0.syncTime + ((synthMs - sp0.synthTime) / dt) * (sp1.syncTime - sp0.syncTime)
+  const dMs = b.syncTime - a.syncTime
+  if (dMs <= 0) return a.synthTick
+  return a.synthTick + (ms - a.syncTime) / dMs * (b.synthTick - a.synthTick)
 }
 
 // Scroll téléprompter — lit la position X/Y du curseur depuis son CSS transform
@@ -1755,8 +1830,10 @@ function enforceTabCursorVisible() {
 function startTabSync() {
   if (tabSyncRafId !== null) return
   const loop = () => {
-    // 35.1 — AlphaTab est master clock : le RAF ne sert plus qu'au défilement
-    // téléprompteur du curseur (plus de push WaveSurfer → AlphaTab).
+    // Mode média externe : le RAF pousse la position audio dans AlphaTab, qui
+    // en déduit la mesure et le temps courants. Une fois par frame, soit bien
+    // plus fin que les 50 ms recommandés par AlphaTab.
+    pushExternalPosition()
     if (alphaTabApi && tabState !== 'collapsed') {
       enforceTabCursorVisible()
     }
@@ -1772,36 +1849,47 @@ function stopTabSync() {
   }
 }
 
-// 35.1 / 35.5 — Repères musicaux du score (masterBars)
-// Durée totale du score en ticks MIDI (dernier masterBar + sa durée).
+// 35.1 / 35.5 — Repères musicaux du score
+// AlphaTab publie sa propre table de lecture (`api.tickCache.masterBars`) :
+// une entrée par mesure *jouée*, reprises dépliées, avec ses bornes en ticks.
+// C'est elle qui fait autorité — la liste `score.masterBars` est l'écriture,
+// pas la lecture, et ignore les reprises.
+function barLookups() {
+  const lut = alphaTabApi?.tickCache?.masterBars
+  return (lut && lut.length > 0) ? lut : null
+}
+
+// Durée totale du score en ticks MIDI (fin de la dernière mesure jouée).
 function scoreTotalTicks(score) {
+  const lut = barLookups()
+  if (lut) return lut[lut.length - 1].end
   const bars = score?.masterBars
   if (!bars || bars.length === 0) return 0
   const last = bars[bars.length - 1]
   return last.start + last.calculateDuration()
 }
 
-// Temps « synth » (ms) → tick MIDI. Inverse de beatTickToAudioTimeSec.
-function synthTimeToTick(synthMs) {
-  const sps = tabSyncPoints
-  const fallbackBpm = alphaTabApi?.score?.tempo || tabScore?.tempo || 120
-  if (!sps || sps.length === 0) return synthMs * fallbackBpm * 960 / 60000
-
-  let i = sps.length - 1
-  for (let j = 0; j < sps.length - 1; j++) {
-    if (synthMs < sps[j + 1].synthTime) { i = j; break }
-  }
-  const sp0 = sps[i]
-  const bpm = sp0.synthBpm || fallbackBpm
-  return sp0.synthTick + (synthMs - sp0.synthTime) * bpm * 960 / 60000
-}
-
-function audioSecToTick(sec) {
-  return synthTimeToTick(audioTimeToSynthTime(sec * 1000))
-}
-
-// Tick MIDI → { bar, beat } 0-indexés (recherche dichotomique sur masterBars)
+// Tick MIDI → { bar, beat } 0-indexés. `bar` est l'index d'écriture de la
+// mesure : une mesure jouée deux fois (reprise) porte le même numéro les
+// deux fois, ce qui est bien ce qu'attend un musicien qui lit la partition.
 function tickToBarBeat(tick) {
+  const lut = barLookups()
+  if (lut) {
+    let lo = 0, hi = lut.length - 1, idx = 0
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1
+      if (lut[mid].start <= tick) { idx = mid; lo = mid + 1 } else { hi = mid - 1 }
+    }
+    const entry = lut[idx]
+    const mb    = entry.masterBar
+    const num   = mb?.timeSignatureNumerator || 4
+    const span  = entry.end - entry.start
+    const ticksPerBeat = span / num
+    const beat = ticksPerBeat > 0
+      ? Math.max(0, Math.min(num - 1, Math.floor((tick - entry.start) / ticksPerBeat)))
+      : 0
+    return { bar: mb?.index ?? idx, beat }
+  }
   const bars = tabScore?.masterBars
   if (!bars || bars.length === 0) return null
   let lo = 0, hi = bars.length - 1, idx = 0
@@ -1818,19 +1906,33 @@ function tickToBarBeat(tick) {
   return { bar: idx, beat }
 }
 
+// Bornes en ticks de la mesure d'index `i`, à sa première lecture.
+function barTickRange(i) {
+  const bars = tabScore?.masterBars
+  if (!bars || bars.length === 0) return null
+  const mb = bars[Math.max(0, Math.min(bars.length - 1, i))]
+  const cache = alphaTabApi?.tickCache
+  if (cache) {
+    try {
+      const entry = cache.getMasterBar(mb)
+      if (entry && entry.end > entry.start) {
+        return { start: entry.start, span: entry.end - entry.start, masterBar: mb }
+      }
+    } catch { /* mesure hors lecture : repli sur l'écriture */ }
+  }
+  return { start: mb.start, span: mb.calculateDuration(), masterBar: mb }
+}
+
 // { bar, beat } 0-indexés → tick MIDI
 function barBeatToTick(bar, beat) {
-  const bars = tabScore?.masterBars
-  if (!bars || bars.length === 0) return 0
-  const i = Math.max(0, Math.min(bars.length - 1, bar))
-  const mb  = bars[i]
-  const num = mb.timeSignatureNumerator || 4
-  const ticksPerBeat = mb.calculateDuration() / num
-  return mb.start + Math.max(0, Math.min(num - 1, beat)) * ticksPerBeat
+  const r = barTickRange(bar)
+  if (!r) return 0
+  const num = r.masterBar.timeSignatureNumerator || 4
+  return r.start + Math.max(0, Math.min(num - 1, beat)) * (r.span / num)
 }
 
 function barBeatToSec(bar, beat) {
-  return beatTickToAudioTimeSec(barBeatToTick(bar, beat))
+  return tickToAudioSec(barBeatToTick(bar, beat))
 }
 
 // Le mode BBT n'a de sens qu'avec un score chargé.
@@ -1852,7 +1954,9 @@ function formatPosition(sec) {
 
 function updateDurationDisplay() {
   if (bbtEnabled()) {
-    durationEl.textContent = `${tabScore.masterBars.length} mes.`
+    // Nombre de mesures *jouées* : cohérent avec la règle de mesures, qui
+    // déroule les reprises.
+    durationEl.textContent = `${barLookups()?.length ?? tabScore.masterBars.length} mes.`
   } else {
     durationEl.textContent = totalDuration > 0 ? formatTimecode(totalDuration) : '—'
   }
@@ -1868,14 +1972,19 @@ function renderBbtTimeline() {
   if (!on || !(totalDuration > 0)) return
 
   bbtTimelineEl.innerHTML = ''
-  const bars    = tabScore.masterBars
+  // Une graduation par mesure *jouée* : sur un morceau à reprises, la même
+  // mesure apparaît autant de fois qu'elle est jouée, au bon endroit.
+  const lut  = barLookups()
+  const bars = lut
+    ? lut.map(e => ({ start: e.start, label: (e.masterBar?.index ?? 0) + 1 }))
+    : tabScore.masterBars.map((mb, i) => ({ start: mb.start, label: i + 1 }))
   const width   = bbtTimelineEl.getBoundingClientRect().width || 800
   const pxPerBar = width / bars.length
   // Une étiquette tous les N marqueurs pour garder ~36 px entre deux libellés
   const labelStep = Math.max(1, Math.ceil(36 / Math.max(pxPerBar, 1)))
 
   for (let i = 0; i < bars.length; i++) {
-    const sec = beatTickToAudioTimeSec(bars[i].start)
+    const sec = tickToAudioSec(bars[i].start)
     if (sec > totalDuration) break
     const tick = document.createElement('div')
     tick.className = 'bbt-tick'
@@ -1884,7 +1993,7 @@ function renderBbtTimeline() {
       tick.classList.add('bbt-tick--labeled')
       const label = document.createElement('span')
       label.className = 'bbt-tick-label'
-      label.textContent = String(i + 1)
+      label.textContent = String(bars[i].label)
       tick.appendChild(label)
     }
     bbtTimelineEl.appendChild(tick)
@@ -1988,6 +2097,10 @@ async function initTabDrawer(tabFile) {
 
   tabContentEl.classList.remove('tab-content--loading')
 
+  // Le mode est décidé ici, avant tout chargement : il conditionne l'UI des
+  // pistes MIDI (construite dès scoreLoaded) autant que le transport.
+  tabExternal = currentTracks.length > 0
+
   alphaTabApi = new alphaTabMod.AlphaTabApi(tabContentEl, {
     core: {
       workerFile:    `${AT_BASE}/alphaTab.worker.mjs`,
@@ -1995,11 +2108,14 @@ async function initTabDrawer(tabFile) {
       logLevel:      alphaTabMod.LogLevel.Warning,
     },
     player: {
-      // 35.1 / 35.4 — le synthétiseur MIDI est toujours utilisé, même quand le
-      // fichier embarque un backing track : celui-ci est joué en parallèle par
-      // WaveSurfer. En mode automatique, AlphaTab basculerait en lecture du
-      // backing track et n'avancerait plus son horloge de synthèse.
-      playerMode:           alphaTabMod.PlayerMode.EnabledSynthesizer,
+      // Dès qu'il y a de l'audio, ce sont nos instances WaveSurfer qui portent
+      // le temps : AlphaTab les traite comme un « média externe » et convertit
+      // lui-même temps audio ↔ position dans la partition, à partir des points
+      // de synchro du fichier GP. Sans aucun audio (tab-only), le synthétiseur
+      // MIDI joue et porte sa propre horloge.
+      playerMode:           tabExternal
+        ? alphaTabMod.PlayerMode.EnabledExternalMedia
+        : alphaTabMod.PlayerMode.EnabledSynthesizer,
       enableCursor:         true,
       enableUserInteraction: true,
       soundFont:            `${AT_BASE}/soundfont/sonivox.sf2`,
@@ -2013,9 +2129,17 @@ async function initTabDrawer(tabFile) {
   })
 
   window.__alphaTabApi = alphaTabApi
+  // Surface de test : le temps se pilote désormais par l'axe audio, pas par
+  // l'horloge du synthé — les tests doivent passer par le transport du player.
+  window.__playerSeek     = (sec) => seekAllTo(sec)
+  window.__playerPosition = () => currentTimeSec()
 
-  // 35.1 — le synthé est prêt : son horloge peut piloter le transport.
-  alphaTabApi.playerReady.on(() => { tabClockLive = true })
+  // Le player interne est prêt : en média externe, c'est le moment de lui
+  // brancher nos waveforms ; en synthétiseur, son horloge devient utilisable.
+  alphaTabApi.playerReady.on(() => {
+    tabClockLive = true
+    if (tabExternal) attachExternalMedia()
+  })
 
   alphaTabApi.error.on(err => {
     console.error('[AlphaTab]', err)
@@ -2057,22 +2181,23 @@ async function initTabDrawer(tabFile) {
     // tous actifs au départ : AlphaTab, lui, ne rend que sa piste par défaut.
     // Sans cet appel l'UI annoncerait des portées absentes de la tablature.
     applyTabTrackSelection()
-    // Generate sync points from embedded GP markers (mod.midi.MidiFileGenerator)
+    // Table de synchro du fichier, pour les conversions hors lecture.
+    // AlphaTab la charge déjà lui-même dans son player ; on en garde une copie
+    // pour placer la règle de mesures et les bornes de boucle.
     try {
       const mod = window.__alphaTabModule
       const sps = mod?.midi?.MidiFileGenerator?.generateSyncPoints(score)
       if (sps?.length > 0) {
         tabSyncPoints = sps
-        alphaTabApi.updateSyncPoints()
-        console.info('[tab] sync points:', sps.length,
-          sps.map(p => `bar${p.masterBarIndex}@${(p.syncTime/1000).toFixed(2)}s→${(p.synthTime/1000).toFixed(2)}s`).join(' '))
+        console.info('[tab] points de synchro :', sps.length,
+          sps.map(p => `mes.${p.masterBarIndex + 1}@${(p.syncTime / 1000).toFixed(2)}s`).join(' '))
       }
     } catch (e) {
-      console.warn('[tab] sync points extraction failed:', e)
+      console.warn('[tab] lecture des points de synchro impossible :', e)
     }
 
-    // Durée du score (après les sync points : ils redéfinissent l'axe temps)
-    scoreDurationSec = beatTickToAudioTimeSec(scoreTotalTicks(score))
+    // Durée du score sur l'axe audio (dépend des points de synchro)
+    scoreDurationSec = tickToAudioSec(scoreTotalTicks(score))
     if (scoreDurationSec > totalDuration) {
       totalDuration = scoreDurationSec
       updateDurationDisplay()
@@ -2099,12 +2224,14 @@ async function initTabDrawer(tabFile) {
     }
   })
 
-  // 35.1 — AlphaTab master clock : sa position pilote l'affichage, la boucle
-  // et le recalage des instances WaveSurfer (followers).
+  // Mode synthétiseur (tab-only) : l'horloge MIDI pilote l'affichage, la boucle
+  // et le recalage des waveforms — il n'y a pas d'autre source de temps.
+  // Mode média externe : c'est l'audio qui mène, cet événement n'est plus que
+  // l'accusé de réception d'AlphaTab et ne doit rien recaler.
   alphaTabApi.playerPositionChanged.on(args => {
-    if (!tabMaster) return
+    if (!tabMaster || tabExternal) return
     tabClockLive = true
-    const audioSec = synthTimeToAudioTime(args.currentTime) / 1000
+    const audioSec = tickToAudioSec(args.currentTick)
     updateTimeDisplay(audioSec)
     for (const ws of wavesurfers) {
       if (args.isSeek || Math.abs(ws.getCurrentTime() - audioSec) > WS_DRIFT_TOL) {
@@ -2116,6 +2243,9 @@ async function initTabDrawer(tabFile) {
 
   alphaTabApi.playerFinished.on(() => {
     if (!tabMaster) return
+    // En média externe la fin du morceau est celle de l'audio : la dernière
+    // mesure de la tablature peut tomber bien avant (transcription partielle).
+    if (tabExternal) return
     // Mixte avec un score plus court que l'audio : la fin du synthé n'est pas la
     // fin du morceau, c'est la piste audio la plus longue qui la signalera.
     if (audioOutlastsScore()) return
@@ -2144,8 +2274,8 @@ async function initTabDrawer(tabFile) {
     const [startBeat, lastBeat] = tabDragBeat.absolutePlaybackStart <= endBeat.absolutePlaybackStart
       ? [tabDragBeat, endBeat] : [endBeat, tabDragBeat]
 
-    const loopStart = beatTickToAudioTimeSec(startBeat.absolutePlaybackStart)
-    const loopEnd   = beatTickToAudioTimeSec(lastBeat.absolutePlaybackStart + lastBeat.playbackDuration)
+    const loopStart = tickToAudioSec(startBeat.absolutePlaybackStart)
+    const loopEnd   = tickToAudioSec(lastBeat.absolutePlaybackStart + lastBeat.playbackDuration)
     tabDragBeat = null
 
     if (loopEnd - loopStart < 0.05) return

@@ -376,6 +376,13 @@ body {
   gap: 0.3rem;
 }
 
+/* Pistes MIDI sans son (la tablature suit des pistes audio) : les réglages de
+   mixage sont inertes et le disent visuellement. */
+.track-sidebar-ctrl--inert {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
 .track-btn {
   background: #1c1c1c;
   border: 1px solid #2a2a2a;
