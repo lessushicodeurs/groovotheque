@@ -1252,21 +1252,38 @@ function setZoomScrollX(x) {
   updateScrollbarThumb()
 }
 
-// 18.7 — Affiche ou masque la scrollbar de la zone waveform.
+// Largeur minimale du curseur, en pixels. Vit ici et non en CSS : le placement
+// se calcule à partir d'elle, les deux ne peuvent donc pas diverger.
+const SCROLLBAR_THUMB_MIN_W = 24
+
+// 18.7 — Affiche ou masque la scrollbar de la zone waveform. `hidden` la retire
+// déjà de l'arbre d'accessibilité, mais aria-hidden est piloté avec lui pour ne
+// pas laisser d'attribut figé qui la masquerait une fois affichée.
 function setScrollbarVisible(visible) {
   if (!wfScrollbarEl) return
   wfScrollbarEl.hidden = !visible
+  wfScrollbarEl.setAttribute('aria-hidden', String(!visible))
+}
+
+// Géométrie du curseur, en pixels réels : c'est le repère qu'utilise aussi
+// scrollFromBarX() pour convertir un clic en décalage.
+function scrollbarThumbGeometry() {
+  const barW = wfScrollbarEl?.clientWidth ?? 0
+  if (barW <= 0) return null
+  const thumbW = Math.min(barW, Math.max(SCROLLBAR_THUMB_MIN_W, barW / zoomLevel))
+  return { barW, thumbW, travel: barW - thumbW }
 }
 
 // 18.7 — Le curseur reflète la portion visible du morceau.
 function updateScrollbarThumb() {
   if (!wfScrollThumbEl || zoomLevel <= 1) return
-  const visible  = 1 / zoomLevel
-  const thumbPct = Math.max(4, visible * 100)
+  const geo = scrollbarThumbGeometry()
+  if (!geo) return
   const maxScroll = zoomMaxScrollX()
   const progress  = maxScroll > 0 ? zoomScrollX / maxScroll : 0
-  wfScrollThumbEl.style.width = `${thumbPct}%`
-  wfScrollThumbEl.style.left  = `${progress * (100 - thumbPct)}%`
+  wfScrollThumbEl.style.width = `${geo.thumbW.toFixed(2)}px`
+  wfScrollThumbEl.style.left  = `${(progress * geo.travel).toFixed(2)}px`
+  wfScrollbarEl.setAttribute('aria-valuenow', String(Math.round(progress * 100)))
 }
 
 // Conversion temps → pixel dans le repère du contenu zoomé.
@@ -1402,13 +1419,13 @@ function initZoomScroll() {
 function initZoomScrollbar() {
   if (!wfScrollbarEl || !wfScrollThumbEl || isMobile) return
 
-  // Convertit une abscisse écran sur la barre en décalage de défilement.
+  // Convertit une abscisse écran sur la barre en décalage de défilement, dans
+  // le même repère en pixels que scrollbarThumbGeometry().
   const scrollFromBarX = (clientX) => {
-    const rect     = wfScrollbarEl.getBoundingClientRect()
-    const thumbW   = wfScrollThumbEl.getBoundingClientRect().width
-    const travel   = rect.width - thumbW
-    if (travel <= 0) return 0
-    const ratio = (clientX - rect.left - thumbW / 2) / travel
+    const geo = scrollbarThumbGeometry()
+    if (!geo || geo.travel <= 0) return 0
+    const left  = wfScrollbarEl.getBoundingClientRect().left
+    const ratio = (clientX - left - geo.thumbW / 2) / geo.travel
     return Math.max(0, Math.min(1, ratio)) * zoomMaxScrollX()
   }
 

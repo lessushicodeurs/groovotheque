@@ -47,7 +47,10 @@
       <!-- 18.7 — Scrollbar horizontale, visible uniquement quand le zoom > 1×.
            Placée dans le conteneur des pistes pour disparaître avec elles
            (tablature plein écran). -->
-      <div id="waveform-scrollbar" class="waveform-scrollbar" hidden aria-hidden="true">
+      <div id="waveform-scrollbar" class="waveform-scrollbar" hidden aria-hidden="true"
+           role="scrollbar" aria-orientation="horizontal" aria-controls="tracks-container"
+           aria-label="Position dans le morceau"
+           aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
         <div id="waveform-scrollbar-thumb" class="waveform-scrollbar-thumb"></div>
       </div>
     </div>
