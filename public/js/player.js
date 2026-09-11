@@ -1196,8 +1196,41 @@ function applyZoomWidths() {
 
   if (wfScrollbarEl) wfScrollbarEl.hidden = zoomLevel <= 1
   setZoomScrollX(zoomScrollX)
+  applyTimelineIntervals()
   // Le TimelinePlugin recalcule ses graduations depuis la largeur du wrapper.
   wavesurfers[0]?.emit('redraw')
+}
+
+// Paliers de graduation « ronds » pour la règle temporelle.
+const TIMELINE_INTERVALS = [0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120]
+
+function pickTimelineInterval(pxPerSec, minPx) {
+  return TIMELINE_INTERVALS.find(v => v * pxPerSec >= minPx)
+      ?? TIMELINE_INTERVALS[TIMELINE_INTERVALS.length - 1]
+}
+
+// Sans cela les graduations resteraient tous les 5 s : illisibles à 16×, où
+// l'utilisateur cherche justement la seconde près. À 1× on restaure exactement
+// les valeurs d'origine.
+function applyTimelineIntervals() {
+  if (!timelinePluginRef || !totalDuration) return
+  if (zoomLevel <= 1) {
+    timelinePluginRef.options.timeInterval           = 5
+    timelinePluginRef.options.primaryLabelInterval   = 30
+    timelinePluginRef.options.secondaryLabelInterval = 10
+    return
+  }
+  const pxPerSec = zoomContentWidth() / totalDuration
+  if (pxPerSec <= 0) return
+  const secondary = pickTimelineInterval(pxPerSec, 45)
+  // Le libellé principal doit tomber sur un libellé secondaire, sinon la règle
+  // alterne deux rythmes sans rapport (10 s / 15 s).
+  const primary = TIMELINE_INTERVALS.find(
+    v => v * pxPerSec >= 110 && Math.abs(v % secondary) < 1e-9
+  ) ?? secondary
+  timelinePluginRef.options.timeInterval           = pickTimelineInterval(pxPerSec, 18)
+  timelinePluginRef.options.secondaryLabelInterval = secondary
+  timelinePluginRef.options.primaryLabelInterval   = primary
 }
 
 // Applique le décalage horizontal, identique pour toutes les rangées.
@@ -3511,7 +3544,12 @@ async function init() {
   let resizeTimer
   window.addEventListener('resize', () => {
     clearTimeout(resizeTimer)
-    resizeTimer = setTimeout(adjustTrackWidths, 150)
+    resizeTimer = setTimeout(() => {
+      adjustTrackWidths()
+      // 18.4 — le décalage est en pixels : après un changement de largeur il
+      // faut réancrer la vue sur la tête de lecture.
+      centerPlayhead()
+    }, 150)
   }, { passive: true })
 })()
 
