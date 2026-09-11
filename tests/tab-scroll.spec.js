@@ -25,7 +25,7 @@ const PORT       = 3198
 
 // Groove avec fichier GP : The Clark Sisters - Ha Ya
 // (The Clark Sisters - Ha Ya.gp + audio MP3)
-const GROOVE_SLUG = 'The Clark Sisters - Ha Ya'
+const GROOVE_SLUG = 'Ghismo/Tabs/The_Clark_Sisters_-_Ha_Ya'
 const BASE_URL    = `http://localhost:${PORT}`
 
 let serverProcess = null
