@@ -1688,6 +1688,16 @@ async function initTabDrawer(tabFile) {
       totalDuration = scoreDurationSec
       durationEl.textContent = formatTimecode(totalDuration)
     }
+
+    // 35.2 — tab-only : aucune waveform ne viendra terminer le chargement
+    if (currentTracks.length === 0) {
+      finishLoading()
+      if (pendingLoop) {
+        syncRegionToAll(pendingLoop.in, pendingLoop.out)
+        pendingLoop = null
+      }
+      adjustTrackWidths()
+    }
   })
 
   // 35.1 — AlphaTab master clock : sa position pilote l'affichage, la boucle
@@ -3262,12 +3272,21 @@ async function init() {
     initNotePanel()
     initTags()
 
-    if (!groove.tracks?.length) {
-      showFatalError('Aucune piste audio dans ce groove.', false)
-      return
+    // 35.2 — groove « tab-only » : un dossier ne contenant qu'un fichier GP
+    // s'ouvre comme un groove à part entière, piloté par AlphaTab.
+    const tabOnly = !groove.tracks?.length
+    if (tabOnly) {
+      if (!groove.tabFile) {
+        showFatalError('Aucune piste audio dans ce groove.', false)
+        return
+      }
+      if (!IS_DESKTOP) {
+        showFatalError('Ce groove ne contient qu\'une tablature — ouvrez-le sur desktop pour la voir.', false)
+        return
+      }
+    } else {
+      initLoadBar(groove.tracks.length)
     }
-
-    initLoadBar(groove.tracks.length)
     tracksContainer.removeAttribute('hidden')
     drawerEl.removeAttribute('hidden')
     initDrawer()
@@ -3275,12 +3294,12 @@ async function init() {
 
     // 6.3 — Fetch all cached peaks in parallel before building tracks
     const cachedPeaksArr = await Promise.all(
-      groove.tracks.map(track => fetchPeaks(grooveSlug, track.filename))
+      (groove.tracks ?? []).map(track => fetchPeaks(grooveSlug, track.filename))
     )
 
-    currentTracks = groove.tracks
+    currentTracks = groove.tracks ?? []
     buildTimelineRow()
-    groove.tracks.forEach((track, i) => {
+    currentTracks.forEach((track, i) => {
       buildTrackRow(track, track.index, cachedPeaksArr[i])
     })
 
@@ -3290,7 +3309,7 @@ async function init() {
     // Epic 22 — init comment controls (UI wiring, always active)
     initCommentControls()
 
-    await loadMix(groove.tracks)
+    await loadMix(currentTracks)
 
     // Epic 22 — charger les commentaires après le mix (rendu différé dans adjustTrackWidths)
     loadComments()
