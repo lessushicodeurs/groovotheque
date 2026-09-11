@@ -3742,9 +3742,6 @@ async function init() {
     tracksContainer.removeAttribute('hidden')
     drawerEl.removeAttribute('hidden')
     initDrawer()
-    // En tab-only, le menu n'apparaît que si un backing track exportable arrive
-    // (voir buildBackingTrackRow).
-    if (!tabOnly) initDownloadMenu()
     initTimeMode()
 
     // 6.3 — Fetch all cached peaks in parallel before building tracks
@@ -3753,6 +3750,10 @@ async function init() {
     )
 
     currentTracks = groove.tracks ?? []
+    // En tab-only, le menu n'apparaît que si un backing track exportable arrive
+    // (voir buildBackingTrackRow). Après l'affectation de currentTracks, dont
+    // initDownloadMenu() a besoin pour savoir si le zip serveur a du contenu.
+    if (!tabOnly) initDownloadMenu()
     buildTimelineRow()
     currentTracks.forEach((track, i) => {
       buildTrackRow(track, track.index, cachedPeaksArr[i])
