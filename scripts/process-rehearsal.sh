@@ -49,7 +49,7 @@ check_deps() {
   if command -v aubiotrack &>/dev/null; then
     HAS_AUBIO=true
   else
-    warn "aubiotrack introuvable — création des fiches .md désactivée"
+    warn "aubiotrack introuvable — création des fiches notes.md désactivée"
   fi
 }
 
@@ -889,10 +889,10 @@ convert_output() {
 # ────────────────────────── Fiches BPM ──────────────────────
 
 create_md_sheets() {
-  next_step "Création des fiches .md (BPM)"
+  next_step "Création des fiches notes.md (BPM)"
 
   if [[ "$HAS_AUBIO" != "true" ]]; then
-    warn "aubiotrack introuvable — création des fiches .md désactivée"
+    warn "aubiotrack introuvable — création des fiches notes.md désactivée"
     return
   fi
 
