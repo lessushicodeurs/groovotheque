@@ -1855,8 +1855,25 @@ function buildTrackSelector(score) {
   })
 }
 
+// 35.2 — Échec du chargement de la tablature. En tab-only, aucune waveform ne
+// viendra terminer le chargement : la page resterait indéfiniment en « loading ».
+let tabLoadErrorShown = false
+function tabLoadFailed(msg) {
+  console.warn('[tab]', msg)
+  if (tabContentEl && !tabLoadErrorShown) {
+    tabContentEl.textContent = msg
+    tabContentEl.classList.remove('tab-content--loading')
+  }
+  if (currentTracks.length === 0 && !tabLoadErrorShown) showFatalError(msg)
+  tabLoadErrorShown = true
+}
+
 async function initTabDrawer(tabFile) {
-  if (!IS_DESKTOP || !tabDrawerEl) return
+  if (!IS_DESKTOP) return
+  if (!tabDrawerEl) {
+    tabLoadFailed('Tablature indisponible : interface non initialisée.')
+    return
+  }
 
   tabContentEl.classList.add('tab-content--loading')
   tabDrawerEl.removeAttribute('hidden')
@@ -1881,9 +1898,8 @@ async function initTabDrawer(tabFile) {
     alphaTabMod = await import(`${AT_BASE}/alphaTab.mjs`)
     window.__alphaTabModule = alphaTabMod
   } catch (err) {
-    tabContentEl.textContent = 'AlphaTab non disponible (erreur de chargement).'
-    tabContentEl.classList.remove('tab-content--loading')
     console.warn('[tab] Échec chargement AlphaTab:', err)
+    tabLoadFailed('AlphaTab non disponible (erreur de chargement).')
     return
   }
 
@@ -1920,6 +1936,8 @@ async function initTabDrawer(tabFile) {
 
   alphaTabApi.error.on(err => {
     console.error('[AlphaTab]', err)
+    // Fichier GP illisible : le score ne sera jamais chargé.
+    if (!tabScore) tabLoadFailed('Tablature illisible (fichier Guitar Pro invalide).')
   })
 
   // Auto-fit strip height once rendering is complete (postRenderFinished = once, not per partial)
