@@ -89,10 +89,23 @@
       <div class="transport-row transport-row--tempo">
         <!-- 18.2 — Zoom horizontal des waveforms -->
         <div class="zoom-controls" role="group" aria-label="Zoom des waveforms">
-          <button id="btn-zoom-out" class="zoom-btn" type="button" aria-label="Dézoomer" disabled>−</button>
+          <button id="btn-zoom-out" class="zoom-btn" type="button" aria-label="Dézoomer" title="Dézoomer" disabled>
+            <svg class="zoom-icon" viewBox="0 0 18 18" aria-hidden="true" focusable="false">
+              <circle cx="7.5" cy="7.5" r="5"></circle>
+              <path d="M11.3 11.3 L16 16"></path>
+              <path d="M5 7.5 H10"></path>
+            </svg>
+          </button>
           <button id="btn-zoom-level" class="zoom-level-btn" type="button"
                   title="Cliquer pour revenir à 1×" aria-label="Niveau de zoom : 1×">1×</button>
-          <button id="btn-zoom-in" class="zoom-btn" type="button" aria-label="Zoomer">+</button>
+          <button id="btn-zoom-in" class="zoom-btn" type="button" aria-label="Zoomer" title="Zoomer">
+            <svg class="zoom-icon" viewBox="0 0 18 18" aria-hidden="true" focusable="false">
+              <circle cx="7.5" cy="7.5" r="5"></circle>
+              <path d="M11.3 11.3 L16 16"></path>
+              <path d="M5 7.5 H10"></path>
+              <path d="M7.5 5 V10"></path>
+            </svg>
+          </button>
         </div>
         <span class="transport-sep" aria-hidden="true">|</span>
         <span class="tempo-label">TEMPO</span>

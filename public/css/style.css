@@ -790,8 +790,7 @@ body {
   background: #1c1c1c;
   border: 1px solid #2a2a2a;
   color: #777;
-  font-size: 1rem;
-  font-weight: 600;
+  padding: 0;
   width: 1.6rem;
   height: 1.6rem;
   border-radius: 4px;
@@ -813,6 +812,18 @@ body {
 .zoom-btn:disabled {
   opacity: 0.3;
   cursor: default;
+}
+
+/* Loupe dessinée au trait : elle prend la couleur du bouton (donc ses états
+   survol et désactivé) sans règle supplémentaire. */
+.zoom-icon {
+  width: 1rem;
+  height: 1rem;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
 }
 
 .zoom-level-btn {
@@ -851,6 +862,11 @@ body {
 
   .zoom-btn {
     width: 2rem;
+  }
+
+  .zoom-icon {
+    width: 1.15rem;
+    height: 1.15rem;
   }
 }
 
