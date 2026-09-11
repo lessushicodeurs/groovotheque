@@ -652,6 +652,7 @@ function applyVolumes() {
 
 async function playAll() {
   if (isPlaying) return
+  zoomUserScrolled = false  // 18.5 — Play relance le suivi de la tête de lecture
   // Resume Web Audio graph if suspended (requires prior user gesture — satisfied by this click)
   if (sharedAudioCtx.state === 'suspended') await sharedAudioCtx.resume()
   if (loopEnabled && activeLoopIn !== null && activeLoopOut !== null) {
@@ -1036,6 +1037,9 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
 
     ws.on('timeupdate', (t) => {
       timecodeEl.textContent = formatTimecode(t)
+      // 18.5 — en mode zoomé, la vue suit la tête pendant la lecture, sauf si
+      // l'utilisateur a repris la main sur le défilement.
+      if (isPlaying && !zoomUserScrolled) zoomAutoScroll(t)
       if (totalDuration > 0) {
         seekFillEl.style.width = `${(t / totalDuration) * 100}%`
         seekBarEl.setAttribute('aria-valuenow', Math.round((t / totalDuration) * 100))
@@ -1219,6 +1223,18 @@ function ensurePlayheadVisible(time = playheadTime(), margin = 0.1) {
   const px  = zoomTimeToPx(time)
   if (px < zoomScrollX + vpW * margin || px > zoomScrollX + vpW * (1 - margin)) {
     centerPlayhead(time)
+  }
+}
+
+// 18.5 — Défilement automatique pendant la lecture : la tête est ramenée au
+// centre dès qu'elle dépasse les trois quarts de la zone visible, ce qui laisse
+// voir ce qui arrive plutôt que de recentrer à chaque image.
+function zoomAutoScroll(time) {
+  if (zoomLevel <= 1) return
+  const vpW = zoomViewportWidth()
+  const px  = zoomTimeToPx(time)
+  if (px < zoomScrollX || px > zoomScrollX + vpW * 0.75) {
+    setZoomScrollX(px - vpW * 0.5)
   }
 }
 
