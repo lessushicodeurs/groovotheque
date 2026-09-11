@@ -113,7 +113,8 @@ while IFS= read -r line; do
   [[ -n "$line" ]] && APPLIED["$line"]=1
 done <<< "$APPLIED_RAW"
 
-mapfile -t MIGRATIONS < <(find "$MIGRATIONS_DIR" -maxdepth 1 -mindepth 1 -type f -name '*.sh' -print0 | sort -z | tr '\0' '\n')
+# -d '' : un nom de script contenant un saut de ligne ne doit pas casser la liste
+mapfile -d '' MIGRATIONS < <(find "$MIGRATIONS_DIR" -maxdepth 1 -mindepth 1 -type f -name '*.sh' -print0 | sort -z)
 
 if [[ ${#MIGRATIONS[@]} -eq 0 ]]; then
   warn "Aucune migration dans $MIGRATIONS_DIR"
