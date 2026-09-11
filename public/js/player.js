@@ -1165,9 +1165,17 @@ function adjustTrackWidths() {
 
 // ── Epic 18 — Zoom horizontal ──────────────────────────────────────────────
 
+// Largeur visible d'un viewport, en pixels *fractionnaires*. clientWidth arrondit
+// à l'entier : à 16× cette demi-pixel perdue devient 8 px de décalage, et une
+// piste plus courte que le morceau retrouve la largeur d'une piste pleine — donc
+// une waveform étirée et un clic qui ne tombe plus sur l'instant visé.
+function vpWidth(el) {
+  return el ? el.getBoundingClientRect().width : 0
+}
+
 // Largeur visible de la zone waveform (rangée timeline = piste la plus longue).
 function zoomViewportWidth() {
-  return timelineVpEl?.clientWidth ?? 0
+  return vpWidth(timelineVpEl)
 }
 
 // Largeur effective du contenu à zoomLevel.
@@ -1194,15 +1202,16 @@ function applyZoomWidths() {
 
   if (timelineVpEl && timelineWaveColEl) {
     timelineWaveColEl.style.width = zoomLevel > 1
-      ? `${(timelineVpEl.clientWidth * zoomLevel).toFixed(2)}px`
+      ? `${(vpWidth(timelineVpEl) * zoomLevel).toFixed(2)}px`
       : ''
   }
   waveVpEls.forEach((vp, i) => {
     const el = waveEls[i]
     if (!el) return
     if (zoomLevel <= 1) { el.style.width = ''; return }
-    if (vp.clientWidth <= 0) return
-    el.style.width = `${(vp.clientWidth * zoomLevel).toFixed(2)}px`
+    const w = vpWidth(vp)
+    if (w <= 0) return
+    el.style.width = `${(w * zoomLevel).toFixed(2)}px`
   })
 
   setZoomScrollX(zoomScrollX)
