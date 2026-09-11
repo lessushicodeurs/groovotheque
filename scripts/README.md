@@ -49,9 +49,9 @@ Libère le port si occupé, vérifie que `node_modules` est synchronisé avec `p
 
 ---
 
-## markers-to-md.py — injection de structure dans un .md de groove
+## markers-to-md.py — injection de structure dans le `notes.md` d'un groove
 
-Lit les marqueurs de `mix.json` d'un groove, détecte le BPM automatiquement (ou utilise un BPM fourni), et injecte une section `## Structure` dans le fichier `.md` du groove.
+Lit les marqueurs de `mix.json` d'un groove, détecte le BPM automatiquement (ou utilise un BPM fourni), et injecte une section `## Structure` dans la fiche `notes.md` du groove.
 
 ```bash
 python3 scripts/markers-to-md.py <chemin/du/groove> [options]
@@ -79,7 +79,8 @@ python3 scripts/markers-to-md.py grooves/Shook_Shook/02_-_Sexy_Man --skip 2
 
 **Comportement**
 
-- Si le `.md` est absent ou vide → crée le fichier avec un titre `# <nom du groove>` et la section Structure
+- Fiche ciblée : `notes.md` du dossier du groove. Si `notes.md` est absent mais qu'une autre fiche `.md` existe déjà (grooves antérieurs au nom fixe), celle-ci est utilisée.
+- Si la fiche est absente ou vide → crée `notes.md` avec un titre `# <nom du groove>` et la section Structure
 - Si `## Structure` existe déjà → la remplace (met aussi à jour la ligne BPM)
 - Sinon → ajoute la section en fin de fichier
 
