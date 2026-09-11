@@ -370,6 +370,9 @@ let timeMode         = 'time'
 let bbtTimelineEl    = null  // graduations de mesures (mode BBT)
 // 35.6 — boucle lue en BBT dans loop.json, à convertir dès que le score est là
 let pendingBbtLoop   = null
+// true si une tablature va être chargée (fichier GP présent et desktop) : sans
+// elle, une boucle enregistrée en mesure:temps n'est pas convertible.
+let tabWillLoad      = false
 // 35.3 — lignes de pistes MIDI : { track, muted, soloed, volume, visible, btnMute, btnSolo, btnShow }
 let midiTracks       = []
 // Tolérance de dérive avant de re-caler une instance WaveSurfer sur l'horloge
@@ -856,6 +859,7 @@ function clearLoop() {
   trackRegions.forEach(rp => rp.clearRegions())
   activeLoopIn = null
   activeLoopOut = null
+  tabLoopControlsEl?.setAttribute('hidden', '')
   updateLoopFields()
   if (loopEnabled) setLoopEnabled(false)
 }
@@ -881,6 +885,10 @@ function syncRegionToAll(start, end, opts = {}) {
   activeLoopIn = start
   activeLoopOut = end
   updateLoopFields()
+
+  // 35.2 — en tab-only il n'y a aucune waveform pour dessiner la région : les
+  // contrôles de boucle de la tablature sont le seul retour visuel.
+  if (tabScore) tabLoopControlsEl?.removeAttribute('hidden')
 
   trackRegions.forEach(rp => {
     rp.clearRegions()
@@ -1924,6 +1932,9 @@ function buildTrackSelector(score) {
 let tabLoadErrorShown = false
 function tabLoadFailed(msg) {
   console.warn('[tab]', msg)
+  // Sans score, une boucle enregistrée en mesure:temps reste inconvertible.
+  tabWillLoad = false
+  warnBbtLoopUnavailable()
   if (tabContentEl && !tabLoadErrorShown) {
     tabContentEl.textContent = msg
     tabContentEl.classList.remove('tab-content--loading')
@@ -2215,6 +2226,7 @@ async function loadLoop() {
         typeof loop.out === 'object' && loop.out !== null) {
       pendingBbtLoop = { in: loop.in, out: loop.out }
       if (tabScore) applyPendingBbtLoop()
+      else warnBbtLoopUnavailable()
       return
     }
     if (loop && typeof loop.in === 'number' && typeof loop.out === 'number') {
@@ -2226,6 +2238,16 @@ async function loadLoop() {
       }
     }
   } catch { /* chargement silencieux */ }
+}
+
+// 35.6 — Une boucle en mesure:temps n'a de sens qu'avec le score : sans
+// tablature (mobile, fichier GP absent ou illisible) elle est ignorée — le dire
+// plutôt que de la faire disparaître en silence.
+function warnBbtLoopUnavailable() {
+  if (!pendingBbtLoop || tabWillLoad) return
+  console.warn('[loop] boucle enregistrée en mesure:temps ignorée : tablature indisponible')
+  loopInEl.title = loopOutEl.title =
+    'Boucle enregistrée en mesure:temps — indisponible sans la tablature'
 }
 
 // 35.6 — Convertit la boucle BBT de loop.json en secondes, une fois le score là
@@ -3696,6 +3718,7 @@ async function init() {
     // 35.2 — groove « tab-only » : un dossier ne contenant qu'un fichier GP
     // s'ouvre comme un groove à part entière, piloté par AlphaTab.
     const tabOnly = !groove.tracks?.length
+    tabWillLoad = !!groove.tabFile && IS_DESKTOP
     if (tabOnly) {
       if (!groove.tabFile) {
         showFatalError('Aucune piste audio dans ce groove.', false)
