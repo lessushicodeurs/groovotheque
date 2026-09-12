@@ -866,10 +866,6 @@ function checkLoopRebound(t) {
 
 async function playAll() {
   if (isPlaying) return
-  // 39.2 — un rendu en cours va remplacer une ligne par une piste WaveSurfer
-  // neuve, qui démarrerait à zéro pendant que les autres avancent. Le transport
-  // reste bloqué le temps du rendu (le bouton Play est déjà désactivé).
-  if (midiRenderBusy) return
   zoomUserScrolled = false  // 18.5 — Play relance le suivi de la tête de lecture
   // Resume Web Audio graph if suspended (requires prior user gesture — satisfied by this click)
   if (sharedAudioCtx.state === 'suspended') await sharedAudioCtx.resume()
@@ -1582,20 +1578,31 @@ function buildMidiTrackRow(track, idx, color) {
   btnShow.title = 'Afficher dans la tablature'
   btnShow.setAttribute('aria-pressed', 'true')
 
-  // 39.2 — le rendu audio n'a de sens qu'en mode mixte : en tab-only le
-  // synthétiseur joue déjà la piste en direct, le bouton n'existe pas.
+  // 39.5 — marqueur de dérive, révélé par updateMidiSyncWarnings() quand le
+  // fichier ne porte aucun point de synchro. Non bloquant : le rendu se fait.
+  const warnEl = document.createElement('span')
+  warnEl.className = 'midi-drift-warning'
+  warnEl.textContent = '⚠'
+  warnEl.title = MIDI_DRIFT_WARNING
+  warnEl.setAttribute('aria-label', MIDI_DRIFT_WARNING)
+  warnEl.hidden = true
+
+  // 39.2 — en mode mixte le rendu part tout seul à l'ouverture : ce bouton
+  // n'est qu'un repli, révélé par updateMidiRenderUi() si le rendu a échoué.
+  // En tab-only le synthétiseur joue la piste en direct, le bouton n'existe pas.
   let btnRender = null
   if (tabExternal) {
     btnRender = document.createElement('button')
     btnRender.className = 'track-btn btn-midi-render'
     btnRender.textContent = '⏺'
-    btnRender.title = 'Rendre en audio'
-    btnRender.setAttribute('aria-label', `Rendre « ${label} » en audio`)
+    btnRender.title = 'Réessayer le rendu en audio'
+    btnRender.setAttribute('aria-label', `Réessayer le rendu de « ${label} » en audio`)
+    btnRender.hidden = true
   }
 
   const sidebarTop = document.createElement('div')
   sidebarTop.className = 'track-sidebar-top'
-  sidebarTop.append(dot, nameEl, btnShow)
+  sidebarTop.append(dot, nameEl, warnEl, btnShow)
   if (btnRender) sidebarTop.append(btnRender)
 
   const btnMute = document.createElement('button')
@@ -1658,8 +1665,9 @@ function buildMidiTrackRow(track, idx, color) {
 
   const state = {
     track, index: idx, muted: false, soloed: false, volume: 1, visible: true,
-    btnShow, btnRender, progressEl, waveEl, row,
-    rendered: false,   // 39.4 — passe à true une fois la piste devenue audio
+    btnShow, btnRender, warnEl, progressEl, waveEl, row,
+    rendered: false,    // 39.4 — passe à true une fois la piste devenue audio
+    autoFailed: false,  // 39.2 — le rendu automatique a échoué sur cette piste
   }
   midiTracks.push(state)
   const myIdx = midiTracks.length - 1
@@ -1742,36 +1750,47 @@ function setMidiRenderProgress(state, ratio) {
   state.progressEl.textContent = `Rendu… ${pct}%`
 }
 
-// 39.5 — sans point de synchro, le rendu sort au tempo écrit de la partition :
-// il peut dériver par rapport aux enregistrements. On prévient, mais on rend.
-function confirmMidiRender() {
-  if (tabSyncPoints?.length > 0) return true
-  return window.confirm(
-    'Ce fichier Guitar Pro ne contient aucun point de synchro.\n\n'
-    + 'Le rendu sortira au tempo écrit de la partition et risque de dériver par '
-    + 'rapport aux enregistrements.\n\nRendre quand même ?',
-  )
+// 39.5 — sans point de synchro, le rendu sort au tempo écrit de la partition et
+// peut dériver par rapport aux enregistrements. Le rendu démarrant tout seul à
+// l'ouverture, l'avertissement ne peut pas être une boîte de dialogue bloquante :
+// c'est un marqueur posé sur la ligne, qui suit la piste une fois rendue.
+const MIDI_DRIFT_WARNING =
+  'Aucun point de synchro dans le fichier Guitar Pro : cette piste est rendue au '
+  + 'tempo écrit de la partition et peut dériver par rapport aux enregistrements.'
+
+function midiScoreHasSyncPoints() {
+  return (tabSyncPoints?.length ?? 0) > 0
+}
+
+// Les points de synchro sont lus après la construction des lignes MIDI : le
+// marqueur est créé masqué, puis révélé ici.
+function updateMidiSyncWarnings() {
+  const drift = tabExternal && !midiScoreHasSyncPoints()
+  midiTracks.forEach(t => {
+    if (t.warnEl) t.warnEl.toggleAttribute('hidden', !drift)
+  })
 }
 
 // 39.2 — état des boutons de rendu (ligne par ligne et bouton global)
 function updateMidiRenderUi() {
-  const pending = midiTracks.filter(t => !t.rendered).length
+  const failed = midiTracks.filter(t => !t.rendered && t.autoFailed).length
   if (btnRenderMidiEl) {
-    btnRenderMidiEl.toggleAttribute('hidden', !(tabExternal && pending > 0))
+    // Le rendu part tout seul à l'ouverture : ce bouton n'est qu'un repli,
+    // proposé quand une piste au moins n'a pas pu être rendue automatiquement.
+    btnRenderMidiEl.toggleAttribute('hidden', !(tabExternal && failed > 0))
     btnRenderMidiEl.disabled = midiRenderBusy
     btnRenderMidiEl.textContent = midiRenderBusy
       ? 'Rendu…'
-      : `⏺ Rendre le MIDI (${pending})`
+      : `⏺ Réessayer le rendu MIDI (${failed})`
   }
   midiTracks.forEach(t => {
-    if (t.btnRender) t.btnRender.disabled = midiRenderBusy
+    if (t.btnRender) {
+      t.btnRender.disabled = midiRenderBusy
+      // 39.2 — repli : le bouton n'apparaît que si le rendu automatique a
+      // échoué sur cette piste. En marche nominale l'utilisateur n'a rien à cliquer.
+      t.btnRender.toggleAttribute('hidden', !t.autoFailed)
+    }
   })
-  // Le transport est verrouillé le temps du rendu : la piste promue en cours
-  // de route démarrerait à zéro, désalignée de toutes les autres.
-  if (btnPlay) {
-    btnPlay.disabled = midiRenderBusy
-    btnPlay.title = midiRenderBusy ? 'Lecture indisponible pendant le rendu MIDI' : ''
-  }
 }
 
 // 39.4 — la ligne MIDI cède la place à une vraie piste WaveSurfer, au même
@@ -1786,6 +1805,7 @@ function promoteMidiTrackToAudio(state, blob, cachedPeaks = null) {
   state.progressEl = null
   state.btnRender?.remove()
   state.btnRender = null
+  state.autoFailed = false
 
   const idx = wavesurfers.length
   buildTrackRow(
@@ -1804,9 +1824,23 @@ function promoteMidiTrackToAudio(state, blob, cachedPeaks = null) {
       mixKey: midiMixKey(state.index),
       // Même couleur que l'aire vide qu'elle remplace.
       colorIndex: currentTracks.length + state.index,
-      extraTopEls: [state.btnShow],
+      extraTopEls: [state.btnShow, state.warnEl],
     },
   )
+
+  // Le rendu tourne en tâche de fond, lecture comprise : la piste qui arrive en
+  // cours de route démarrerait à zéro pendant que les autres avancent. On la
+  // cale sur la position courante du transport dès qu'elle est prête, et on la
+  // lance si la lecture est en cours.
+  const ws = wavesurfers[idx]
+  ws?.once('ready', () => {
+    try {
+      ws.setTime(currentTimeSec())
+      if (isPlaying) ws.play().catch(() => { /* démarrage refusé : seek suivant */ })
+    } catch (err) {
+      console.warn('[midi-render] calage de la piste promue impossible:', err)
+    }
+  })
   // Réglages déjà enregistrés pour cette piste : la ligne n'existait pas quand
   // mix.json a été lu, c'est ici qu'ils s'appliquent.
   applyMixEntry(idx, savedMixTracks[midiMixKey(state.index)])
@@ -1818,18 +1852,16 @@ function promoteMidiTrackToAudio(state, blob, cachedPeaks = null) {
 }
 
 // 39.1 à 39.3 — rendu d'une piste, encodage FLAC, persistance, promotion.
-// Renvoie l'issue du rendu : 'ok', 'skipped' (rien à faire sur cette piste),
-// 'cancelled' (l'utilisateur a refusé) ou 'failed'. Le bouton global s'en sert
-// pour distinguer une piste déjà rendue d'un vrai échec.
-async function renderMidiTrackToAudio(i, opts = {}) {
+// Renvoie l'issue du rendu : 'ok', 'skipped' (rien à faire sur cette piste)
+// ou 'failed'.
+async function renderMidiTrackToAudio(i) {
   const state = midiTracks[i]
   if (!state || state.rendered || midiRenderBusy) return 'skipped'
   if (!alphaTabApi || !tabScore) return 'failed'
-  if (!opts.skipWarning && !confirmMidiRender()) return 'cancelled'
 
   midiRenderBusy = true
+  state.autoFailed = false
   updateMidiRenderUi()
-  pauseAll()
   state.progressEl.hidden = false
   setMidiRenderProgress(state, 0)
 
@@ -1861,6 +1893,8 @@ async function renderMidiTrackToAudio(i, opts = {}) {
   } catch (err) {
     console.error('[midi-render]', err)
     if (state.progressEl) state.progressEl.hidden = true
+    // Le rendu automatique a échoué : la ligne reprend son bouton de repli.
+    state.autoFailed = true
     showDownloadStatus(`Rendu de « ${midiTrackLabel(state)} » impossible : ${err.message}`, true)
     return 'failed'
   } finally {
@@ -1869,26 +1903,42 @@ async function renderMidiTrackToAudio(i, opts = {}) {
   }
 }
 
-// 39.2 — bouton global : toutes les pistes restantes, séquentiellement.
-// L'avertissement 39.5 n'est posé qu'une fois pour la série.
-async function renderAllMidiTracks() {
-  if (midiRenderBusy) return
-  if (!confirmMidiRender()) return
+// 39.2 — rend séquentiellement toutes les pistes MIDI restantes. Séquentiel et
+// non parallèle : chaque rendu monopolise déjà un worker de synthèse et un
+// worker FLAC, les lancer tous d'un coup ne ferait que ramer de concert.
+// Renvoie le nombre de pistes restées non rendues.
+async function renderPendingMidiTracks() {
   for (let i = 0; i < midiTracks.length; i++) {
     if (midiTracks[i].rendered) continue
-    const status = await renderMidiTrackToAudio(i, { skipWarning: true })
-    // Une piste déjà rendue entre-temps n'est pas un échec : on continue.
-    if (status === 'ok' || status === 'skipped') continue
-    // Échec ou refus : inutile d'enchaîner, mais il faut le dire — sinon la
-    // série s'arrête sans que rien ne l'indique.
-    const rest = midiTracks.filter(t => !t.rendered).length
-    if (rest > 0) {
-      showDownloadStatus(
-        `Rendu interrompu : ${rest} piste${rest > 1 ? 's' : ''} MIDI non rendue${rest > 1 ? 's' : ''}.`,
-        true,
-      )
-    }
-    break
+    await renderMidiTrackToAudio(i)
+  }
+  return midiTracks.filter(t => !t.rendered).length
+}
+
+// 39.2 — déclenchement automatique à l'ouverture du groove, en tâche de fond :
+// le player reste utilisable (lecture comprise) et les pistes apparaissent une
+// à une, chacune remplaçant son aire vide dès que son rendu est prêt.
+async function autoRenderMidiTracks() {
+  // Tab-only : le synthétiseur joue en direct, il n'y a rien à rendre.
+  if (!tabExternal) return
+  const rest = await renderPendingMidiTracks()
+  if (rest > 0) {
+    showDownloadStatus(
+      `${rest} piste${rest > 1 ? 's' : ''} MIDI non rendue${rest > 1 ? 's' : ''} — `
+      + 'utilisez le bouton de rendu pour réessayer.',
+      true,
+    )
+  }
+}
+
+// 39.2 — bouton de repli : relance les pistes que le rendu automatique a ratées.
+async function renderAllMidiTracks() {
+  if (midiRenderBusy) return
+  const rest = await renderPendingMidiTracks()
+  if (rest > 0) {
+    showDownloadStatus(
+      `Rendu impossible pour ${rest} piste${rest > 1 ? 's' : ''} MIDI.`, true,
+    )
   }
 }
 
@@ -1909,6 +1959,8 @@ async function loadCachedMidiRenders() {
     }
   }
   updateMidiRenderUi()
+  // Seules les pistes absentes du cache sont synthétisées.
+  await autoRenderMidiTracks()
 }
 
 // ── 35.4 — Backing track embarqué dans le fichier GP ──────────────────────
@@ -3123,6 +3175,10 @@ async function initTabDrawer(tabFile) {
     } catch (e) {
       console.warn('[tab] lecture des points de synchro impossible :', e)
     }
+
+    // 39.5 — les points de synchro sont connus : le marqueur de dérive peut
+    // être posé sur les lignes MIDI concernées.
+    updateMidiSyncWarnings()
 
     // Durée du score sur l'axe audio (dépend des points de synchro)
     scoreDurationSec = tickToAudioSec(scoreTotalTicks(score))

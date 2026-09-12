@@ -1083,6 +1083,16 @@ body {
   cursor: default;
 }
 
+/* 39.5 — marqueur de dérive : le fichier n'a aucun point de synchro, la piste
+   est rendue au tempo écrit. Avertissement non bloquant, le rendu se fait. */
+.midi-drift-warning {
+  flex-shrink: 0;
+  color: #d9a441;
+  font-size: 0.8rem;
+  line-height: 1;
+  cursor: help;
+}
+
 /* Bouton de rendu d'une piste, dans la sidebar de la ligne MIDI */
 .btn-midi-render {
   padding: 0.1rem 0.35rem;
