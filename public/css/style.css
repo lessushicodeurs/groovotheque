@@ -1375,8 +1375,9 @@ body.tab-no-scroll { overflow: hidden; }
 .tab-drawer--fullscreen .tab-drawer-header { padding-bottom: 0.2rem; }
 .tab-drawer--fullscreen .tab-handle-grip   { height: 6px; }
 
-/* Strip → scroll horizontal ; Fullscreen → scroll vertical */
-.tab-drawer--strip      .tab-content { overflow-x: auto; overflow-y: hidden; }
+/* Strip → scroll horizontal (vertical seulement si la partition, très fournie
+   en pistes, dépasse la hauteur plafonnée du tiroir) ; Fullscreen → vertical */
+.tab-drawer--strip      .tab-content { overflow-x: auto; overflow-y: auto; }
 .tab-drawer--fullscreen .tab-content { overflow-y: auto; overflow-x: hidden; }
 
 /* AlphaTab cursor + selection highlight */

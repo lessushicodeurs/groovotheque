@@ -2051,6 +2051,15 @@ const TAB_HEIGHTS = { collapsed: 40, strip: 280 }
 const TAB_PADDING_DEFAULT = [35, 35]
 const TAB_PADDING_PAGE    = [8, 6]
 
+// Hauteur « naturelle » du strip (partition entière), avant plafonnement.
+// Sur les morceaux à nombreuses pistes — Babooshka en compte dix — un système
+// dépasse largement l'écran : le tiroir doit rester borné et le reste défiler.
+let tabStripNaturalH = TAB_HEIGHTS.strip
+
+function tabStripMaxHeight() {
+  return Math.max(160, Math.min(tabFullscreenHeight(), Math.round(window.innerHeight * 0.6)))
+}
+
 function tabFullscreenHeight() {
   const headerH    = document.querySelector('.player-header')?.getBoundingClientRect().height || 60
   const transportH = document.getElementById('transport')?.getBoundingClientRect().height     || 100
@@ -2408,6 +2417,20 @@ function setupTabManualScroll() {
     if (tabState === 'collapsed') return
     setTabAutoScroll(false)
     if (tabState !== 'strip') return
+    // Partition plus haute que le tiroir (beaucoup de pistes) : la molette
+    // verticale sert à descendre dans les portées, seul le défilement
+    // horizontal du trackpad reste horizontal. Sinon — cas courant — la
+    // molette verticale est convertie en défilement horizontal, sans quoi la
+    // plupart des souris ne pourraient pas parcourir le morceau.
+    const overflowsY = tabContentEl.scrollHeight - tabContentEl.clientHeight > 2
+    if (overflowsY && Math.abs(e.deltaY) >= Math.abs(e.deltaX)) {
+      if (!e.deltaY) return
+      e.preventDefault()
+      tabContentEl.scrollTop += e.deltaY
+      tabScrollV.pos = tabContentEl.scrollTop
+      tabScrollV.vel = 0
+      return
+    }
     const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY
     if (!delta) return
     e.preventDefault()
@@ -2769,7 +2792,10 @@ async function initTabDrawer(tabFile) {
     const surfaceH = parseInt(atSurface.style.height || '0', 10)
     if (surfaceH <= 0) return
     const handleH = tabHandleEl?.getBoundingClientRect().height || 50
-    const newH = surfaceH + handleH + 8
+    tabStripNaturalH = surfaceH + handleH + 8
+    // Plafond : au-delà, le tiroir mangerait l'écran entier et masquerait les
+    // waveforms. Le débord se lit alors au scroll vertical du contenu.
+    const newH = Math.min(tabStripNaturalH, tabStripMaxHeight())
     if (newH === TAB_HEIGHTS.strip) return   // no change → no action
     TAB_HEIGHTS.strip = newH
     document.documentElement.style.setProperty('--tab-strip-height', newH + 'px')
@@ -4748,6 +4774,17 @@ async function init() {
     resizeTimer = setTimeout(() => {
       // 18.4 — le décalage est en pixels : il doit être repris après un
       // changement de largeur.
+      // Le plafond du strip dépend de la hauteur de fenêtre : le reprendre
+      // sans attendre un nouveau rendu de la partition.
+      if (tabState === 'strip' && tabDrawerEl) {
+        const h = Math.min(tabStripNaturalH, tabStripMaxHeight())
+        if (h !== TAB_HEIGHTS.strip) {
+          TAB_HEIGHTS.strip = h
+          document.documentElement.style.setProperty('--tab-strip-height', h + 'px')
+          tabDrawerEl.style.height = h + 'px'
+          setDrawerCssHeight(h)
+        }
+      }
       const maxBefore = zoomMaxScrollX()
       const ratio     = maxBefore > 0 ? zoomScrollX / maxBefore : 0
       adjustTrackWidths()
