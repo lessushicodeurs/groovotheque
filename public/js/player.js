@@ -1681,6 +1681,8 @@ async function buildBackingTrackRow(score) {
   )
   // Tab-only : le backing track est la seule piste mixable du groove.
   setMixDownloadsAvailable(true)
+}
+
 // ── Epic 18 — Zoom horizontal ──────────────────────────────────────────────
 
 // Largeur visible d'un viewport, en pixels *fractionnaires*. clientWidth arrondit
