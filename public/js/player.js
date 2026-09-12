@@ -1234,13 +1234,17 @@ function buildTrackRow(track, idx, cachedPeaks = null, opts = {}) {
   // wsOpts.peaks n'est pris en compte que par le chargement d'URL : les peaks
   // en cache doivent être passés explicitement à loadBlob().
   if (opts.blob) {
+    // Le blob vient soit du backing track embarqué, soit d'un rendu MIDI : le
+    // message doit nommer la bonne ligne, sinon il désigne la mauvaise piste.
+    const what = opts.isBacking ? 'Backing track' : `« ${track.displayName} »`
+    const tag  = opts.isBacking ? '[backing]' : '[midi-render]'
     ws.loadBlob(opts.blob, cachedPeaks?.length > 0 ? cachedPeaks : undefined)
       .catch(err => {
-        console.warn('[backing] chargement impossible:', err)
+        console.warn(`${tag} chargement impossible:`, err)
         // Format audio non lu par le navigateur : le dire sur la ligne plutôt
         // que de laisser une piste muette et vide.
         waveEl.classList.add('track-wave--error')
-        waveEl.textContent = 'Backing track illisible par le navigateur'
+        waveEl.textContent = `${what} illisible par le navigateur`
       })
   }
 
@@ -1553,17 +1557,20 @@ function buildMidiTrackRow(track, idx, color) {
   btnShow.setAttribute('aria-pressed', 'true')
 
   // 39.2 — le rendu audio n'a de sens qu'en mode mixte : en tab-only le
-  // synthétiseur joue déjà la piste en direct.
-  const btnRender = document.createElement('button')
-  btnRender.className = 'track-btn btn-midi-render'
-  btnRender.textContent = '⏺'
-  btnRender.title = 'Rendre en audio'
-  btnRender.setAttribute('aria-label', `Rendre « ${label} » en audio`)
+  // synthétiseur joue déjà la piste en direct, le bouton n'existe pas.
+  let btnRender = null
+  if (tabExternal) {
+    btnRender = document.createElement('button')
+    btnRender.className = 'track-btn btn-midi-render'
+    btnRender.textContent = '⏺'
+    btnRender.title = 'Rendre en audio'
+    btnRender.setAttribute('aria-label', `Rendre « ${label} » en audio`)
+  }
 
   const sidebarTop = document.createElement('div')
   sidebarTop.className = 'track-sidebar-top'
   sidebarTop.append(dot, nameEl, btnShow)
-  if (tabExternal) sidebarTop.append(btnRender)
+  if (btnRender) sidebarTop.append(btnRender)
 
   const btnMute = document.createElement('button')
   btnMute.className = 'track-btn btn-mute'
@@ -1631,7 +1638,7 @@ function buildMidiTrackRow(track, idx, color) {
   midiTracks.push(state)
   const myIdx = midiTracks.length - 1
 
-  btnRender.addEventListener('click', () => { renderMidiTrackToAudio(myIdx) })
+  btnRender?.addEventListener('click', () => { renderMidiTrackToAudio(myIdx) })
 
   btnMute.addEventListener('click', () => {
     state.muted = !state.muted
@@ -3034,9 +3041,15 @@ async function initTabDrawer(tabFile) {
     tabMaster  = true
     try { alphaTabApi.playbackSpeed = currentTempo / 100 } catch { /* player pas prêt */ }
     buildMidiTrackRows(score)
-    buildBackingTrackRow(score).catch(err => console.warn('[tab] backing track:', err))
-    // 39.3 — rendus MIDI déjà en cache : rechargés tels quels, sans resynthèse
-    loadCachedMidiRenders().catch(err => console.warn('[midi-render]', err))
+    // Les deux constructions calculent leur index sur `wavesurfers.length`
+    // après un await : lancées en parallèle elles se disputeraient le même
+    // index, et une piste MIDI rendue pourrait prendre l'index 0 — celui qui
+    // porte le TimelinePlugin, le `timeupdate` et la durée totale.
+    buildBackingTrackRow(score)
+      .catch(err => console.warn('[tab] backing track:', err))
+      // 39.3 — rendus MIDI déjà en cache : rechargés tels quels, sans resynthèse
+      .then(() => loadCachedMidiRenders())
+      .catch(err => console.warn('[midi-render]', err))
     buildTrackSelector(score)
     // 35.3 — les boutons « afficher dans la tab » et les cases du drawer sont
     // tous actifs au départ : AlphaTab, lui, ne rend que sa piste par défaut.
