@@ -369,6 +369,11 @@ app.get('/api/grooves/*/download', async (req, res) => {
         archive.file(path.join(grooveDir, entry.name), { name: entry.name });
       }
     }
+    // 39.4 — les pistes MIDI rendues en audio sont des pistes du groove comme
+    // les autres : elles vivent dans le cache mais appartiennent au zip.
+    for (const render of await listValidMidiRenders(groovePath, grooveDir)) {
+      archive.file(render.path, { name: render.name });
+    }
   } catch (err) {
     archive.abort();
     return;
@@ -659,6 +664,160 @@ app.post('/api/peaks/*', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// ── Epic 39 — Rendus audio des pistes MIDI ────────────────────────────────
+// 39.3 — cache/<groove-path>/midi/<n>.flac + <n>.json (empreinte du .gp source).
+// Regénérables : jamais écrits dans le dossier du groove.
+
+// Même garde de traversée que resolvePeaksPath() : le chemin résolu doit
+// rester sous CACHE_DIR.
+function resolveMidiRenderPath(groovePath, trackIndex, ext, res) {
+  if (!/^\d{1,3}$/.test(trackIndex)) {
+    res.status(400).json({ error: 'Index de piste invalide' });
+    return null;
+  }
+  const filePath = path.resolve(CACHE_DIR, groovePath, 'midi', `${trackIndex}${ext}`);
+  if (!filePath.startsWith(CACHE_DIR + path.sep)) {
+    res.status(400).json({ error: 'Chemin invalide' });
+    return null;
+  }
+  return filePath;
+}
+
+// Empreinte du fichier Guitar Pro source : taille + mtime. Un .gp modifié rend
+// tous les rendus obsolètes, et le bouton « Rendre en audio » repropose le rendu.
+async function gpFingerprint(grooveDir) {
+  const entries = await fs.promises.readdir(grooveDir, { withFileTypes: true });
+  const gpEntry = entries.find(
+    e => e.isFile() && GP_EXTENSIONS.has(path.extname(e.name).toLowerCase())
+  );
+  if (!gpEntry) return null;
+  const st = await fs.promises.stat(path.join(grooveDir, gpEntry.name));
+  return { tabFile: gpEntry.name, size: st.size, mtimeMs: Math.round(st.mtimeMs) };
+}
+
+function fingerprintMatches(a, b) {
+  return !!a && !!b && a.tabFile === b.tabFile && a.size === b.size && a.mtimeMs === b.mtimeMs;
+}
+
+// Découpe « <groove-path>/<n> » en ses deux parties.
+function splitMidiRenderParams(raw, res) {
+  const parts = String(raw).split('/');
+  if (parts.length < 2) {
+    res.status(400).json({ error: 'Chemin invalide' });
+    return null;
+  }
+  const trackIndex = decodeURIComponent(parts.pop());
+  const groovePath = parts.map(decodeURIComponent).join('/');
+  return { groovePath, trackIndex };
+}
+
+// Rendu valide (empreinte à jour) d'une piste, ou null.
+async function readValidMidiRender(groovePath, trackIndex, res) {
+  const flacPath = resolveMidiRenderPath(groovePath, trackIndex, '.flac', res);
+  if (!flacPath) return null;
+  const metaPath = resolveMidiRenderPath(groovePath, trackIndex, '.json', res);
+  if (!metaPath) return null;
+  const grooveDir = resolveGrooveDir(groovePath, res);
+  if (!grooveDir) return null;
+
+  let meta;
+  try {
+    meta = JSON.parse(await fs.promises.readFile(metaPath, 'utf8'));
+  } catch {
+    return { stale: true };
+  }
+  const current = await gpFingerprint(grooveDir).catch(() => null);
+  if (!fingerprintMatches(meta.source, current)) return { stale: true };
+  try {
+    await fs.promises.access(flacPath);
+  } catch {
+    return { stale: true };
+  }
+  return { flacPath, meta };
+}
+
+app.get('/api/midi-render/*', async (req, res) => {
+  const params = splitMidiRenderParams(req.params[0], res);
+  if (!params) return;
+  let found;
+  try {
+    found = await readValidMidiRender(params.groovePath, params.trackIndex, res);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+  if (!found) return;                       // réponse d'erreur déjà envoyée
+  if (found.stale || !found.flacPath) {
+    return res.status(404).json({ error: 'Rendu introuvable' });
+  }
+  res.type('audio/flac');
+  res.sendFile(found.flacPath, err => {
+    if (err && !res.headersSent) res.status(404).json({ error: 'Rendu introuvable' });
+  });
+});
+
+app.post('/api/midi-render/*',
+  express.raw({ type: ['audio/flac', 'application/octet-stream'], limit: '200mb' }),
+  async (req, res) => {
+    const params = splitMidiRenderParams(req.params[0], res);
+    if (!params) return;
+    const { groovePath, trackIndex } = params;
+
+    const flacPath = resolveMidiRenderPath(groovePath, trackIndex, '.flac', res);
+    if (!flacPath) return;
+    const metaPath = resolveMidiRenderPath(groovePath, trackIndex, '.json', res);
+    if (!metaPath) return;
+    const grooveDir = resolveGrooveDir(groovePath, res);
+    if (!grooveDir) return;
+
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+      return res.status(400).json({ error: 'Corps audio manquant' });
+    }
+
+    try {
+      const source = await gpFingerprint(grooveDir);
+      if (!source) return res.status(404).json({ error: 'Aucun fichier Guitar Pro dans ce groove' });
+      await fs.promises.mkdir(path.dirname(flacPath), { recursive: true });
+      await fs.promises.writeFile(flacPath, req.body);
+      await fs.promises.writeFile(metaPath, JSON.stringify({
+        source,
+        trackIndex: Number(trackIndex),
+        // Nom de la piste : le serveur ne sait pas lire le .gp, c'est le client
+        // qui le fournit. Sert à nommer le fichier dans le zip.
+        trackName: typeof req.query.name === 'string' ? req.query.name.slice(0, 120) : null,
+        renderedAt: new Date().toISOString(),
+      }, null, 2), 'utf8');
+      res.status(201).json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+// Rendus valides d'un groove, prêts à être ajoutés au zip de téléchargement.
+async function listValidMidiRenders(groovePath, grooveDir) {
+  const dir = path.resolve(CACHE_DIR, groovePath, 'midi');
+  if (!dir.startsWith(CACHE_DIR + path.sep)) return [];
+  let names;
+  try {
+    names = await fs.promises.readdir(dir);
+  } catch {
+    return [];
+  }
+  const current = await gpFingerprint(grooveDir).catch(() => null);
+  if (!current) return [];
+  const out = [];
+  for (const name of names) {
+    if (!name.endsWith('.flac')) continue;
+    const base = name.slice(0, -5);
+    try {
+      const meta = JSON.parse(await fs.promises.readFile(path.join(dir, base + '.json'), 'utf8'));
+      if (!fingerprintMatches(meta.source, current)) continue;
+      const label = (meta.trackName || `piste-${base}`).replace(/[^\w .()\-À-ÿ]/g, '_');
+      out.push({ path: path.join(dir, name), name: `midi-${base}-${label}.flac` });
+    } catch { /* rendu sans empreinte lisible : ignoré */ }
+  }
+  return out;
+}
 
 // ── Epic 22 — Commentaires ────────────────────────────────────────────────
 
