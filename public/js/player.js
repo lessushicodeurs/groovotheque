@@ -2882,6 +2882,12 @@ async function initTabDrawer(tabFile) {
     const singleBeat = startBeat === lastBeat
     tabDragBeat = null
 
+    // AlphaTab transforme tout glisser sur la partition en « plage de lecture »
+    // et arrête le morceau à son terme — en média externe il met nos waveforms
+    // en pause et rien ne les relance. La boucle est portée par le transport,
+    // pour l'audio comme pour la tablature : on lui retire sa plage.
+    alphaTabApi.playbackRange = null
+
     // Clic simple sur une note : on place la tête de lecture à son attaque.
     // Boucler sur une seule note n'a aucun usage musical, alors que reprendre
     // la lecture depuis un endroit précis de la partition en a un constamment.
