@@ -196,6 +196,22 @@ const trackSourceUrls = []
 // les pistes MIDI rendues et « _backing » pour le backing track embarqué :
 // ces deux-là n'ont pas de fichier dans le dossier du groove.
 const trackMixKeys = []
+// URL d'objet créées pour les blobs sans fichier serveur (backing track, rendus
+// MIDI). Elles doivent vivre aussi longtemps que la page — l'export de mix les
+// consomme et peut être déclenché à tout moment — mais rien ne les libérait :
+// elles le sont au départ de la page.
+const blobObjectUrls = []
+
+function trackedObjectUrl(blob) {
+  const url = URL.createObjectURL(blob)
+  blobObjectUrls.push(url)
+  return url
+}
+
+window.addEventListener('pagehide', () => {
+  blobObjectUrls.forEach(url => URL.revokeObjectURL(url))
+  blobObjectUrls.length = 0
+})
 const trackDurations = []   // duration in seconds per track, set on 'ready'
 let timelinePluginRef = null  // TimelinePlugin instance (track 0), for duration correction
 let timelineExtEl     = null  // container DOM element for TimelinePlugin (in .timeline-row)
@@ -1284,7 +1300,7 @@ function buildTrackRow(track, idx, cachedPeaks = null, opts = {}) {
 
   const state = { volume: 1, muted: false, soloed: false }
   trackStates.push(state)
-  trackSourceUrls.push(track.url ?? (opts.blob ? URL.createObjectURL(opts.blob) : null))
+  trackSourceUrls.push(track.url ?? (opts.blob ? trackedObjectUrl(opts.blob) : null))
   trackMixKeys.push(opts.mixKey ?? track.filename)
   volSliders.push(volSlider)
   wavesurfers.push(ws)
@@ -3519,8 +3535,9 @@ function downloadTracksZip() {
 // 38.2 — Pistes audibles avec leurs réglages courants (mémoire, pas mix.json).
 // Même règle que applyVolumes() : le solo l'emporte sur le mute.
 // Toutes les lignes audio sont prises, backing track embarqué compris (il est
-// audible, il doit être dans l'export). Les pistes MIDI, elles, sont rendues par
-// le synthétiseur d'AlphaTab et restent hors de l'export.
+// audible, il doit être dans l'export). 39.4 — une piste MIDI rendue en audio
+// est une piste audio ordinaire : elle est dans trackStates, donc dans l'export.
+// Seules les pistes MIDI non rendues en sont absentes : elles n'ont pas de son.
 function audibleTracks() {
   const anySolo = anySoloActive()
   return trackStates.map((s, i) => {
