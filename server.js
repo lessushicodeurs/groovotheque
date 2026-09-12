@@ -700,6 +700,12 @@ function fingerprintMatches(a, b) {
   return !!a && !!b && a.tabFile === b.tabFile && a.size === b.size && a.mtimeMs === b.mtimeMs;
 }
 
+// Plafond du corps accepté au POST. Un rendu est du FLAC stéréo 16 bits à
+// 44,1 kHz, soit 10,6 Mo/min de PCM brut ; le FLAC d'une piste d'instrument
+// seule descend couramment sous la moitié. 64 Mo couvrent donc largement une
+// dizaine de minutes de morceau, sans laisser passer n'importe quoi.
+const MIDI_RENDER_MAX_BYTES = 64 * 1024 * 1024;
+
 // Découpe « <groove-path>/<n> » en ses deux parties.
 // decodeURIComponent() lève sur un « % » malformé : la sortie doit être un 400,
 // pas un rejet non rattrapé qui laisserait la requête pendante (Express 4 ne
@@ -773,7 +779,7 @@ app.get('/api/midi-render/*', async (req, res) => {
 });
 
 app.post('/api/midi-render/*',
-  express.raw({ type: ['audio/flac', 'application/octet-stream'], limit: '200mb' }),
+  express.raw({ type: ['audio/flac', 'application/octet-stream'], limit: MIDI_RENDER_MAX_BYTES }),
   async (req, res) => {
     const params = splitMidiRenderParams(req.params[0], res);
     if (!params) return;
@@ -788,6 +794,11 @@ app.post('/api/midi-render/*',
 
     if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
       return res.status(400).json({ error: 'Corps audio manquant' });
+    }
+    // Le cache ne doit contenir que ce qu'il prétend contenir : un flux FLAC
+    // commence toujours par le marqueur « fLaC ».
+    if (req.body.length < 4 || req.body.subarray(0, 4).toString('latin1') !== 'fLaC') {
+      return res.status(400).json({ error: 'Le corps n’est pas un flux FLAC' });
     }
 
     try {
