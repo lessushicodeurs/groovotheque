@@ -35,7 +35,14 @@ export async function renderMidiTrack({ api, alphaTab, score, trackIndex, soundF
   options.sampleRate      = MIDI_RENDER_SAMPLE_RATE
   options.useSyncPoints   = true   // rendu déjà calé sur les points de synchro du .gp
   options.metronomeVolume = 0
-  options.masterVolume    = 1.0
+  // 0,5 et non 1,0 : à plein volume le synthétiseur écrête. Mesuré sur
+  // « Kate Bush — Babooshka », la piste Drums sort à +2,1 dBFS avec
+  // masterVolume 1,0 — l'encodage en entiers 16 bits la rabote. Un facteur 0,5
+  // (−6 dB) ramène le pire cas à −3,9 dBFS et laisse toutes les autres pistes
+  // très en dessous ; le volume de piste du player rattrape la différence.
+  // Changer cette valeur change le son de tous les rendus : incrémenter
+  // MIDI_RENDER_VERSION dans server.js pour périmer les fichiers existants.
+  options.masterVolume    = 0.5
   if (soundFont) options.soundFonts = [soundFont]
 
   // Isolation : la piste visée à fond, toutes les autres à zéro. AlphaTab
