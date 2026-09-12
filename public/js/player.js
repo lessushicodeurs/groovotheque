@@ -1715,7 +1715,14 @@ function buildMidiTrackRows(score) {
 // suivant, le scan du dossier le découvre comme une piste audio ordinaire et le
 // player la rattache à sa piste MIDI au lieu d'en refaire une seconde.
 
-const MIDI_SOUNDFONT_URL = '/vendor/alphatab/soundfont/sonivox.sf2'
+// Soundfont unique du player, injecté par le serveur dans player.html depuis
+// config.json (clé « soundFont »). Une seule source de vérité : ce même fichier
+// sert au rendu hors-ligne des pistes MIDI et à la lecture directe du
+// synthétiseur en tab-only. Le repli sur le sonivox livré avec AlphaTab est
+// déjà fait côté serveur ; la valeur en dur ici ne sert qu'au cas où la page
+// serait servie sans injection (test unitaire, page statique).
+const MIDI_SOUNDFONT_URL =
+  window.SOUNDFONT?.url ?? '/vendor/alphatab/soundfont/sonivox.sf2'
 const MIDI_RENDER_PREFIX = 'midi-'
 
 let midiRenderBusy = false
@@ -3157,7 +3164,8 @@ async function initTabDrawer(tabFile) {
         : alphaTabMod.PlayerMode.EnabledSynthesizer,
       enableCursor:         true,
       enableUserInteraction: true,
-      soundFont:            `${AT_BASE}/soundfont/sonivox.sf2`,
+      // Même soundfont que le rendu hors-ligne : cf. MIDI_SOUNDFONT_URL.
+      soundFont:            MIDI_SOUNDFONT_URL,
       scrollMode:           0,   // Off — scroll géré par enforceTabCursorVisible (AlphaTab scroll ne fonctionne pas sans son player interne actif)
     },
     display: {

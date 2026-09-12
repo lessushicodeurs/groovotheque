@@ -9,6 +9,95 @@ const app = express();
 const PORT = process.env.PORT || 3099;
 const CACHE_DIR = path.resolve(__dirname, 'cache');
 
+// ── Configuration du projet (config.json) ─────────────────────────────────
+// Même principe que `scripts/process-rehearsal.yaml` : un fichier local ignoré
+// par git, doublé d'un `config.example.json` suivi et documenté. Absent, le
+// projet tourne quand même sur ses valeurs par défaut — un clone frais n'a
+// aucune étape manuelle obligatoire.
+const CONFIG_FILE = path.join(__dirname, 'config.json');
+
+function readConfig() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+    return (parsed && typeof parsed === 'object') ? parsed : {};
+  } catch (err) {
+    if (err.code !== 'ENOENT') console.warn('[config] config.json illisible:', err.message);
+    return {};
+  }
+}
+
+// ── Soundfont (epic 39) ───────────────────────────────────────────────────
+// Une seule source de vérité pour tout le player : le rendu hors-ligne des
+// pistes MIDI et la lecture directe du synthétiseur chargent le même fichier,
+// servi par /soundfont/<nom>.
+//
+// Les soundfonts téléchargés vivent dans `soundfonts/`, ignoré par git — un
+// MuseScore_General pèse 38 Mo, il n'a rien à faire dans l'historique. Ceux
+// livrés avec AlphaTab (sonivox.sf2, sonivox.sf3) sont utilisables par leur
+// seul nom, sans rien télécharger.
+const SOUNDFONTS_DIR  = path.join(__dirname, 'soundfonts');
+const ALPHATAB_SF_DIR = path.join(__dirname, 'node_modules/@coderline/alphatab/dist/soundfont');
+// Défaut : MuseScore_General.sf3 (MIT, 38 Mo, samples Vorbis décodés nativement
+// par AlphaTab). Absent — cas du clone frais — on retombe sur le sonivox.sf2
+// livré avec AlphaTab : le projet reste fonctionnel, en moins bon son.
+const DEFAULT_SOUNDFONT  = 'MuseScore_General.sf3';
+const FALLBACK_SOUNDFONT = 'sonivox.sf2';
+
+// Chemins où chercher un soundfont désigné par son seul nom de fichier.
+function soundFontCandidates(name) {
+  if (path.isAbsolute(name)) return [path.normalize(name)];
+  // Aucun séparateur accepté : le nom vient d'un fichier de config, mais il
+  // finit dans une URL et dans un chemin de fichier.
+  if (path.basename(name) !== name || name === '.' || name === '..') return [];
+  return [path.join(SOUNDFONTS_DIR, name), path.join(ALPHATAB_SF_DIR, name)];
+}
+
+function statSoundFont(name) {
+  for (const candidate of soundFontCandidates(name)) {
+    try {
+      const st = fs.statSync(candidate);
+      if (st.isFile()) return { name: path.basename(candidate), path: candidate, size: st.size };
+    } catch { /* candidat suivant */ }
+  }
+  return null;
+}
+
+let lastSoundFontWarning = null;
+
+// Soundfont effectivement servi : celui de la config s'il existe, sinon le
+// repli livré avec AlphaTab. Relu à chaque appel — changer config.json ne
+// demande pas de redémarrer le serveur, un rechargement de page suffit.
+function resolveSoundFont() {
+  const requested = String(readConfig().soundFont || DEFAULT_SOUNDFONT);
+  const found = statSoundFont(requested);
+  if (found) {
+    lastSoundFontWarning = null;
+    return { ...found, requested, fallback: false };
+  }
+  if (lastSoundFontWarning !== requested) {
+    lastSoundFontWarning = requested;
+    console.warn(`[soundfont] « ${requested} » introuvable — repli sur ${FALLBACK_SOUNDFONT}.`
+      + ` Voir README (« Soundfont ») ou scripts/fetch-soundfont.sh.`);
+  }
+  const fallback = statSoundFont(FALLBACK_SOUNDFONT);
+  if (!fallback) return null;
+  return { ...fallback, requested, fallback: true };
+}
+
+// Vue publique : ce que le player a besoin de savoir. `size` entre dans
+// l'empreinte des rendus MIDI, il distingue deux fichiers de même nom.
+function soundFontInfo() {
+  const sf = resolveSoundFont();
+  if (!sf) return null;
+  return {
+    name:      sf.name,
+    size:      sf.size,
+    requested: sf.requested,
+    fallback:  sf.fallback,
+    url:       `/soundfont/${encodeURIComponent(sf.name)}`,
+  };
+}
+
 function loadUsers() {
   const authFile = path.join(__dirname, '.auth');
   if (!fs.existsSync(authFile)) {
@@ -54,14 +143,36 @@ app.use(express.urlencoded({ extended: false }));
 app.get('/player.html', (req, res) => {
   const template = fs.readFileSync(path.join(__dirname, 'public', 'player.html'), 'utf8');
   const user = req.auth?.user ?? 'anonymous';
+  // 39.2 — le soundfont est injecté ici plutôt que récupéré en fetch : le
+  // player en a besoin avant d'instancier AlphaTab, et les deux usages (rendu
+  // hors-ligne et lecture directe) doivent lire la même valeur.
   const injected = template.replace(
     '</head>',
-    `  <script>window.CURRENT_USER = ${JSON.stringify(user)};</script>\n</head>`
+    `  <script>window.CURRENT_USER = ${JSON.stringify(user)};`
+    + `window.SOUNDFONT = ${JSON.stringify(soundFontInfo())};</script>\n</head>`
   );
   res.type('html').send(injected);
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
+
+// 39.2 — Le soundfont configuré, servi sous son vrai nom de fichier : AlphaTab
+// distingue le SF2 du SF3 à l'extension autant qu'aux octets. Un nom qui n'est
+// pas celui du soundfont courant n'est pas servi — pas de lecture arbitraire.
+app.get('/soundfont/:name', (req, res) => {
+  const sf = resolveSoundFont();
+  if (!sf || req.params.name !== sf.name) {
+    return res.status(404).json({ error: 'Soundfont introuvable' });
+  }
+  res.type('application/octet-stream');
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  res.sendFile(sf.path);
+});
+
+// Vue de la configuration côté client (diagnostic et tests).
+app.get('/api/config', (req, res) => {
+  res.json({ soundFont: soundFontInfo() });
+});
 
 // 20.1 — Extensions media pour la détection groove vs conteneur
 const AUDIO_EXTENSIONS     = new Set(['.mp3', '.wav', '.flac', '.ogg']);
@@ -699,11 +810,21 @@ async function gpFingerprint(grooveDir) {
   );
   if (!gpEntry) return null;
   const st = await fs.promises.stat(path.join(grooveDir, gpEntry.name));
-  return { tabFile: gpEntry.name, size: st.size, mtimeMs: Math.round(st.mtimeMs) };
+  // Le soundfont fait partie de l'empreinte : rien dans le nom du rendu ne dit
+  // avec quoi il a été synthétisé, donc c'est ici qu'un changement de soundfont
+  // dans config.json périme les `midi-*.flac` et déclenche un nouveau rendu.
+  const sf = resolveSoundFont();
+  return {
+    tabFile: gpEntry.name,
+    size: st.size,
+    mtimeMs: Math.round(st.mtimeMs),
+    soundFont: sf ? `${sf.name}:${sf.size}` : null,
+  };
 }
 
 function fingerprintMatches(a, b) {
-  return !!a && !!b && a.tabFile === b.tabFile && a.size === b.size && a.mtimeMs === b.mtimeMs;
+  return !!a && !!b && a.tabFile === b.tabFile && a.size === b.size
+    && a.mtimeMs === b.mtimeMs && a.soundFont === b.soundFont;
 }
 
 // Même garde de traversée que resolvePeaksPath() : le chemin résolu doit rester
