@@ -1,3 +1,57 @@
 {
-  "soundFont": "MuseScore_General.sf3"
+  "_lisez-moi": [
+    "Configuration locale de groovotheque. Copier ce fichier en config.json :",
+    "    cp config.example.json config.json",
+    "Le fichier est facultatif : sans lui le projet tourne sur ses valeurs par défaut.",
+    "Le serveur le relit à chaque requête — modifier une valeur et recharger la page suffit.",
+    "JSON n'accepte pas de commentaires : les clés commençant par « _ » n'en sont pas,",
+    "elles sont ignorées par le serveur et servent de documentation. On peut les laisser.",
+    "La variable d'environnement GROOVOTHEQUE_CONFIG déplace ce fichier."
+  ],
+
+  "soundFont": "MuseScore_General.sf3",
+
+  "_soundFont": [
+    "Banque de sons qui donne leur timbre aux pistes MIDI. Une seule valeur sert à la fois",
+    "au rendu audio hors-ligne des pistes MIDI et à la lecture directe du synthétiseur.",
+    "Nom de fichier cherché dans soundfonts/ puis parmi ceux livrés avec AlphaTab",
+    "(node_modules/@coderline/alphatab/dist/soundfont/) ; un chemin absolu est aussi accepté.",
+    "Introuvable, le serveur retombe sur sonivox.sf2 en le signalant dans ses logs.",
+    "Un seul soundfont à la fois. En changer périme les rendus midi-*.flac déjà écrits :",
+    "ils sont effacés et refaits à l'ouverture suivante du groove."
+  ],
+
+  "_soundFont_valeurs": {
+    "MuseScore_General.sf3": [
+      "DÉFAUT. 38 Mio, SF3 (samples Vorbis décodés nativement par AlphaTab), licence MIT.",
+      "+ La meilleure qualité de la liste pour un poids raisonnable.",
+      "- À télécharger : scripts/fetch-soundfont.sh",
+      "- IMPORTANT : le script repasse ensuite le fichier en mono. AlphaTab n'ouvre que les",
+      "  samples mono et 146 des 1246 samples de cette banque sont stéréo ; sans conversion,",
+      "  4 presets de piano sont muets et le rendu de TOUTES les pistes est détruit.",
+      "  Un fichier déposé à la main doit passer par : node scripts/sf-mono.js <fichier>"
+    ],
+    "MuseScore_General.sf2": [
+      "~206 Mo, SF2 (PCM non compressé), licence MIT. Même banque que ci-dessus.",
+      "+ Chargement sans décodage Vorbis.",
+      "- 206 Mo à télécharger et à tenir en mémoire pour un résultat identique à l'oreille.",
+      "  Rarement justifié : scripts/fetch-soundfont.sh musescore-hq"
+    ],
+    "sonivox.sf2": [
+      "1,29 Mio, SF2 (PCM non compressé), licence Apache 2.0. C'est le repli du serveur.",
+      "+ Livré avec AlphaTab : rien à télécharger, chargement instantané, 100 % mono.",
+      "- Soundfont embarqué d'Android : qualité faible, timbres très synthétiques."
+    ],
+    "sonivox.sf3": [
+      "954 Kio, SF3 (samples Vorbis), licence Apache 2.0. Même banque que sonivox.sf2.",
+      "+ Encore plus léger.",
+      "- Même qualité faible."
+    ],
+    "<autre.sf2 | autre.sf3 | /chemin/absolu.sf2>": [
+      "N'importe quelle banque SoundFont 2 ou 3 déposée dans soundfonts/.",
+      "- Vérifier qu'elle ne contient aucun sample stéréo :",
+      "    node scripts/sf-mono.js --check soundfonts/<fichier>",
+      "  et la convertir au besoin :  node scripts/sf-mono.js soundfonts/<fichier>"
+    ]
+  }
 }

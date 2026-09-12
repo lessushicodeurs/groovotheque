@@ -35,6 +35,10 @@ cp config.example.json config.json
 |---|---|---|
 | `soundFont` | Soundfont du player (nom de fichier ou chemin absolu) | `MuseScore_General.sf3` |
 
+`config.example.json` documente les valeurs acceptées et leurs compromis directement dans
+le fichier : JSON n'ayant pas de commentaires, les clés commençant par `_` en tiennent lieu
+et sont ignorées par le serveur.
+
 Le serveur relit `config.json` à chaque requête : modifier la valeur et recharger la page
 suffit, pas besoin de redémarrer.
 
@@ -67,15 +71,38 @@ scripts/fetch-soundfont.sh          # MuseScore_General.sf3 (38 Mo)
 scripts/fetch-soundfont.sh musescore-hq   # MuseScore_General.sf2 (206 Mo)
 ```
 
-> **Réserve sur MuseScore_General.** AlphaTab ne charge que les samples *mono*
-> (`sampleType & 1`) : il ignore les samples stéréo liés, en clair dans ses logs
-> (« Skipping load of unsupported sample … sample type 18/20 is not supported »).
-> Sur MuseScore_General cela touche les pianos, qui restent audibles grâce à leurs
-> autres samples — mais certains presets peuvent sortir **complètement muets**.
-> Constaté : la piste « Electric Guitar » de *Kate Bush — Babooshka* rend un signal nul
-> avec MuseScore_General, alors qu'elle sonne avec `sonivox.sf2`. Le rendu muet n'est pas
-> sauvegardé : la ligne garde son bouton « Réessayer le rendu en audio » et le message
-> l'explique. En cas de piste muette, essayer `sonivox.sf2`.
+> **Conversion mono, obligatoire.** AlphaTab ne charge que les samples *mono*
+> (`sampleType & 1`) : il écarte les samples stéréo… mais garde les régions qui les
+> référencent. Ces régions lisent alors hors d'un tableau vide et produisent des `NaN`.
+> Comme `NaN × 0 = NaN`, **une seule piste fautive, même à volume nul, anéantit le rendu
+> de toutes les autres** — et la voix ne s'éteint jamais, elle pollue jusqu'à la fin du
+> morceau. Converti en entiers 16 bits, le `NaN` donne 0 : silence complet.
+> MuseScore_General compte 146 samples stéréo sur 1246 (11,7 %), soit 4 presets de piano
+> entièrement muets (Grand Piano, Bright Grand, Honky-Tonk, Mellow Grand) et 31 partiels.
+>
+> `scripts/fetch-soundfont.sh` règle le problème à l'installation en repassant tous les
+> samples en mono (`scripts/sf-mono.js`) : 2 octets réécrits par sample dans le chunk
+> `shdr`, **aucune donnée audio touchée**, ~1 s pour 38 Mo. Chaque moitié d'une paire
+> stéréo devient une voix mono panoramiquée par sa région : le timbre est conservé.
+> Résultat : 309 presets intacts, 0 partiel, 0 muet.
+>
+> Un soundfont déposé à la main doit y passer aussi :
+> ```bash
+> node scripts/sf-mono.js --check soundfonts/<fichier>   # compte les samples stéréo
+> node scripts/sf-mono.js soundfonts/<fichier>           # convertit sur place
+> ```
+> Le serveur détecte le cas au démarrage et le signale dans ses logs
+> (« contient N sample(s) stéréo »).
+
+> **Fuite du métronome (défaut connu d'AlphaTab).** `AlphaSynthAudioExporter` initialise
+> son canal de métronome sur le canal 16, puis relit le volume voulu par
+> `channelGetMixVolume(16)`. Sur un score assez fourni pour que le canal 16 appartienne à
+> une vraie piste, c'est le volume de cette piste qui est relu : isoler cette piste
+> rallume le métronome malgré `metronomeVolume: 0`, et son rendu porte un clic sur chaque
+> temps. Aucun contournement côté appelant : en navigateur l'exporteur vit dans un worker
+> dont l'interface n'expose que `initialize`, `render` et `destroy`, et les volumes passés
+> en options sont indexés par piste, pas par canal. Détails dans
+> `public/js/midi-render.js`.
 
 > **Un seul soundfont à la fois.** AlphaTab sait empiler plusieurs banques (la dernière
 > chargée l'emporte en cas de collision banque/preset), mais `config.json` n'expose qu'une
@@ -85,6 +112,14 @@ scripts/fetch-soundfont.sh musescore-hq   # MuseScore_General.sf2 (206 Mo)
 > **Changer de soundfont périme les rendus MIDI.** Le soundfont retenu entre dans
 > l'empreinte des rendus, à côté de la taille et de la date du fichier Guitar Pro : les
 > `midi-*.flac` du dossier sont effacés et refaits à l'ouverture suivante du groove.
+> L'empreinte retient son nom, sa taille **et son nombre de samples stéréo** — la
+> conversion mono ne change pas la taille du fichier, elle serait passée inaperçue.
+> Un compteur de version du moteur de rendu (`MIDI_RENDER_VERSION`, dans `server.js`)
+> complète l'empreinte : l'incrémenter périme tous les rendus existants, ce qu'il faut
+> faire dès qu'un changement modifie le son produit à `.gp` et soundfont identiques.
+> C'est le cas du niveau de sortie : le rendu applique `masterVolume: 0.5` et non 1,0,
+> qui écrêtait (la piste Drums de *Babooshka* sortait à +2,1 dBFS ; elle est à −3,9 dBFS
+> maintenant, et le volume de piste du player rattrape la différence).
 
 ## Scripts
 
@@ -93,7 +128,8 @@ Tous les scripts sont dans `scripts/`.
 | Script | Rôle |
 |---|---|
 | `setup.sh` | Installe les dépendances système du pipeline audio |
-| `fetch-soundfont.sh` | Télécharge un soundfont MuseScore_General dans `soundfonts/` |
+| `fetch-soundfont.sh` | Télécharge un soundfont MuseScore_General dans `soundfonts/` et le repasse en mono |
+| `sf-mono.js` | Repasse en mono les samples stéréo d'un soundfont SF2/SF3 (`--check` pour compter) |
 | `restart-server.sh` | Redémarre le serveur Node.js |
 | `process-rehearsal.sh` | Pipeline de traitement audio (découpe, normalisation, export) |
 | `strip-parent-prefix.sh` | Supprime le préfixe parent des sous-dossiers de grooves |
