@@ -143,13 +143,30 @@ export async function renderMidiTrack({ api, alphaTab, score, trackIndex, soundF
 // libres. Leur volume étant à 0, le timbre qu'elles y prennent n'a aucune
 // importance : elles sont muettes, elles ne font plus que libérer la place.
 
-// Le canal 17 (indice 16) est celui du métronome de l'exporteur : on n'y
-// déplace jamais rien. Cf. la note sur la fuite du métronome plus haut.
-const MIDI_CHANNEL_COUNT = 16
+// Canal du métronome de l'exporteur : `AlphaSynthAudioExporter` l'initialise
+// sur `DefaultChannelCount - 1`, soit l'indice 16 (le 17e canal). Aucune piste
+// n'y est déplacée, et la piste isolée en est retirée — voir plus bas.
+const METRONOME_CHANNEL = 16
+
+// Garde-fou de boucle : un score réaliste ne dépasse jamais quelques dizaines
+// de canaux (AlphaTab n'impose pas la limite à 16 de la norme MIDI, « Babooshka »
+// en utilise 19).
+const MAX_CHANNEL = 64
+
+/** Premier canal qu'aucune piste n'occupe, en évitant celui du métronome. */
+function takeFreeChannel(used) {
+  for (let c = 0; c <= MAX_CHANNEL; c++) {
+    if (c === METRONOME_CHANNEL || used.has(c)) continue
+    used.add(c)
+    return c
+  }
+  return null
+}
 
 /**
  * Déplace les pistes qui partagent un canal avec la piste visée, pour que
- * `trackVolume` puisse réellement l'isoler.
+ * `trackVolume` puisse réellement l'isoler. Retire aussi la piste visée du
+ * canal du métronome, dont elle rallumerait le clic.
  *
  * @param {object} score
  * @param {number} trackIndex piste à isoler
@@ -174,10 +191,16 @@ export function isolateTrackChannels(score, trackIndex) {
     used.add(t.playbackInfo.secondaryChannel)
   }
 
-  const free = []
-  for (let c = 0; c < MIDI_CHANNEL_COUNT; c++) if (!used.has(c)) free.push(c)
-
   const relocated = []
+  const fail = () => {
+    restoreTrackChannels(relocated)
+    throw new Error(
+      `la piste « ${target.name} » partage son canal MIDI avec d’autres pistes `
+      + 'et il ne reste aucun canal libre pour les écarter : elle ne peut pas '
+      + 'être rendue seule.',
+    )
+  }
+
   for (const t of tracks) {
     if (t.index === trackIndex) continue
     const info = t.playbackInfo
@@ -185,22 +208,10 @@ export function isolateTrackChannels(score, trackIndex) {
     const hitsSecondary = targetChannels.has(info.secondaryChannel)
     if (!hitsPrimary && !hitsSecondary) continue
 
-    const needed = (hitsPrimary ? 1 : 0)
-      + (hitsSecondary && info.secondaryChannel !== info.primaryChannel ? 1 : 0)
-    if (free.length < needed) {
-      restoreTrackChannels(relocated)
-      throw new Error(
-        `la piste « ${target.name} » partage le canal MIDI `
-        + `${[...targetChannels].map(c => c + 1).join(' / ')} avec d’autres pistes, `
-        + 'et il ne reste aucun canal libre pour les écarter : elle ne peut pas '
-        + 'être rendue seule.',
-      )
-    }
-
     relocated.push({ info, primary: info.primaryChannel, secondary: info.secondaryChannel })
     if (hitsPrimary) {
-      const c = free.shift()
-      used.add(c)
+      const c = takeFreeChannel(used)
+      if (c === null) fail()
       if (info.secondaryChannel === info.primaryChannel) {
         // Piste à canal unique (cas des percussions) : les deux suivent.
         info.primaryChannel = c
@@ -210,11 +221,38 @@ export function isolateTrackChannels(score, trackIndex) {
       info.primaryChannel = c
     }
     if (hitsSecondary && info.secondaryChannel !== info.primaryChannel) {
-      const c = free.shift()
-      used.add(c)
+      const c = takeFreeChannel(used)
+      if (c === null) fail()
       info.secondaryChannel = c
     }
   }
+
+  // Fuite du métronome. `AlphaSynthAudioExporter.setup()` relit le volume voulu
+  // pour son canal de métronome par `channelGetMixVolume(16)`. Sur un score
+  // assez fourni pour que ce canal appartienne à une vraie piste, isoler cette
+  // piste y pose 1,0 et rallume le métronome malgré `metronomeVolume: 0` : le
+  // rendu sort avec un clic sur chaque temps (constaté sur « Piano RH » de
+  // Babooshka, canaux 16/17). Rien à régler côté exporteur — en navigateur il
+  // vit dans un worker qui n'expose que `initialize`, `render` et `destroy`.
+  // Mais rien n'oblige la piste à rester sur ce canal : un canal MIDI ordinaire
+  // ne porte aucun timbre en propre, le changement de banque et de programme
+  // étant réémis pour chaque canal par le générateur MIDI. On l'écarte donc, et
+  // le canal du métronome retrouve le volume 0 des pistes muettes.
+  const info = target.playbackInfo
+  if (info.primaryChannel === METRONOME_CHANNEL || info.secondaryChannel === METRONOME_CHANNEL) {
+    relocated.push({ info, primary: info.primaryChannel, secondary: info.secondaryChannel })
+    if (info.primaryChannel === METRONOME_CHANNEL) {
+      const c = takeFreeChannel(used)
+      if (c === null) fail()
+      if (info.secondaryChannel === METRONOME_CHANNEL) info.secondaryChannel = c
+      info.primaryChannel = c
+    } else {
+      const c = takeFreeChannel(used)
+      if (c === null) fail()
+      info.secondaryChannel = c
+    }
+  }
+
   return relocated
 }
 
