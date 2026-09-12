@@ -1516,12 +1516,16 @@ function buildMidiTrackRow(track, idx, color) {
     state.muted = !state.muted
     btnMute.classList.toggle('active', state.muted)
     btnMute.setAttribute('aria-pressed', String(state.muted))
+  // La piste est de fait muette : on l'affiche mute (bouton M allumé), sans
+  // possibilité de la démuter tant qu'il y a de l'audio.
     applyMix()
   })
 
   btnSolo.addEventListener('click', () => {
     state.soloed = !state.soloed
     btnSolo.classList.toggle('active', state.soloed)
+    btnMute.classList.add('active')
+    btnMute.setAttribute('aria-pressed', 'true')
     btnSolo.setAttribute('aria-pressed', String(state.soloed))
     applyMix()
   })

@@ -383,6 +383,12 @@ body {
   pointer-events: none;
 }
 
+/* Piste MIDI muette faute de synthé : le M allumé doit rester lisible malgré
+   l'atténuation des contrôles inactifs. */
+.track-sidebar-ctrl--inert .btn-mute.active {
+  opacity: 1;
+}
+
 .track-btn {
   background: #1c1c1c;
   border: 1px solid #2a2a2a;
