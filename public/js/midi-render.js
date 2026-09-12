@@ -14,6 +14,10 @@ export const MIDI_RENDER_SAMPLE_RATE = 44100
 // sans multiplier les allers-retours avec le worker.
 const CHUNK_MS = 1000
 
+// Seuil de silence : −80 dBFS. En dessous, le rendu ne contient rien
+// d'audible — un bruit de fond de synthétiseur reste bien au-dessus.
+const SILENCE_PEAK = 1e-4
+
 /**
  * Rend une piste MIDI du score en AudioBuffer stéréo 44,1 kHz.
  *
@@ -64,7 +68,33 @@ export async function renderMidiTrack({ api, alphaTab, score, trackIndex, soundF
   }
 
   onProgress?.(1)
-  return interleavedToAudioBuffer(chunks, totalSamples)
+  const buffer = interleavedToAudioBuffer(chunks, totalSamples)
+
+  // Un rendu plein de zéros s'encode et se met en cache sans broncher : la
+  // piste reviendrait muette à chaque ouverture du groove sans que rien ne le
+  // dise. Les causes sont connues (soundfont absent, piste muette ou à volume
+  // nul dans le .gp — `trackVolume` est un multiplicateur), autant les nommer.
+  if (peakAmplitude(buffer) < SILENCE_PEAK) {
+    throw new Error(
+      'le rendu est muet (aucun signal au-dessus de −80 dBFS). '
+      + 'Vérifiez que la piste n’est ni muette ni à volume nul dans le fichier '
+      + 'Guitar Pro, et que le soundfont est bien disponible.',
+    )
+  }
+  return buffer
+}
+
+/** Pic absolu d'un AudioBuffer, tous canaux confondus. */
+export function peakAmplitude(buffer) {
+  let peak = 0
+  for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
+    const data = buffer.getChannelData(ch)
+    for (let i = 0; i < data.length; i++) {
+      const v = Math.abs(data[i])
+      if (v > peak) peak = v
+    }
+  }
+  return peak
 }
 
 /**
