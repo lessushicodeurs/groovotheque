@@ -539,6 +539,8 @@ body {
 .track-wave--midi {
   flex: 1;
   min-width: 0;
+  /* Ancre du calque de progression du rendu (epic 39) */
+  position: relative;
   background:
     repeating-linear-gradient(
       90deg,
@@ -1117,8 +1119,10 @@ body {
   );
 }
 
-.track-wave--midi {
-  position: relative;
+/* `display: flex` l'emporterait sur la règle générique [hidden] : sans ceci le
+   calque resterait affiché — et couvrirait l'aire — après un rendu en échec. */
+.midi-render-progress[hidden] {
+  display: none;
 }
 
 /* ── Download ────────────────────────────── */
