@@ -16,11 +16,39 @@ Ouvrir http://localhost:3099
 ## Structure
 
 - `grooves/` — dossiers déposés par FTP (un sous-dossier = un titre)
-- `cache/` — peaks JSON générés côté client et mis en cache
+- `cache/` — fichiers dérivés des grooves, refaits tout seuls si on les efface (voir « Cache »)
 - `public/` — frontend statique (HTML/CSS/JS, pas de build)
 - `.auth` — credentials Basic Auth (`user:password`, un par ligne)
 - `soundfonts/` — soundfonts téléchargés (ignoré par git, voir « Configuration »)
 - `config.json` — configuration locale (ignoré par git, voir « Configuration »)
+
+## Cache
+
+`cache/` reprend l'arborescence de `grooves/` et ne contient que des fichiers **dérivés** : le
+supprimer ne perd rien, tout se refait à l'ouverture suivante des grooves concernés. Il est
+ignoré par git et jamais déployé.
+
+| Contenu | Chemin | Fait quand |
+|---|---|---|
+| Peaks des waveforms | `<groove>/<piste>.peaks.json` | À la première lecture d'une piste |
+| Empreinte des rendus MIDI | `<groove>/midi/fingerprint.json` | Au rendu d'une piste MIDI ; c'est elle qui périme les `midi-*.flac` quand le `.gp` ou le soundfont change |
+| Copies recalables des pistes | `<groove>/seekable/<piste>.flac` | À l'ouverture d'un groove contenant des MP3 ou un backing track |
+
+> **Copies recalables : le cache pèse environ deux fois les fichiers source.** Chrome ne rejoint
+> pas la position demandée dans un MP3 à débit variable — il passe par la table Xing, trop
+> grossière, et manque sa cible de plusieurs centaines de millisecondes, d'une valeur différente
+> selon l'endroit visé. Le backing track embarqué dans un `.gp` est de l'AAC, dont l'amorce est
+> oubliée après un seek (+47,9 ms constants). Les deux ne jouent donc plus ensemble dès qu'on ne
+> part pas du début, ni à chaque rebond de boucle. Le player garde donc en cache une copie FLAC
+> de ces pistes et la lit à leur place ; les fichiers du dossier ne sont pas touchés et restent
+> ce qui s'affiche, se télécharge et part dans le zip. Sur un morceau de 4 min 42 à six pistes :
+> 10 s de conversion à la première ouverture, 72 Mo de cache pour 34 Mo de source.
+> Le `.wav`, le `.flac` et l'`.ogg` se calent déjà juste et ne sont pas copiés.
+> Mesures et options écartées dans [docs/3. adr/calage-des-pistes-au-seek.md](docs/3.%20adr/calage-des-pistes-au-seek.md).
+
+> **Le mobile lit les copies, il n'en fabrique pas.** Décoder, encoder et déposer plusieurs
+> dizaines de mégaoctets est un travail de poste fixe. Un groove ouvert seulement depuis un
+> téléphone garde donc le décalage au seek jusqu'à ce qu'un desktop l'ouvre une fois.
 
 ## Configuration — `config.json`
 
