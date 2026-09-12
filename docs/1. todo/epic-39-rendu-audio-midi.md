@@ -20,10 +20,10 @@ En mode mixte (fichier Guitar Pro + fichiers audio), AlphaTab tourne en `PlayerM
 | Granularité | Une piste audio rendue **par piste MIDI**, pas un mixdown unique — c'est tout l'intérêt : les pistes restent mixables séparément |
 | Isolation d'une piste | Une passe de rendu par piste, via `AudioExportOptions.trackVolume` : la piste ciblée à 1.0, toutes les autres à 0.0 |
 | Métronome | `metronomeVolume: 0` — le métronome reste une piste audio du groove quand il existe |
-| Déclenchement | À la demande, par un bouton explicite. Jamais automatique à l'ouverture : le rendu coûte plusieurs secondes par piste |
+| Déclenchement | Automatique à l'ouverture du groove, en tâche de fond et piste par piste. Le player reste utilisable pendant ce temps et les pistes apparaissent au fur et à mesure. Un bouton de repli, par ligne et global, ne sert qu'à relancer un rendu qui a échoué |
 | Persistance | Fichiers écrits dans `cache/<groove-path>/midi/`, sur le modèle du cache de peaks (`/api/peaks/*`). Regénérables, jamais mélangés aux vrais fichiers du groove |
 | Format de stockage | FLAC via `encodeFlac()` de l'epic 38 — sans perte, et le soundfont produit déjà un son fragile qu'un second encodage destructif dégraderait |
-| Invalidation | Clé de cache = empreinte du `.gp` (taille + mtime) ; un `.gp` modifié rend le cache obsolète et le bouton repropose le rendu |
+| Invalidation | Clé de cache = empreinte du `.gp` (taille + mtime) ; un `.gp` modifié rend le cache obsolète et les pistes sont re-rendues à l'ouverture suivante |
 | Statut des pistes une fois rendues | Pistes WaveSurfer ordinaires : le code de mix, de boucle et d'export de l'epic 38 les traite sans branche spécifique |
 | Tempo | Les pistes rendues suivent l'étirement WaveSurfer comme les autres pistes audio. Pas de re-rendu au changement de tempo |
 | Transposition / changement de soundfont | Hors périmètre — invaliderait le rendu, à traiter plus tard si le besoin apparaît |
@@ -43,15 +43,24 @@ Encapsuler `api.exportAudio()` dans une fonction qui rend **une** piste du score
 - Appeler `exporter.destroy()` dans un `finally` — l'exporter tient un synthétiseur
 - Utiliser `chunk.currentTime / chunk.endTime` pour alimenter une progression
 
-### 39.2 — Bouton « Rendre en audio » sur les pistes MIDI
+### 39.2 — Rendu automatique à l'ouverture
 
-Donner à l'utilisateur le moyen de déclencher le rendu, piste par piste ou en une fois.
+Le rendu ne se demande pas : il se fait. À l'ouverture d'un groove en mode mixte, les
+pistes MIDI encore absentes du cache sont rendues sans aucun clic.
 
-- En mode mixte, la sidebar d'une piste MIDI non rendue affiche un bouton « Rendre en audio »
-- Un bouton global rend toutes les pistes MIDI d'un coup, séquentiellement
-- Pendant le rendu : progression visible sur la ligne concernée, bouton désactivé
+- Le rendu part en tâche de fond, **séquentiellement** — une passe de synthèse monopolise
+  déjà un worker AlphaTab et un worker FLAC, les lancer en parallèle ne ferait que ramer
+- Le player reste utilisable pendant ce temps : affichage immédiat, transport non verrouillé,
+  lecture possible
+- Les pistes rendues apparaissent **au fur et à mesure**, chacune remplaçant son aire vide
+  dès que son rendu est prêt. Une piste promue pendant la lecture est calée sur la position
+  courante du transport et démarre en même temps que les autres
+- Pendant le rendu d'une piste : progression visible sur la ligne concernée
+- Les rendus déjà en cache sont chargés tels quels ; seules les pistes manquantes sont synthétisées
 - Les contrôles mute/solo/volume restent désactivés tant que la piste n'est pas rendue, avec l'infobulle actuelle
-- En tab-only, aucun de ces boutons n'apparaît
+- Repli en cas d'échec seulement : la ligne ratée retrouve un bouton « Réessayer le rendu en
+  audio », et un bouton global relance les pistes restantes. Rien n'apparaît en marche nominale
+- En tab-only, aucun rendu et aucun bouton
 
 ### 39.3 — Persistance du rendu dans le cache
 
@@ -78,21 +87,24 @@ Une fois rendue, une piste MIDI cesse d'être un cas particulier.
 Un `.gp` sans `SyncPoint` reste rendable, mais l'alignement n'est alors plus garanti.
 
 - Sans point de synchro, le rendu sort au tempo écrit de la partition
-- Avertir avant le rendu que la piste risque de dériver par rapport aux enregistrements
-- Le rendu reste proposé : sur un morceau enregistré au clic, le tempo écrit suffit
+- Le rendu démarrant tout seul à l'ouverture, l'avertissement ne peut pas être une boîte de
+  dialogue bloquante : c'est un marqueur « ⚠ » posé sur la ligne concernée, qui suit la piste
+  une fois rendue et explique le risque de dérive en infobulle
+- Le rendu se fait quand même : sur un morceau enregistré au clic, le tempo écrit suffit
 
 ---
 
 ## Critères d'acceptance
 
-- [ ] En mode mixte, chaque piste MIDI affiche un bouton « Rendre en audio » ; en tab-only, aucun
+- [ ] En mode mixte, les pistes MIDI se rendent d'elles-mêmes à l'ouverture, sans clic ; en tab-only, aucun rendu et aucun bouton
+- [ ] Pendant le rendu le player reste utilisable : la lecture démarre et avance, et les pistes apparaissent une à une
 - [ ] Le rendu d'une piste produit une piste audio avec forme d'onde, insérée à la place de l'aire vide
 - [ ] Une piste rendue est audible, et son mute / solo / volume agit sur le son
 - [ ] Une piste rendue soloée coupe les pistes audio, et réciproquement
 - [ ] Sur un `.gp` porteur de points de synchro, la piste rendue reste calée sur les pistes audio d'un bout à l'autre du morceau
 - [ ] Le rendu est écrit dans `cache/<groove-path>/midi/` et non dans le dossier du groove
 - [ ] À la seconde ouverture du groove, les pistes rendues se chargent sans nouvelle synthèse
-- [ ] Modifier le `.gp` invalide le cache : le bouton « Rendre en audio » réapparaît
+- [ ] Modifier le `.gp` invalide le cache : les pistes sont re-rendues à l'ouverture suivante
 - [ ] Une piste rendue est incluse dans l'export de mix et dans le zip de téléchargement
-- [ ] Un `.gp` sans point de synchro avertit avant le rendu et reste rendable
+- [ ] Un `.gp` sans point de synchro affiche un marqueur d'avertissement sur ses lignes, sans bloquer le rendu
 - [ ] Un chemin de groove contenant `..` est rejeté par les deux routes `/api/midi-render/*`
