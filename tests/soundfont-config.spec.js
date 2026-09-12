@@ -6,6 +6,8 @@
  *   - un soundfont absent retombe proprement sur celui livré avec AlphaTab
  *   - /soundfont ne sert que le fichier retenu, rien d'autre
  *   - changer de soundfont périme les rendus MIDI du dossier
+ *   - convertir le soundfont en mono le périme aussi, alors que sa taille ne bouge pas
+ *   - le serveur compte les samples stéréo du soundfont retenu et les expose
  *
  * Le serveur tourne sur sa propre configuration (GROOVOTHEQUE_CONFIG) et son
  * propre groove jetable : la série ne touche ni au config.json du dépôt ni aux
@@ -17,6 +19,7 @@
 const { test, expect } = require('@playwright/test')
 const { spawn } = require('child_process')
 const path = require('path'), fs = require('fs'), os = require('os'), bcrypt = require('bcrypt')
+const { countSamplesInFile, convertFile } = require('../scripts/sf-mono')
 
 const ROOT       = path.join(__dirname, '..')
 const AUTH_FILE  = path.join(ROOT, '.auth')
@@ -31,6 +34,36 @@ const GROOVE_DIR  = path.join(ROOT, 'grooves', GROOVE)
 const CACHE_DIR   = path.join(ROOT, 'cache', GROOVE)
 const RENDER_NAME = 'midi-Piste de test.flac'
 const FAKE_FLAC   = Buffer.concat([Buffer.from('fLaC'), Buffer.alloc(64, 0x11)])
+
+// Copie jetable d'un soundfont livré avec AlphaTab, dont tous les samples sont
+// marqués stéréo : de quoi rejouer le piège que la conversion mono corrige.
+const STEREO_SF   = '_playwright_stereo.sf2'
+const STEREO_PATH = path.join(ROOT, 'soundfonts', STEREO_SF)
+const SONIVOX     = path.join(ROOT, 'node_modules/@coderline/alphatab/dist/soundfont/sonivox.sf2')
+
+// Marque tous les samples comme « moitié droite d'une paire stéréo » — ceux
+// qu'AlphaTab refuse de charger. Même marche RIFF que scripts/sf-mono.js, mais
+// réécrite ici : le test ne doit pas dépendre du code qu'il vérifie.
+function writeAllStereo(src, dst) {
+  const b = fs.readFileSync(src)
+  const walk = (off, end) => {
+    const out = []; let p = off
+    while (p + 8 <= end) {
+      const id = b.toString('ascii', p, p + 4), sz = b.readUInt32LE(p + 4)
+      out.push({ id, off: p + 8, size: sz }); p += 8 + sz + (sz & 1)
+    }
+    return out
+  }
+  let shdr = null
+  for (const c of walk(12, 8 + b.readUInt32LE(4))) {
+    if (c.id !== 'LIST' || b.toString('ascii', c.off, c.off + 4) !== 'pdta') continue
+    for (const sub of walk(c.off + 4, c.off + c.size)) if (sub.id === 'shdr') shdr = sub
+  }
+  const count = shdr.size / 46 - 1
+  for (let i = 0; i < count; i++) b.writeUInt16LE(0x0002, shdr.off + i * 46 + 44)
+  fs.writeFileSync(dst, b)
+  return count
+}
 
 const CONFIG_FILE = path.join(os.tmpdir(), `groovotheque-sf-${process.pid}.json`)
 const writeConfig = value => fs.writeFileSync(CONFIG_FILE, JSON.stringify({ soundFont: value }))
@@ -72,6 +105,7 @@ test.afterAll(() => {
   fs.rmSync(GROOVE_DIR, { recursive: true, force: true })
   fs.rmSync(CACHE_DIR, { recursive: true, force: true })
   fs.rmSync(CONFIG_FILE, { force: true })
+  fs.rmSync(STEREO_PATH, { force: true })
 })
 
 async function api(playwright) {
@@ -133,13 +167,56 @@ test('changer de soundfont périme les rendus du dossier', async ({ playwright }
 
   // Le soundfont retenu fait partie de l'empreinte du rendu.
   const fp = JSON.parse(fs.readFileSync(path.join(CACHE_DIR, 'midi', 'fingerprint.json'), 'utf8'))
-  expect(fp.source.soundFont).toMatch(/^sonivox\.sf3:\d+$/)
+  // Nom, taille **et** nombre de samples stéréo : la taille seule ne distingue
+  // pas un soundfont converti en mono de sa version d'origine.
+  expect(fp.source.soundFont).toMatch(/^sonivox\.sf3:\d+:0$/)
+  expect(fp.source.renderVersion).toBeGreaterThanOrEqual(2)
 
   // Tant que rien ne change, le groove se liste avec sa piste.
   expect((await (await req.get(grooveUrl)).json()).tracks).toHaveLength(1)
 
   // Changement de soundfont : la porte d'entrée du player purge le rendu.
   writeConfig('sonivox.sf2')
+  expect((await (await req.get(grooveUrl)).json()).tracks).toHaveLength(0)
+  expect(fs.existsSync(path.join(GROOVE_DIR, RENDER_NAME))).toBe(false)
+
+  await req.dispose()
+})
+
+test('le serveur compte les samples stéréo du soundfont retenu', async ({ playwright }) => {
+  const req = await api(playwright)
+  writeConfig('sonivox.sf3')
+  // Les banques livrées avec AlphaTab sont déjà entièrement mono.
+  expect((await (await req.get('/api/config')).json()).soundFont.stereoSamples).toBe(0)
+
+  const total = writeAllStereo(SONIVOX, STEREO_PATH)
+  writeConfig(STEREO_SF)
+  expect((await (await req.get('/api/config')).json()).soundFont.stereoSamples).toBe(total)
+
+  await req.dispose()
+})
+
+test('convertir le soundfont en mono périme les rendus, à taille inchangée', async ({ playwright }) => {
+  const req = await api(playwright)
+  const total = writeAllStereo(SONIVOX, STEREO_PATH)
+  writeConfig(STEREO_SF)
+  const sizeBefore = fs.statSync(STEREO_PATH).size
+
+  expect((await req.post(renderUrl, {
+    headers: { 'Content-Type': 'audio/flac' }, data: FAKE_FLAC,
+  })).status()).toBe(201)
+  const fp = JSON.parse(fs.readFileSync(path.join(CACHE_DIR, 'midi', 'fingerprint.json'), 'utf8'))
+  expect(fp.source.soundFont).toBe(`${STEREO_SF}:${sizeBefore}:${total}`)
+  expect((await (await req.get(grooveUrl)).json()).tracks).toHaveLength(1)
+
+  // La conversion ne touche aucune donnée audio : le fichier garde sa taille et
+  // son nom. Sans le compte de samples stéréo dans l'empreinte, le rendu fait
+  // avec la version stéréo passerait pour encore valable.
+  const converted = convertFile(STEREO_PATH)
+  expect(converted.changed).toBe(total)
+  expect(fs.statSync(STEREO_PATH).size).toBe(sizeBefore)
+  expect(countSamplesInFile(STEREO_PATH).stereo).toBe(0)
+
   expect((await (await req.get(grooveUrl)).json()).tracks).toHaveLength(0)
   expect(fs.existsSync(path.join(GROOVE_DIR, RENDER_NAME))).toBe(false)
 

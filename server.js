@@ -4,6 +4,7 @@ const bcrypt = require('bcrypt');
 const fs = require('fs');
 const path = require('path');
 const { ZipArchive } = require('archiver');
+const { countSamplesInFile } = require('./scripts/sf-mono');
 
 const app = express();
 const PORT = process.env.PORT || 3099;
@@ -60,10 +61,46 @@ function statSoundFont(name) {
   for (const candidate of soundFontCandidates(name)) {
     try {
       const st = fs.statSync(candidate);
-      if (st.isFile()) return { name: path.basename(candidate), path: candidate, size: st.size };
+      if (st.isFile()) {
+        return {
+          name: path.basename(candidate),
+          path: candidate,
+          size: st.size,
+          mtimeMs: Math.round(st.mtimeMs),
+        };
+      }
     } catch { /* candidat suivant */ }
   }
   return null;
+}
+
+// ── Samples stéréo : le piège à NaN (epic 39) ─────────────────────────────
+// AlphaTab ne charge que les samples mono et écarte les samples stéréo, tout
+// en gardant les régions qui les référencent. Ces régions lisent hors d'un
+// tableau vide, produisent des NaN, et comme NaN × 0 = NaN, une seule piste
+// fautive — fût-elle à volume nul — anéantit le rendu de toutes les autres.
+// `scripts/fetch-soundfont.sh` repasse le soundfont en mono à l'installation ;
+// il reste à repérer un fichier déposé à la main sans cette étape.
+//
+// Le compte entre aussi dans l'empreinte des rendus MIDI : convertir un
+// soundfont sur place ne change ni son nom ni sa taille, mais fait tomber ce
+// compte à zéro — c'est ce qui périme les `midi-*.flac` synthétisés avant.
+const stereoCountCache = new Map();
+
+function soundFontStereoCount(sf) {
+  const key = `${sf.path}:${sf.size}:${sf.mtimeMs}`;
+  if (stereoCountCache.has(key)) return stereoCountCache.get(key);
+  const counted = countSamplesInFile(sf.path);
+  // Soundfont illisible : `null` plutôt que 0, pour ne pas prétendre qu'il est sain.
+  const stereo = counted ? counted.stereo : null;
+  stereoCountCache.clear();          // un seul soundfont à la fois, inutile d'accumuler
+  stereoCountCache.set(key, stereo);
+  if (stereo > 0) {
+    console.warn(`[soundfont] « ${sf.name} » contient ${stereo} sample(s) stéréo :`
+      + ` AlphaTab les ignore et le rendu MIDI en sort muet ou saturé de NaN.`
+      + ` Corriger avec : node scripts/sf-mono.js ${sf.path}`);
+  }
+  return stereo;
 }
 
 let lastSoundFontWarning = null;
@@ -98,6 +135,9 @@ function soundFontInfo() {
     size:      sf.size,
     requested: sf.requested,
     fallback:  sf.fallback,
+    // Nombre de samples qu'AlphaTab refusera de charger. > 0 = soundfont non
+    // converti, rendu MIDI inexploitable (voir soundFontStereoCount).
+    stereoSamples: soundFontStereoCount(sf),
     url:       `/soundfont/${encodeURIComponent(sf.name)}`,
   };
 }
@@ -805,6 +845,14 @@ app.post('/api/peaks/*', async (req, res) => {
 // aucune route ne le relit. Seule l'empreinte du `.gp` source reste dans le
 // cache : elle ne regarde pas l'utilisateur et n'a rien à faire chez lui.
 
+// Version du moteur de rendu. À incrémenter dès qu'un changement modifie le
+// son produit à `.gp` et soundfont identiques — le niveau de sortie, par
+// exemple. Elle entre dans l'empreinte : l'incrémenter périme tous les rendus
+// existants, qui repartent en synthèse à l'ouverture du groove.
+//   1 — rendu initial (epic 39)
+//   2 — conversion mono du soundfont + masterVolume ramené à 0,5 (plus d'écrêtage)
+const MIDI_RENDER_VERSION = 2;
+
 // Empreinte du fichier Guitar Pro source : taille + mtime. Un `.gp` modifié rend
 // tous les rendus du groove obsolètes.
 async function gpFingerprint(grooveDir) {
@@ -822,13 +870,19 @@ async function gpFingerprint(grooveDir) {
     tabFile: gpEntry.name,
     size: st.size,
     mtimeMs: Math.round(st.mtimeMs),
-    soundFont: sf ? `${sf.name}:${sf.size}` : null,
+    // Nom + taille ne suffisent pas : la conversion mono du soundfont réécrit
+    // 2 octets par sample sans changer la taille du fichier. Le compte de
+    // samples stéréo, lui, passe de 146 à 0 — un rendu fait avec la version
+    // stéréo est donc bien périmé.
+    soundFont: sf ? `${sf.name}:${sf.size}:${soundFontStereoCount(sf)}` : null,
+    renderVersion: MIDI_RENDER_VERSION,
   };
 }
 
 function fingerprintMatches(a, b) {
   return !!a && !!b && a.tabFile === b.tabFile && a.size === b.size
-    && a.mtimeMs === b.mtimeMs && a.soundFont === b.soundFont;
+    && a.mtimeMs === b.mtimeMs && a.soundFont === b.soundFont
+    && (a.renderVersion ?? 1) === (b.renderVersion ?? 1);
 }
 
 // Même garde de traversée que resolvePeaksPath() : le chemin résolu doit rester
