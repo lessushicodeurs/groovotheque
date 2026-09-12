@@ -9,6 +9,7 @@
  */
 
 const { test, expect } = require('@playwright/test')
+const { snapshotRenders, cleanNewRenders } = require('./midi-render-guard')
 const { spawn }        = require('child_process')
 const path             = require('path')
 const fs               = require('fs')
@@ -47,12 +48,17 @@ async function waitForPort(port, timeout = 15000) {
   })
 }
 
+// 39.3 — le rendu MIDI part tout seul à l'ouverture et s'écrit dans le dossier
+// du groove : on efface après coup ce que la série a produit, et rien d'autre.
+let renderSnapshot = null
+
 test.beforeAll(async () => {
+  renderSnapshot = snapshotRenders()
   addTestUser(bcrypt.hashSync(TEST_PASS, 5))
   serverProcess = spawn('node', ['server.js'], { cwd: ROOT, env: { ...process.env, PORT: String(PORT) }, stdio: 'pipe' })
   await waitForPort(PORT)
 })
-test.afterAll(() => { removeTestUser(); serverProcess?.kill() })
+test.afterAll(() => { removeTestUser(); serverProcess?.kill(); cleanNewRenders(renderSnapshot) })
 
 test('strip — hauteur plafonnée sur une partition à 8 pistes', async ({ browser }) => {
   const context = await browser.newContext({
