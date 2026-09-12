@@ -67,6 +67,9 @@ const btnDownloadAll   = document.getElementById('btn-download-all')
 const downloadWrap     = document.getElementById('download-wrap')
 const downloadMenu     = document.getElementById('download-menu')
 const downloadStatusEl = document.getElementById('download-status')
+const playerHeaderEl   = document.querySelector('.player-header')
+const btnNote          = document.getElementById('btn-note')
+const notePanel        = document.getElementById('note-panel')
 
 // ── Epic 22 — DOM refs commentaires ──────────────────────────────────────
 const btnAddComment        = document.getElementById('btn-add-comment')
@@ -3094,6 +3097,35 @@ const DOWNLOAD_LABELS = {
 let downloadBusy = false
 let downloadStatusTimer = null
 
+// 40.1 — Sur mobile le header n'a pas la place du bouton « Tout télécharger » :
+// le menu d'export déménage dans le tiroir ≡, au-dessus de la description du
+// morceau. C'est le même élément qui voyage — pas une copie — donc les
+// gestionnaires d'événements et l'état du rendu suivent sans duplication.
+const exportMobileMq = window.matchMedia('(max-width: 767px)')
+let downloadInPanel = false
+
+function syncDownloadPlacement() {
+  const inPanel = exportMobileMq.matches
+  if (inPanel === downloadInPanel) return
+  downloadInPanel = inPanel
+  if (inPanel) {
+    // Les entrées d'export passent avant la description : prepend, quel que soit
+    // l'ordre dans lequel le tiroir et le menu se sont initialisés.
+    notePanel.prepend(downloadWrap)
+    downloadWrap.classList.add('download-wrap--panel')
+    downloadMenu.removeAttribute('hidden')   // déplié en permanence dans le tiroir
+  } else {
+    playerHeaderEl.appendChild(downloadWrap)
+    downloadWrap.classList.remove('download-wrap--panel')
+    downloadMenu.setAttribute('hidden', '')
+  }
+  btnDownloadAll.setAttribute('aria-expanded', String(inPanel))
+  hideDownloadStatus()
+  updateNoteButton()
+}
+
+exportMobileMq.addEventListener('change', syncDownloadPlacement)
+
 // 38.1 — Menu déroulant : ouverture/fermeture, clic extérieur, Échap
 // Le zip serveur contient toujours quelque chose (les pistes audio, le fichier
 // Guitar Pro, ou les deux). Les exports de mix, eux, demandent de l'audio
@@ -3110,6 +3142,8 @@ function initDownloadMenu() {
   downloadMenuReady = true
   downloadWrap.removeAttribute('hidden')
   setMixDownloadsAvailable(currentTracks.length > 0)
+  syncDownloadPlacement()
+  updateNoteButton()
 
   btnDownloadAll.addEventListener('click', (e) => {
     e.stopPropagation()
@@ -3160,7 +3194,9 @@ function initDownloadMenu() {
 }
 
 function isDownloadMenuOpen() {
-  return !!downloadMenu && !downloadMenu.hasAttribute('hidden')
+  // Dans le tiroir le menu est toujours déplié : il n'y a rien à fermer, et
+  // Échap / les flèches doivent rester aux raccourcis du player.
+  return !downloadInPanel && !!downloadMenu && !downloadMenu.hasAttribute('hidden')
 }
 
 function downloadMenuItems() {
@@ -3179,6 +3215,7 @@ function moveDownloadMenuFocus(delta) {
 }
 
 function openDownloadMenu() {
+  if (downloadInPanel) return
   downloadMenu.removeAttribute('hidden')
   btnDownloadAll.setAttribute('aria-expanded', 'true')
   hideDownloadStatus()
@@ -3186,6 +3223,7 @@ function openDownloadMenu() {
 }
 
 function closeDownloadMenu() {
+  if (downloadInPanel) return   // déplié en permanence dans le tiroir
   if (downloadBusy) return   // un rendu est en cours : le menu reste visible
   // Ne pas laisser le focus sur une entrée qui disparaît.
   const focusWasInside = downloadWrap.contains(document.activeElement)
@@ -4502,9 +4540,24 @@ async function initTags() {
   })
 }
 
+// Le tiroir ≡ porte deux choses : les entrées d'export (mobile) et la
+// description du morceau. Il s'affiche dès que l'une des deux existe.
+let hasNote = false
+
+function updateNoteButton() {
+  const show = hasNote || (downloadInPanel && !downloadWrap.hasAttribute('hidden'))
+  btnNote.toggleAttribute('hidden', !show)
+  if (!show) {
+    notePanel.classList.remove('note-panel--open')
+    btnNote.setAttribute('aria-expanded', 'false')
+  }
+}
+
 async function initNotePanel() {
-  const btnNote  = document.getElementById('btn-note')
-  const notePanel = document.getElementById('note-panel')
+  btnNote.addEventListener('click', () => {
+    const open = notePanel.classList.toggle('note-panel--open')
+    btnNote.setAttribute('aria-expanded', String(open))
+  })
   try {
     const res = await fetch(`/api/grooves/${encodePath(grooveSlug)}/md`)
     if (!res.ok) return
@@ -4517,12 +4570,10 @@ async function initNotePanel() {
     inner.className = 'note-panel-inner'
     inner.innerHTML = html
     notePanel.appendChild(inner)
-    btnNote.removeAttribute('hidden')
-    btnNote.addEventListener('click', () => {
-      const open = notePanel.classList.toggle('note-panel--open')
-      btnNote.setAttribute('aria-expanded', String(open))
-    })
-  } catch { /* pas de note */ }
+    hasNote = true
+  } catch { /* pas de note */ } finally {
+    updateNoteButton()
+  }
 }
 
 async function init() {
