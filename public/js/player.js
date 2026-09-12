@@ -3107,8 +3107,9 @@ function initDownloadMenu() {
     if (!downloadWrap.contains(e.target)) closeDownloadMenu()
   })
 
-  // Navigation clavier du menu. Le handler global (espace, Échap, flèches) se retire
+  // Navigation clavier du menu. Le handler global (Échap, flèches) se retire
   // dès que le menu est ouvert : voir isDownloadMenuOpen() dans les raccourcis.
+  // La barre d'espace, elle, reste toujours le play/pause (voir plus bas).
   downloadWrap.addEventListener('keydown', (e) => {
     if (!isDownloadMenuOpen()) return
     if (e.key === 'Escape') {
@@ -4674,14 +4675,10 @@ async function init() {
     document.addEventListener('keydown', (e) => {
       // Skip when user is interacting with any input or textarea element
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
-      // 38.1 — Menu de téléchargement ouvert : il gère lui-même Échap et les flèches,
-      // et Espace doit activer nativement l'entrée focalisée.
+      // 38.1 — Menu de téléchargement ouvert : il gère lui-même Échap et les flèches.
       if (isDownloadMenuOpen()) return
 
-      if (e.key === ' ') {
-        e.preventDefault()
-        isPlaying ? pauseAll() : playAll()
-      } else if (e.key === 'Escape') {
+      if (e.key === 'Escape') {
         e.preventDefault()
         stopAll()
       } else if (e.key === 'l' || e.key === 'L') {
@@ -4700,6 +4697,46 @@ async function init() {
     showFatalError(`Erreur de chargement : ${err.message}`)
   }
 }
+
+// ── Barre d'espace : play/pause, et rien d'autre ──────────────────────────
+// En capture sur window, donc avant l'activation native du bouton qui a le
+// focus, le défilement de la page et les raccourcis d'AlphaTab. Seule
+// exception : la saisie de texte, où Espace reste un espace.
+;(function initSpacebarShortcut() {
+  // Seuls les champs où Espace produit vraiment un espace. Une case à cocher
+  // ou un bouton radio est un `input` lui aussi : l'y inclure rendrait la barre
+  // d'espace au navigateur dès qu'une piste vient d'être (dé)sélectionnée, qui
+  // la rebasculerait au lieu de lancer la lecture.
+  const TEXT_INPUT_TYPES = new Set([
+    'text', 'search', 'email', 'url', 'tel', 'password', 'number',
+    'date', 'time', 'datetime-local', 'month', 'week',
+  ])
+
+  const isTypingTarget = (el) =>
+    (el instanceof HTMLInputElement && TEXT_INPUT_TYPES.has(el.type)) ||
+    el instanceof HTMLTextAreaElement ||
+    el instanceof HTMLSelectElement ||
+    (el instanceof HTMLElement && el.isContentEditable)
+
+  const isSpace = (e) => e.code === 'Space' || e.key === ' ' || e.key === 'Spacebar'
+
+  window.addEventListener('keydown', (e) => {
+    if (!isSpace(e) || e.ctrlKey || e.metaKey || e.altKey) return
+    if (isTypingTarget(e.target)) return
+    e.preventDefault()
+    e.stopImmediatePropagation()
+    if (e.repeat) return          // maintien enfoncé : un seul basculement
+    isPlaying ? pauseAll() : playAll()
+  }, true)
+
+  // Un bouton focalisé s'active au relâchement : sans ça, Espace rejouerait
+  // le dernier bouton cliqué en plus du play/pause.
+  window.addEventListener('keyup', (e) => {
+    if (!isSpace(e) || isTypingTarget(e.target)) return
+    e.preventDefault()
+    e.stopImmediatePropagation()
+  }, true)
+})()
 
 // ── Responsive track widths on resize ─────────────────────────────────────
 // adjustTrackWidths() now measures pixel geometry at runtime, so it must be
