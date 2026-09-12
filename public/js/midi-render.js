@@ -52,6 +52,20 @@ export async function renderMidiTrack({ api, alphaTab, score, trackIndex, soundF
     options.trackVolume.set(i, i === trackIndex ? 1.0 : 0.0)
   }
 
+  // Fuite du métronome, sans contournement connu côté appelant.
+  // `AlphaSynthAudioExporter` initialise son canal de métronome sur le canal 16
+  // (`DefaultChannelCount - 1`), puis `setup()` relit le volume voulu par
+  // `channelGetMixVolume(16)`. Sur un score assez fourni pour que le canal 16
+  // appartienne à une vraie piste, c'est le `trackVolume` de cette piste qui est
+  // relu : isoler cette piste met 1,0 sur le canal 16 et rallume le métronome
+  // malgré `metronomeVolume: 0`. Le rendu de la piste concernée porte alors un
+  // clic sur chaque temps (constaté sur « Piano RH » de Babooshka, canaux 15/16).
+  // Rien à faire d'ici : en navigateur l'exporteur vit dans un worker et son
+  // interface (`AlphaSynthAudioExporterWorkerApi`) n'expose que `initialize`,
+  // `render` et `destroy` — aucun réglage de canal après coup. Et les volumes
+  // passés en options sont indexés par piste, pas par canal : impossible de
+  // distinguer le canal 16 de la piste qui le porte. À reprendre si AlphaTab
+  // corrige le calcul ou ouvre l'accès aux canaux de l'exporteur.
   const exporter = await api.exportAudio(options)
 
   const chunks = []
