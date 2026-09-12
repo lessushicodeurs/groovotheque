@@ -701,15 +701,31 @@ function fingerprintMatches(a, b) {
 }
 
 // Découpe « <groove-path>/<n> » en ses deux parties.
+// decodeURIComponent() lève sur un « % » malformé : la sortie doit être un 400,
+// pas un rejet non rattrapé qui laisserait la requête pendante (Express 4 ne
+// rattrape pas les rejets d'un handler async).
 function splitMidiRenderParams(raw, res) {
   const parts = String(raw).split('/');
   if (parts.length < 2) {
     res.status(400).json({ error: 'Chemin invalide' });
     return null;
   }
-  const trackIndex = decodeURIComponent(parts.pop());
-  const groovePath = parts.map(decodeURIComponent).join('/');
+  let trackIndex, groovePath;
+  try {
+    trackIndex = decodeURIComponent(parts.pop());
+    groovePath = parts.map(decodeURIComponent).join('/');
+  } catch {
+    res.status(400).json({ error: 'Chemin invalide' });
+    return null;
+  }
   return { groovePath, trackIndex };
+}
+
+// Une erreur interne ne doit pas renvoyer err.message au client : il porte le
+// chemin absolu du serveur. Le détail reste dans les logs.
+function midiRenderFailure(res, err) {
+  console.error('[midi-render]', err);
+  if (!res.headersSent) res.status(500).json({ error: 'Erreur interne' });
 }
 
 // Rendu valide (empreinte à jour) d'une piste, ou null.
@@ -744,10 +760,10 @@ app.get('/api/midi-render/*', async (req, res) => {
   try {
     found = await readValidMidiRender(params.groovePath, params.trackIndex, res);
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return midiRenderFailure(res, err);
   }
   if (!found) return;                       // réponse d'erreur déjà envoyée
-  if (found.stale || !found.flacPath) {
+  if (found.stale) {
     return res.status(404).json({ error: 'Rendu introuvable' });
   }
   res.type('audio/flac');
@@ -775,7 +791,16 @@ app.post('/api/midi-render/*',
     }
 
     try {
-      const source = await gpFingerprint(grooveDir);
+      let source;
+      try {
+        source = await gpFingerprint(grooveDir);
+      } catch (err) {
+        // Chemin bien formé mais dossier absent : c'est un 404, pas un 500.
+        if (err.code === 'ENOENT' || err.code === 'ENOTDIR') {
+          return res.status(404).json({ error: 'Groove introuvable' });
+        }
+        throw err;
+      }
       if (!source) return res.status(404).json({ error: 'Aucun fichier Guitar Pro dans ce groove' });
       await fs.promises.mkdir(path.dirname(flacPath), { recursive: true });
       await fs.promises.writeFile(flacPath, req.body);
@@ -789,7 +814,7 @@ app.post('/api/midi-render/*',
       }, null, 2), 'utf8');
       res.status(201).json({ ok: true });
     } catch (err) {
-      res.status(500).json({ error: err.message });
+      midiRenderFailure(res, err);
     }
   });
 
