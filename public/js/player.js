@@ -2681,11 +2681,33 @@ async function initTabDrawer(tabFile) {
     return
   }
 
+  // Le mode du player dépend de ce que le fichier contient : un `.gp` porteur
+  // d'un backing track a du son même sans piste audio sur le disque. Le savoir
+  // impose de lire le fichier ici, avant d'instancier l'API — le mode ne peut
+  // plus être changé ensuite, et il conditionne l'UI des pistes MIDI
+  // (construite dès scoreLoaded) autant que le transport.
+  // Le score parsé est passé tel quel à `load()` : AlphaTab l'accepte et ne le
+  // ré-analyse pas, le fichier n'est donc lu qu'une fois.
+  let preloadedScore = null
+  const tabUrl = `/tab/${encodePath(grooveSlug)}/${encodeURIComponent(tabFile)}`
+  try {
+    const bytes = new Uint8Array(await (await fetch(tabUrl)).arrayBuffer())
+    preloadedScore = alphaTabMod.importer.ScoreLoader.loadScoreFromBytes(bytes)
+  } catch (err) {
+    // Lecture impossible ici : on laisse AlphaTab charger l'URL lui-même et
+    // signaler l'erreur par son propre événement.
+    console.warn('[tab] pré-lecture du fichier impossible:', err)
+  }
+
   tabContentEl.classList.remove('tab-content--loading')
 
-  // Le mode est décidé ici, avant tout chargement : il conditionne l'UI des
-  // pistes MIDI (construite dès scoreLoaded) autant que le transport.
+  // Média externe dès qu'il y a du son à suivre, qu'il vienne des pistes du
+  // groove ou du backing track embarqué dans le `.gp`. Sans cela AlphaTab
+  // démarre son synthétiseur : celui-ci sonne par-dessus l'enregistrement et,
+  // pire, son horloge devient maîtresse et recale l'audio plusieurs fois par
+  // seconde dès que les points de synchro écartent la partition du temps réel.
   tabExternal = currentTracks.length > 0
+    || (preloadedScore?.backingTrack?.rawAudioFile?.length ?? 0) > 0
 
   alphaTabApi = new alphaTabMod.AlphaTabApi(tabContentEl, {
     core: {
@@ -2876,7 +2898,7 @@ async function initTabDrawer(tabFile) {
     tabLoopControlsEl?.removeAttribute('hidden')
   })
 
-  alphaTabApi.load(`/tab/${encodePath(grooveSlug)}/${encodeURIComponent(tabFile)}`)
+  alphaTabApi.load(preloadedScore ?? tabUrl)
   startTabSync()
 }
 
