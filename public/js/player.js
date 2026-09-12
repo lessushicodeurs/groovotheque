@@ -845,6 +845,10 @@ function checkLoopRebound(t) {
 
 async function playAll() {
   if (isPlaying) return
+  // 39.2 — un rendu en cours va remplacer une ligne par une piste WaveSurfer
+  // neuve, qui démarrerait à zéro pendant que les autres avancent. Le transport
+  // reste bloqué le temps du rendu (le bouton Play est déjà désactivé).
+  if (midiRenderBusy) return
   zoomUserScrolled = false  // 18.5 — Play relance le suivi de la tête de lecture
   // Resume Web Audio graph if suspended (requires prior user gesture — satisfied by this click)
   if (sharedAudioCtx.state === 'suspended') await sharedAudioCtx.resume()
@@ -1740,6 +1744,12 @@ function updateMidiRenderUi() {
   midiTracks.forEach(t => {
     if (t.btnRender) t.btnRender.disabled = midiRenderBusy
   })
+  // Le transport est verrouillé le temps du rendu : la piste promue en cours
+  // de route démarrerait à zéro, désalignée de toutes les autres.
+  if (btnPlay) {
+    btnPlay.disabled = midiRenderBusy
+    btnPlay.title = midiRenderBusy ? 'Lecture indisponible pendant le rendu MIDI' : ''
+  }
 }
 
 // 39.4 — la ligne MIDI cède la place à une vraie piste WaveSurfer, au même
@@ -1782,11 +1792,14 @@ function promoteMidiTrackToAudio(state, blob, cachedPeaks = null) {
 }
 
 // 39.1 à 39.3 — rendu d'une piste, encodage FLAC, persistance, promotion.
+// Renvoie l'issue du rendu : 'ok', 'skipped' (rien à faire sur cette piste),
+// 'cancelled' (l'utilisateur a refusé) ou 'failed'. Le bouton global s'en sert
+// pour distinguer une piste déjà rendue d'un vrai échec.
 async function renderMidiTrackToAudio(i, opts = {}) {
   const state = midiTracks[i]
-  if (!state || state.rendered || midiRenderBusy) return false
-  if (!alphaTabApi || !tabScore) return false
-  if (!opts.skipWarning && !confirmMidiRender()) return false
+  if (!state || state.rendered || midiRenderBusy) return 'skipped'
+  if (!alphaTabApi || !tabScore) return 'failed'
+  if (!opts.skipWarning && !confirmMidiRender()) return 'cancelled'
 
   midiRenderBusy = true
   updateMidiRenderUi()
@@ -1818,12 +1831,12 @@ async function renderMidiTrackToAudio(i, opts = {}) {
       console.warn('[midi-render] mise en cache impossible:', err)
     }
     promoteMidiTrackToAudio(state, blob)
-    return true
+    return 'ok'
   } catch (err) {
     console.error('[midi-render]', err)
     if (state.progressEl) state.progressEl.hidden = true
     showDownloadStatus(`Rendu de « ${midiTrackLabel(state)} » impossible : ${err.message}`, true)
-    return false
+    return 'failed'
   } finally {
     midiRenderBusy = false
     updateMidiRenderUi()
@@ -1837,8 +1850,19 @@ async function renderAllMidiTracks() {
   if (!confirmMidiRender()) return
   for (let i = 0; i < midiTracks.length; i++) {
     if (midiTracks[i].rendered) continue
-    const ok = await renderMidiTrackToAudio(i, { skipWarning: true })
-    if (!ok) break   // échec : inutile d'enchaîner les autres
+    const status = await renderMidiTrackToAudio(i, { skipWarning: true })
+    // Une piste déjà rendue entre-temps n'est pas un échec : on continue.
+    if (status === 'ok' || status === 'skipped') continue
+    // Échec ou refus : inutile d'enchaîner, mais il faut le dire — sinon la
+    // série s'arrête sans que rien ne l'indique.
+    const rest = midiTracks.filter(t => !t.rendered).length
+    if (rest > 0) {
+      showDownloadStatus(
+        `Rendu interrompu : ${rest} piste${rest > 1 ? 's' : ''} MIDI non rendue${rest > 1 ? 's' : ''}.`,
+        true,
+      )
+    }
+    break
   }
 }
 
