@@ -10,6 +10,7 @@ import {
 } from './comments-shared.js'
 import { exportMix, encodeFlac } from './mix-export.js'
 import { renderMidiTrack } from './midi-render.js'
+import { buildSeekableCopy, seekablePostUrl, BACKING_SEEKABLE_NAME } from './seekable.js'
 
 const TRACK_COLORS = [
   '#4fc3f7',
@@ -1253,7 +1254,10 @@ function buildTrackRow(track, idx, cachedPeaks = null, opts = {}) {
     interact: true,
     plugins,
   }
-  if (track.url) wsOpts.url = track.url
+  // La copie recalable du cache remplace l'original à la lecture ; le lien de
+  // téléchargement, lui, reste sur le fichier de l'utilisateur.
+  const playbackUrl = track.playbackUrl ?? track.url
+  if (playbackUrl) wsOpts.url = playbackUrl
   if (cachedPeaks?.length > 0) wsOpts.peaks = cachedPeaks
   const ws = WaveSurfer.create(wsOpts)
   // Backing track : les octets viennent du fichier GP, pas d'une URL serveur.
@@ -2124,8 +2128,14 @@ async function renderAllMidiTracks() {
 
 // ── 35.4 — Backing track embarqué dans le fichier GP ──────────────────────
 
-// Nom de cache des peaks du backing track (pas de fichier sur disque).
-const BACKING_PEAKS_NAME = '_backing'
+// Nom de cache du backing track, qui n'est un fichier d'aucun dossier : le même
+// pour ses peaks et pour sa copie recalable.
+const BACKING_PEAKS_NAME = BACKING_SEEKABLE_NAME
+
+// Copie recalable du backing track déjà en cache (null tant qu'elle n'existe
+// pas), et rang de sa piste dans wavesurfers une fois sa ligne construite.
+let backingSeekableUrl = null
+let backingTrackIdx    = -1
 
 // Les octets bruts n'ont pas de type MIME : sans lui certains navigateurs
 // refusent de lire le Blob. Déduction depuis les octets d'en-tête.
@@ -2149,12 +2159,19 @@ function firstPlainAudioRowEl() {
 async function buildBackingTrackRow(score) {
   const raw = score?.backingTrack?.rawAudioFile
   if (!raw || raw.length === 0) return
-  const blob = new Blob([raw], { type: sniffAudioMime(raw) })
+  // Une copie recalable en cache dispense du blob : la piste se charge par URL,
+  // comme les autres, et les octets du `.gp` ne restent pas en mémoire.
+  const blob = backingSeekableUrl ? null : new Blob([raw], { type: sniffAudioMime(raw) })
   const cachedPeaks = await fetchPeaks(grooveSlug, BACKING_PEAKS_NAME)
   const idx = wavesurfers.length
+  backingTrackIdx = idx
   buildTrackRow(
     // Le format GP n'expose aucun libellé pour le backing track : nom par défaut.
-    { index: idx, filename: BACKING_PEAKS_NAME, displayName: 'Backing Track', url: null },
+    {
+      index: idx, filename: BACKING_PEAKS_NAME, displayName: 'Backing Track',
+      // Pas de fichier à télécharger : le backing est dans le `.gp`.
+      url: null, playbackUrl: backingSeekableUrl,
+    },
     idx,
     cachedPeaks,
     {
@@ -2171,6 +2188,71 @@ async function buildBackingTrackRow(score) {
   applyVolumes()
   // Tab-only : le backing track est la seule piste mixable du groove.
   setMixDownloadsAvailable(true)
+  // Le backing track est de l'AAC, que Chrome décale de 47,9 ms après chaque
+  // seek : sa copie se fabrique comme celle des pistes MP3.
+  if (!backingSeekableUrl) {
+    queueSeekableCopy({ name: BACKING_SEEKABLE_NAME, idx, bytes: raw })
+  }
+}
+
+// ── Copies recalables des pistes ───────────────────────────────────────────
+// Le pourquoi est dans public/js/seekable.js. Ici : la file d'attente, le dépôt
+// dans le cache du serveur, et le remplacement de la source d'une piste une
+// fois sa copie disponible — sans que l'utilisateur perde sa place.
+
+// Une seule conversion à la fois : chacune décode puis ré-encode le morceau
+// entier, et le rendu MIDI travaille déjà dans le même onglet.
+let seekableQueue = Promise.resolve()
+
+function queueSeekableCopy(job) {
+  // Fabriquer une copie coûte un décodage, un encodage et le dépôt de plusieurs
+  // dizaines de mégaoctets : c'est un travail de poste fixe. Le mobile lit les
+  // copies déjà faites, il n'en fabrique pas.
+  if (!IS_DESKTOP) return
+  seekableQueue = seekableQueue
+    .then(() => makeSeekableCopy(job))
+    // Une copie ratée n'empêche rien : la piste continue de se lire depuis son
+    // fichier d'origine, et la copie sera retentée au prochain chargement.
+    .catch(err => console.warn('[seekable] copie impossible:', err))
+}
+
+async function makeSeekableCopy({ name, idx, url, bytes }) {
+  // Le rendu MIDI tient déjà le processeur : le laisser finir d'abord.
+  while (midiRenderBusy) await new Promise(r => setTimeout(r, 1000))
+  let source = bytes
+  if (!source) {
+    const res = await fetch(url)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    source = new Uint8Array(await res.arrayBuffer())
+  }
+  const blob = await buildSeekableCopy(source)
+  const res = await fetch(seekablePostUrl(encodePath(grooveSlug), name), {
+    method: 'POST', headers: { 'Content-Type': 'audio/flac' }, body: blob,
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  await adoptSeekableCopy(idx, name)
+}
+
+// Bascule d'une piste sur sa copie : même position, et lecture reprise si elle
+// était en cours. WaveSurfer garde son élément média, donc le routage Web Audio
+// (gain, pan) de la piste survit au remplacement.
+async function adoptSeekableCopy(idx, name) {
+  const ws = wavesurfers[idx]
+  if (!ws) return
+  const at = currentTimeSec()
+  const peaks = await fetchPeaks(grooveSlug, name)
+  ws.once('ready', () => {
+    try {
+      ws.setTime(at)
+      if (isPlaying) ws.play().catch(() => { /* démarrage refusé : seek suivant */ })
+    } catch (err) {
+      console.warn('[seekable] recalage après remplacement impossible:', err)
+    }
+  })
+  await ws.load(
+    `/seekable/${encodePath(grooveSlug)}/${encodeURIComponent(name)}`,
+    peaks?.length > 0 ? peaks : undefined,
+  )
 }
 
 // ── Epic 18 — Zoom horizontal ──────────────────────────────────────────────
@@ -5149,8 +5231,15 @@ async function init() {
     // pour savoir s'il y a de l'audio à mixer.
     initDownloadMenu()
     buildTimelineRow()
+    // Copie recalable du backing track : connue avant que la tablature
+    // n'arrive, et lue par buildBackingTrackRow().
+    backingSeekableUrl = groove.backingPlaybackUrl ?? null
     currentTracks.forEach((track, i) => {
       buildTrackRow(track, track.index, cachedPeaksArr[i])
+      // Piste MP3 sans copie recalable : la fabriquer en tâche de fond.
+      if (track.needsSeekable) {
+        queueSeekableCopy({ name: track.filename, idx: track.index, url: track.url })
+      }
     })
 
     // Epic 17 — init marker lane (markerLaneEl set during buildTimelineRow)
