@@ -1117,9 +1117,11 @@ function buildTimelineRow() {
 // opts.insertBefore : ligne devant laquelle insérer (ordre MIDI → backing → audio)
 // opts.isBacking    : marque la ligne comme backing track embarqué
 // opts.rowClass     : classes de la ligne (39.4 — piste MIDI rendue en audio)
+//                     La clé mix.json est toujours track.filename.
+// opts.color        : couleur imposée, au lieu de la dériver de l'index
 // opts.extraTopEls  : éléments à ajouter en haut de la sidebar (bouton « tab »)
 function buildTrackRow(track, idx, cachedPeaks = null, opts = {}) {
-  const color         = TRACK_COLORS[(opts.colorIndex ?? idx) % TRACK_COLORS.length]
+  const color         = opts.color ?? TRACK_COLORS[(opts.colorIndex ?? idx) % TRACK_COLORS.length]
   const waveColor     = color + '55'  // dim = unplayed
   const progressColor = color         // bright = played
 
@@ -1297,7 +1299,7 @@ function buildTrackRow(track, idx, cachedPeaks = null, opts = {}) {
   const state = { volume: 1, muted: false, soloed: false }
   trackStates.push(state)
   trackSourceUrls.push(track.url ?? (opts.blob ? trackedObjectUrl(opts.blob) : null))
-  trackMixKeys.push(opts.mixKey ?? track.filename)
+  trackMixKeys.push(track.filename)
   volSliders.push(volSlider)
   wavesurfers.push(ws)
   ws.setPlaybackRate(currentTempo / 100, true)
@@ -1555,9 +1557,13 @@ function setTabTrackVisible(idx, visible) {
   applyTabTrackSelection()
 }
 
-function buildMidiTrackRow(track, idx, color) {
+function buildMidiTrackRow(track, idx, color, fileName) {
+  const state = makeMidiTrackState(track, idx, color, { rendered: false, fileName })
+  const { btnShow, warnEl } = state
+
   const row = document.createElement('div')
   row.className = 'track-row track-row--midi'
+  applyMidiRowTint(row, color)
 
   const sidebar = document.createElement('div')
   sidebar.className = 'track-sidebar'
@@ -1571,21 +1577,6 @@ function buildMidiTrackRow(track, idx, color) {
   const label = track.name || `Piste ${idx + 1}`
   nameEl.textContent = label
   nameEl.title = label
-
-  const btnShow = document.createElement('button')
-  btnShow.className = 'track-btn btn-tab-show active'
-  btnShow.textContent = '♪'
-  btnShow.title = 'Afficher dans la tablature'
-  btnShow.setAttribute('aria-pressed', 'true')
-
-  // 39.5 — marqueur de dérive, révélé par updateMidiSyncWarnings() quand le
-  // fichier ne porte aucun point de synchro. Non bloquant : le rendu se fait.
-  const warnEl = document.createElement('span')
-  warnEl.className = 'midi-drift-warning'
-  warnEl.textContent = '⚠'
-  warnEl.title = MIDI_DRIFT_WARNING
-  warnEl.setAttribute('aria-label', MIDI_DRIFT_WARNING)
-  warnEl.hidden = true
 
   // 39.2 — en mode mixte le rendu part tout seul à l'ouverture : ce bouton
   // n'est qu'un repli, révélé par updateMidiRenderUi() si le rendu a échoué.
@@ -1651,7 +1642,6 @@ function buildMidiTrackRow(track, idx, color) {
   // Aire vide colorée (v1) — pas de piano-roll
   const waveEl = document.createElement('div')
   waveEl.className = 'track-wave track-wave--midi'
-  waveEl.style.setProperty('--midi-color', color)
   waveEl.style.height = (isMobile ? 48 : 64) + 'px'
 
   // 39.2 — progression du rendu, posée sur l'aire vide de la ligne concernée
@@ -1663,12 +1653,7 @@ function buildMidiTrackRow(track, idx, color) {
   row.append(sidebar, waveEl)
   tracksContainer.insertBefore(row, firstAudioRowEl())
 
-  const state = {
-    track, index: idx, muted: false, soloed: false, volume: 1, visible: true,
-    btnShow, btnRender, warnEl, progressEl, waveEl, row,
-    rendered: false,    // 39.4 — passe à true une fois la piste devenue audio
-    autoFailed: false,  // 39.2 — le rendu automatique a échoué sur cette piste
-  }
+  Object.assign(state, { btnRender, progressEl, waveEl, row })
   midiTracks.push(state)
   const myIdx = midiTracks.length - 1
 
@@ -1699,10 +1684,20 @@ function buildMidiTrackRow(track, idx, color) {
 function buildMidiTrackRows(score) {
   tracksContainer.querySelectorAll('.track-row--midi').forEach(el => el.remove())
   midiTracks = []
-  // Couleurs : palette existante, indices après les pistes audio
-  const colorOffset = currentTracks.length
+  // 39.3 — les rendus déjà présents dans le dossier ont été découverts par le
+  // scan et bâtis comme des pistes audio ordinaires. On les repère par leur nom
+  // de fichier pour les rattacher à leur piste MIDI, plutôt que d'ajouter une
+  // seconde ligne pour la même piste.
+  const renderNames = midiRenderFileNames(score)
+  // Couleurs : palette existante, indices après les *vraies* pistes audio. Les
+  // rendus sont comptés à part, sinon la couleur d'une piste changerait entre la
+  // session qui la rend et celle qui la retrouve dans le dossier.
+  midiColorOffset = currentTracks.filter(t => !renderNames.includes(t.filename)).length
   score.tracks.forEach((track, i) => {
-    buildMidiTrackRow(track, i, TRACK_COLORS[(colorOffset + i) % TRACK_COLORS.length])
+    const color = midiTrackColor(i)
+    const audioIdx = currentTracks.findIndex(t => t.filename === renderNames[i])
+    if (audioIdx >= 0) adoptRenderedMidiTrack(track, i, color, audioIdx, renderNames[i])
+    else               buildMidiTrackRow(track, i, color, renderNames[i])
   })
   // Un solo posé sur une piste audio avant le chargement du score doit aussi
   // couper les pistes MIDI qui viennent d'apparaître.
@@ -1714,19 +1709,50 @@ function buildMidiTrackRows(score) {
 // En mode mixte AlphaTab ne synthétise rien : une piste MIDI est visible mais
 // muette. Le rendu hors-ligne (39.1) la transforme en piste audio ordinaire —
 // waveform, mute/solo/volume, boucle, export — sans cas particulier en aval.
+//
+// 39.3 — Le rendu est écrit à plat dans le dossier du groove, sous le nom
+// `midi-<nom de piste>.flac`. Le préfixe est le seul marqueur : au chargement
+// suivant, le scan du dossier le découvre comme une piste audio ordinaire et le
+// player la rattache à sa piste MIDI au lieu d'en refaire une seconde.
 
 const MIDI_SOUNDFONT_URL = '/vendor/alphatab/soundfont/sonivox.sf2'
+const MIDI_RENDER_PREFIX = 'midi-'
 
 let midiRenderBusy = false
 let midiSoundFontBytes = null
+// Décalage de palette des pistes MIDI : nombre de pistes audio « fichier » du
+// groove, rendus exclus. Posé par buildMidiTrackRows().
+let midiColorOffset = 0
 
-function midiRenderUrl(trackIndex) {
-  return `/api/midi-render/${encodePath(grooveSlug)}/${trackIndex}`
+// Couleur de la piste MIDI d'index `i`, stable d'une session à l'autre.
+function midiTrackColor(i) {
+  return TRACK_COLORS[(midiColorOffset + i) % TRACK_COLORS.length]
 }
 
-// Nom de cache des peaks d'une piste rendue (pas de fichier dans le groove).
-function midiRenderPeaksName(trackIndex) {
-  return `midi-${trackIndex}`
+// Caractères refusés par les systèmes de fichiers courants. Le reste du nom de
+// piste est gardé tel quel : c'est lui que l'utilisateur verra dans son dossier.
+function sanitizeMidiFileName(name) {
+  return String(name)
+    .replace(/[/\\:*?"<>|\x00-\x1f]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120)
+}
+
+// Nom de fichier du rendu d'une piste du score. Deux pistes homonymes se
+// partageraient le même fichier : la seconde porte son index en suffixe.
+function midiRenderFileNames(score) {
+  const used = new Set()
+  return (score?.tracks ?? []).map((track, i) => {
+    let base = sanitizeMidiFileName(track.name || `Piste ${i + 1}`) || `Piste ${i + 1}`
+    if (used.has(base.toLowerCase())) base = `${base} ${i + 1}`
+    used.add(base.toLowerCase())
+    return `${MIDI_RENDER_PREFIX}${base}${'.flac'}`
+  })
+}
+
+function midiRenderPostUrl(fileName) {
+  return `/api/midi-render/${encodePath(grooveSlug)}/${encodeURIComponent(fileName)}`
 }
 
 function midiTrackLabel(state) {
@@ -1793,10 +1819,72 @@ function updateMidiRenderUi() {
   })
 }
 
+// 39.3 — Le rendu était déjà dans le dossier du groove : la ligne audio existe
+// donc avant même le chargement du score. On ne la double pas, on l'adopte —
+// elle remonte dans la zone MIDI, prend la teinte de la piste et reçoit ses
+// deux attributs propres : le bouton « afficher dans la tablature » et le
+// marqueur de dérive.
+function adoptRenderedMidiTrack(track, idx, color, audioIdx, fileName) {
+  const row = waveVpEls[audioIdx]?.closest('.track-row')
+  const state = makeMidiTrackState(track, idx, color, { rendered: true, fileName })
+  midiTracks.push(state)
+  const myIdx = midiTracks.length - 1
+  state.btnShow.addEventListener('click', () => setTabTrackVisible(myIdx, !state.visible))
+  if (!row) return
+
+  row.classList.add('track-row--midi-rendered')
+  applyMidiRowTint(row, color)
+  // La ligne a été bâtie comme une piste audio quelconque : elle reprend ici la
+  // couleur de sa piste MIDI, comme au moment où elle a été rendue.
+  wavesurfers[audioIdx]?.setOptions({ waveColor: color + '55', progressColor: color })
+  const dot = row.querySelector('.track-color-dot')
+  if (dot) dot.style.background = color
+  // Ordre de l'epic 35 : pistes MIDI d'abord. La ligne est remontée devant la
+  // première vraie piste audio, dans l'ordre du score.
+  tracksContainer.insertBefore(row, firstAudioRowEl())
+  row.querySelector('.track-sidebar-top')?.append(state.warnEl, state.btnShow)
+}
+
+// Fabrique l'état partagé par les deux formes de ligne MIDI (aire vide en
+// attente de rendu, ou piste audio rendue) : les boutons qui suivent la piste.
+function makeMidiTrackState(track, idx, color, { rendered, fileName }) {
+  const label = track.name || `Piste ${idx + 1}`
+
+  const btnShow = document.createElement('button')
+  btnShow.className = 'track-btn btn-tab-show active'
+  btnShow.textContent = '♪'
+  btnShow.title = 'Afficher dans la tablature'
+  btnShow.setAttribute('aria-pressed', 'true')
+
+  // 39.5 — marqueur de dérive, révélé par updateMidiSyncWarnings() quand le
+  // fichier ne porte aucun point de synchro. Non bloquant : le rendu se fait.
+  const warnEl = document.createElement('span')
+  warnEl.className = 'midi-drift-warning'
+  warnEl.textContent = '⚠'
+  warnEl.title = MIDI_DRIFT_WARNING
+  warnEl.setAttribute('aria-label', MIDI_DRIFT_WARNING)
+  warnEl.hidden = true
+
+  return {
+    track, index: idx, color, fileName,
+    muted: false, soloed: false, volume: 1, visible: true,
+    btnShow, warnEl, btnRender: null, progressEl: null, waveEl: null, row: null,
+    rendered, autoFailed: false,
+  }
+}
+
+// Teinte de fond d'une ligne MIDI : la couleur que l'epic 35 attribue à la
+// piste, posée en variable CSS et appliquée par .track-row--midi*.
+function applyMidiRowTint(row, color) {
+  row?.style.setProperty('--midi-color', color)
+}
+
 // 39.4 — la ligne MIDI cède la place à une vraie piste WaveSurfer, au même
 // endroit et de la même couleur. À partir d'ici, plus aucune branche spéciale :
 // mix, boucle, export et zip la traitent comme n'importe quelle piste audio.
-function promoteMidiTrackToAudio(state, blob, cachedPeaks = null) {
+// `url` est renseignée quand le rendu a bien été écrit dans le dossier du
+// groove ; sinon on retombe sur le blob, audible pour cette session seulement.
+function promoteMidiTrackToAudio(state, { url, blob }) {
   const before = state.row?.nextSibling || firstAudioRowEl()
   state.row?.remove()
   state.rendered = true
@@ -1811,22 +1899,23 @@ function promoteMidiTrackToAudio(state, blob, cachedPeaks = null) {
   buildTrackRow(
     {
       index: idx,
-      filename: midiRenderPeaksName(state.index),
+      filename: state.fileName,
       displayName: midiTrackLabel(state),
-      url: null,
+      url: url ?? null,
     },
     idx,
-    cachedPeaks,
+    null,
     {
-      blob,
+      blob: url ? null : blob,
       insertBefore: before,
       rowClass: 'track-row track-row--midi-rendered',
-      mixKey: midiMixKey(state.index),
-      // Même couleur que l'aire vide qu'elle remplace.
-      colorIndex: currentTracks.length + state.index,
-      extraTopEls: [state.btnShow, state.warnEl],
+      // Même couleur que l'aire vide qu'elle remplace, et que la ligne adoptée
+      // au prochain chargement du groove.
+      color: state.color,
+      extraTopEls: [state.warnEl, state.btnShow],
     },
   )
+  applyMidiRowTint(waveVpEls[idx]?.closest('.track-row'), state.color)
 
   // Le rendu tourne en tâche de fond, lecture comprise : la piste qui arrive en
   // cours de route démarrerait à zéro pendant que les autres avancent. On la
@@ -1842,8 +1931,9 @@ function promoteMidiTrackToAudio(state, blob, cachedPeaks = null) {
     }
   })
   // Réglages déjà enregistrés pour cette piste : la ligne n'existait pas quand
-  // mix.json a été lu, c'est ici qu'ils s'appliquent.
-  applyMixEntry(idx, savedMixTracks[midiMixKey(state.index)])
+  // mix.json a été lu, c'est ici qu'ils s'appliquent. La clé est le nom du
+  // fichier, comme pour toute piste du dossier.
+  applyMixEntry(idx, savedMixTracks[state.fileName])
   // Une piste rendue est du son mixable : les exports de mix deviennent utiles
   // même sur un groove tab-only devenu audio.
   setMixDownloadsAvailable(true)
@@ -1851,9 +1941,8 @@ function promoteMidiTrackToAudio(state, blob, cachedPeaks = null) {
   updateMidiRenderUi()
 }
 
-// 39.1 à 39.3 — rendu d'une piste, encodage FLAC, persistance, promotion.
-// Renvoie l'issue du rendu : 'ok', 'skipped' (rien à faire sur cette piste)
-// ou 'failed'.
+// 39.1 à 39.3 — rendu d'une piste, encodage FLAC, écriture dans le dossier du
+// groove, promotion. Renvoie 'ok', 'skipped' (rien à faire) ou 'failed'.
 async function renderMidiTrackToAudio(i) {
   const state = midiTracks[i]
   if (!state || state.rendered || midiRenderBusy) return 'skipped'
@@ -1876,19 +1965,22 @@ async function renderMidiTrackToAudio(i) {
       onProgress: ratio => setMidiRenderProgress(state, ratio),
     })
     const blob = await encodeFlac(buffer)
-    // 39.3 — persistance : un échec d'écriture ne doit pas perdre le rendu,
-    // la piste est ajoutée de toute façon (elle sera juste refaite au prochain
-    // chargement du groove).
+    // 39.3 — écriture dans le dossier du groove. Un échec ne doit pas perdre le
+    // rendu : la piste est ajoutée depuis le blob, audible pour cette session,
+    // et refaite au prochain chargement du groove.
+    let url = null
     try {
-      const res = await fetch(
-        `${midiRenderUrl(state.index)}?name=${encodeURIComponent(midiTrackLabel(state))}`,
-        { method: 'POST', headers: { 'Content-Type': 'audio/flac' }, body: blob },
-      )
+      const res = await fetch(midiRenderPostUrl(state.fileName), {
+        method: 'POST', headers: { 'Content-Type': 'audio/flac' }, body: blob,
+      })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      // Le fichier existe maintenant comme n'importe quelle piste du dossier :
+      // on le charge par son URL, sans garder le blob en mémoire.
+      url = `/audio/${encodePath(grooveSlug)}/${encodeURIComponent(state.fileName)}`
     } catch (err) {
-      console.warn('[midi-render] mise en cache impossible:', err)
+      console.warn('[midi-render] écriture dans le dossier du groove impossible:', err)
     }
-    promoteMidiTrackToAudio(state, blob)
+    promoteMidiTrackToAudio(state, { url, blob })
     return 'ok'
   } catch (err) {
     console.error('[midi-render]', err)
@@ -1917,7 +2009,8 @@ async function renderPendingMidiTracks() {
 
 // 39.2 — déclenchement automatique à l'ouverture du groove, en tâche de fond :
 // le player reste utilisable (lecture comprise) et les pistes apparaissent une
-// à une, chacune remplaçant son aire vide dès que son rendu est prêt.
+// à une, chacune remplaçant son aire vide dès que son rendu est prêt. Les
+// pistes déjà rendues ont été adoptées depuis le dossier : rien à refaire.
 async function autoRenderMidiTracks() {
   // Tab-only : le synthétiseur joue en direct, il n'y a rien à rendre.
   if (!tabExternal) return
@@ -1942,26 +2035,6 @@ async function renderAllMidiTracks() {
   }
 }
 
-// 39.3 — à l'ouverture du groove, les rendus encore valides sont chargés en
-// pistes WaveSurfer sans rien resynthétiser.
-async function loadCachedMidiRenders() {
-  if (!tabExternal) return
-  for (const state of midiTracks) {
-    if (state.rendered) continue
-    try {
-      const res = await fetch(midiRenderUrl(state.index))
-      if (!res.ok) continue   // 404 = pas de rendu, ou .gp modifié depuis
-      const blob = await res.blob()
-      const peaks = await fetchPeaks(grooveSlug, midiRenderPeaksName(state.index))
-      promoteMidiTrackToAudio(state, blob, peaks)
-    } catch (err) {
-      console.warn('[midi-render] chargement du cache impossible:', err)
-    }
-  }
-  updateMidiRenderUi()
-  // Seules les pistes absentes du cache sont synthétisées.
-  await autoRenderMidiTracks()
-}
 
 // ── 35.4 — Backing track embarqué dans le fichier GP ──────────────────────
 
@@ -3153,8 +3226,9 @@ async function initTabDrawer(tabFile) {
     // porte le TimelinePlugin, le `timeupdate` et la durée totale.
     buildBackingTrackRow(score)
       .catch(err => console.warn('[tab] backing track:', err))
-      // 39.3 — rendus MIDI déjà en cache : rechargés tels quels, sans resynthèse
-      .then(() => loadCachedMidiRenders())
+      // 39.2 — les rendus déjà présents dans le dossier ont été adoptés par
+      // buildMidiTrackRows() ; seules les pistes manquantes sont synthétisées.
+      .then(() => autoRenderMidiTracks())
       .catch(err => console.warn('[midi-render]', err))
     buildTrackSelector(score)
     // 35.3 — les boutons « afficher dans la tab » et les cases du drawer sont
@@ -3349,12 +3423,6 @@ function applyMixEntry(i, entry) {
     if (volSliders[i]) volSliders[i].value = String(vol)
   }
   if (pan !== null) setPan(i, pan)
-}
-
-// 39.4 — clé stable d'une piste MIDI rendue dans mix.json. Indépendante de la
-// place de la piste dans le player, qui dépend de l'ordre de chargement.
-function midiMixKey(trackIndex) {
-  return `midi:${trackIndex}`
 }
 
 // 30.3 — Chargement du mix (tracks uniquement) avec indicateur de source

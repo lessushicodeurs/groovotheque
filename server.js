@@ -68,11 +68,23 @@ const AUDIO_EXTENSIONS     = new Set(['.mp3', '.wav', '.flac', '.ogg']);
 const GP_EXTENSIONS        = new Set(['.gp', '.gpx', '.gp5', '.gp4', '.gp8']);
 const ALL_MEDIA_EXTENSIONS = new Set([...AUDIO_EXTENSIONS, ...GP_EXTENSIONS]);
 
+// 39.3 — Les rendus audio des pistes MIDI vivent à plat dans le dossier du
+// groove, comme n'importe quelle piste. Ce préfixe est leur seul marqueur :
+// c'est lui qui dit au player qu'un rendu existe déjà, et il est retiré du nom
+// affiché. Le nom du fichier reste `midi-<nom de la piste>.flac`.
+const MIDI_RENDER_PREFIX = 'midi-';
+const MIDI_RENDER_EXT    = '.flac';
+
 const GROOVES_DIR = path.normalize(path.resolve(__dirname, 'grooves'));
 
 function getTrackDisplayName(filename) {
   const withoutExt = filename.replace(/\.[^.]+$/, '');
-  return withoutExt.replace(/^\d+_/, '').replace(/_/g, ' ');
+  return withoutExt
+    // 39.3 — « midi-Electric Bass.flac » est un rendu de piste MIDI : le préfixe
+    // est un marqueur technique, pas une partie du nom de la piste.
+    .replace(new RegExp(`^${MIDI_RENDER_PREFIX}`), '')
+    .replace(/^\d+_/, '')
+    .replace(/_/g, ' ');
 }
 
 function trackSortKey(filename) {
@@ -348,6 +360,12 @@ app.get('/api/grooves/*/download', async (req, res) => {
     return res.status(404).json({ error: 'Groove introuvable' });
   }
 
+  // 39.3 — les rendus MIDI sont des fichiers du dossier du groove : le scan
+  // ci-dessous les prend comme n'importe quelle piste, une seule fois et sous
+  // leur vrai nom. Il suffit d'écarter d'abord ceux qu'un `.gp` modifié a périmés.
+  await purgeStaleMidiRenders(groovePath, grooveDir).catch(
+    err => console.warn('[midi-render] purge impossible:', err));
+
   const slug = groovePath.split('/').pop();
   res.setHeader('Content-Type', 'application/zip');
   res.setHeader('Content-Disposition', `attachment; filename="${slug}.zip"`);
@@ -358,20 +376,6 @@ app.get('/api/grooves/*/download', async (req, res) => {
   });
   archive.pipe(res);
 
-  // Deux entrées de même nom dans un zip donnent une archive dont une moitié
-  // est inaccessible : le nom des doublons est suffixé.
-  const usedNames = new Set();
-  const uniqueName = (name) => {
-    if (!usedNames.has(name)) { usedNames.add(name); return name; }
-    const ext = path.extname(name);
-    const base = name.slice(0, name.length - ext.length);
-    let n = 2;
-    while (usedNames.has(`${base} (${n})${ext}`)) n++;
-    const unique = `${base} (${n})${ext}`;
-    usedNames.add(unique);
-    return unique;
-  };
-
   try {
     const entries = await fs.promises.readdir(grooveDir, { withFileTypes: true });
     for (const entry of entries) {
@@ -380,13 +384,8 @@ app.get('/api/grooves/*/download', async (req, res) => {
       // Le fichier Guitar Pro accompagne les pistes : il embarque sa tablature et
       // son éventuel backing track, qu'aucun fichier du dossier ne contient.
       if (AUDIO_EXTENSIONS.has(ext) || GP_EXTENSIONS.has(ext) || ext === '.md') {
-        archive.file(path.join(grooveDir, entry.name), { name: uniqueName(entry.name) });
+        archive.file(path.join(grooveDir, entry.name), { name: entry.name });
       }
-    }
-    // 39.4 — les pistes MIDI rendues en audio sont des pistes du groove comme
-    // les autres : elles vivent dans le cache mais appartiennent au zip.
-    for (const render of await listValidMidiRenders(groovePath, grooveDir)) {
-      archive.file(render.path, { name: uniqueName(render.name) });
     }
   } catch (err) {
     archive.abort();
@@ -402,6 +401,11 @@ app.get('/api/grooves/*', async (req, res) => {
   const grooveDir = resolveGrooveDir(groovePath, res);
   if (!grooveDir) return;
   try {
+    // 39.3 — porte d'entrée du player : les rendus MIDI périmés par un `.gp`
+    // modifié disparaissent ici, avant d'être listés comme des pistes. Le
+    // player ne voit que les rendus valides, et refait les manquants.
+    await purgeStaleMidiRenders(groovePath, grooveDir).catch(
+      err => console.warn('[midi-render] purge impossible:', err));
     const entries = await fs.promises.readdir(grooveDir, { withFileTypes: true });
     const audioEntries = entries.filter(
       e => e.isFile() && !e.name.endsWith('~') && AUDIO_EXTENSIONS.has(path.extname(e.name).toLowerCase())
@@ -680,26 +684,14 @@ app.post('/api/peaks/*', async (req, res) => {
 });
 
 // ── Epic 39 — Rendus audio des pistes MIDI ────────────────────────────────
-// 39.3 — cache/<groove-path>/midi/<n>.flac + <n>.json (empreinte du .gp source).
-// Regénérables : jamais écrits dans le dossier du groove.
+// 39.3 — Le rendu lui-même est un fichier ordinaire du dossier du groove :
+// `<groove>/midi-<nom de piste>.flac`. Il est donc découvert par le scan des
+// pistes, servi par /audio/*, téléchargé dans le zip et mixé comme les autres —
+// aucune route ne le relit. Seule l'empreinte du `.gp` source reste dans le
+// cache : elle ne regarde pas l'utilisateur et n'a rien à faire chez lui.
 
-// Même garde de traversée que resolvePeaksPath() : le chemin résolu doit
-// rester sous CACHE_DIR.
-function resolveMidiRenderPath(groovePath, trackIndex, ext, res) {
-  if (!/^\d{1,3}$/.test(trackIndex)) {
-    res.status(400).json({ error: 'Index de piste invalide' });
-    return null;
-  }
-  const filePath = path.resolve(CACHE_DIR, groovePath, 'midi', `${trackIndex}${ext}`);
-  if (!filePath.startsWith(CACHE_DIR + path.sep)) {
-    res.status(400).json({ error: 'Chemin invalide' });
-    return null;
-  }
-  return filePath;
-}
-
-// Empreinte du fichier Guitar Pro source : taille + mtime. Un .gp modifié rend
-// tous les rendus obsolètes, et le bouton « Rendre en audio » repropose le rendu.
+// Empreinte du fichier Guitar Pro source : taille + mtime. Un `.gp` modifié rend
+// tous les rendus du groove obsolètes.
 async function gpFingerprint(grooveDir) {
   const entries = await fs.promises.readdir(grooveDir, { withFileTypes: true });
   const gpEntry = entries.find(
@@ -714,13 +706,70 @@ function fingerprintMatches(a, b) {
   return !!a && !!b && a.tabFile === b.tabFile && a.size === b.size && a.mtimeMs === b.mtimeMs;
 }
 
+// Même garde de traversée que resolvePeaksPath() : le chemin résolu doit rester
+// sous CACHE_DIR. Renvoie null si `groovePath` tente d'en sortir.
+function midiFingerprintPath(groovePath) {
+  const filePath = path.resolve(CACHE_DIR, groovePath, 'midi', 'fingerprint.json');
+  return filePath.startsWith(CACHE_DIR + path.sep) ? filePath : null;
+}
+
+async function readMidiFingerprint(groovePath) {
+  const filePath = midiFingerprintPath(groovePath);
+  if (!filePath) return null;
+  try {
+    return JSON.parse(await fs.promises.readFile(filePath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+// Un `.gp` modifié périme tous les rendus qu'il a produits : ils sont effacés du
+// dossier du groove, avec leurs peaks, et le player les refait à l'ouverture.
+// Seuls les fichiers que l'on a nous-mêmes écrits (listés dans l'empreinte) sont
+// supprimés : un `midi-*.flac` déposé à la main par l'utilisateur n'est jamais
+// touché, et reste une piste audio ordinaire.
+async function purgeStaleMidiRenders(groovePath, grooveDir) {
+  const stored = await readMidiFingerprint(groovePath);
+  if (!stored) return;
+  let current = null;
+  try {
+    current = await gpFingerprint(grooveDir);
+  } catch { /* groove disparu : on purge */ }
+  if (fingerprintMatches(stored.source, current)) return;
+
+  const remove = p => fs.promises.rm(p, { force: true }).catch(() => {});
+  for (const name of stored.files ?? []) {
+    if (!isMidiRenderName(name)) continue;
+    await remove(path.join(grooveDir, name));
+    // Les peaks de la piste vivent dans le cache, comme pour toute piste audio.
+    const peaks = path.resolve(CACHE_DIR, groovePath, name + '.peaks.json');
+    if (peaks.startsWith(CACHE_DIR + path.sep)) await remove(peaks);
+  }
+  const fp = midiFingerprintPath(groovePath);
+  if (fp) await remove(fp);
+}
+
+// Nom de rendu valide : le préfixe marqueur, une extension .flac, et surtout
+// aucun séparateur ni segment de remontée — le fichier est écrit dans le
+// dossier du groove, pas ailleurs.
+function isMidiRenderName(name) {
+  return typeof name === 'string'
+    && name.startsWith(MIDI_RENDER_PREFIX)
+    && name.toLowerCase().endsWith(MIDI_RENDER_EXT)
+    && name.length > MIDI_RENDER_PREFIX.length + MIDI_RENDER_EXT.length
+    && name.length <= 180
+    && !name.includes('/') && !name.includes('\\') && !name.includes('\0')
+    && path.basename(name) === name
+    && name !== '.' && name !== '..';
+}
+
 // Plafond du corps accepté au POST. Un rendu est du FLAC stéréo 16 bits à
 // 44,1 kHz, soit 10,6 Mo/min de PCM brut ; le FLAC d'une piste d'instrument
 // seule descend couramment sous la moitié. 64 Mo couvrent donc largement une
 // dizaine de minutes de morceau, sans laisser passer n'importe quoi.
 const MIDI_RENDER_MAX_BYTES = 64 * 1024 * 1024;
 
-// Découpe « <groove-path>/<n> » en ses deux parties.
+// Découpe « <groove-path>/<nom de fichier> » en ses deux parties.
 // decodeURIComponent() lève sur un « % » malformé : la sortie doit être un 400,
 // pas un rejet non rattrapé qui laisserait la requête pendante (Express 4 ne
 // rattrape pas les rejets d'un handler async).
@@ -730,15 +779,19 @@ function splitMidiRenderParams(raw, res) {
     res.status(400).json({ error: 'Chemin invalide' });
     return null;
   }
-  let trackIndex, groovePath;
+  let fileName, groovePath;
   try {
-    trackIndex = decodeURIComponent(parts.pop());
+    fileName = decodeURIComponent(parts.pop());
     groovePath = parts.map(decodeURIComponent).join('/');
   } catch {
     res.status(400).json({ error: 'Chemin invalide' });
     return null;
   }
-  return { groovePath, trackIndex };
+  if (!isMidiRenderName(fileName)) {
+    res.status(400).json({ error: 'Nom de rendu invalide' });
+    return null;
+  }
+  return { groovePath, fileName };
 }
 
 // Une erreur interne ne doit pas renvoyer err.message au client : il porte le
@@ -748,104 +801,28 @@ function midiRenderFailure(res, err) {
   if (!res.headersSent) res.status(500).json({ error: 'Erreur interne' });
 }
 
-// Un .gp modifié rend tous les rendus du groove obsolètes. Sans purge, le
-// .flac, son empreinte et les peaks associés resteraient indéfiniment dans le
-// cache. Les rendus dont l'empreinte correspond encore sont laissés en place.
-async function purgeStaleMidiRenders(groovePath, grooveDir) {
-  const dir = path.resolve(CACHE_DIR, groovePath, 'midi');
-  if (!dir.startsWith(CACHE_DIR + path.sep)) return;
-  let names;
-  try {
-    names = await fs.promises.readdir(dir);
-  } catch {
-    return;   // pas de rendus pour ce groove
-  }
-  const current = await gpFingerprint(grooveDir).catch(() => null);
-  const remove = p => fs.promises.rm(p, { force: true }).catch(() => {});
-  for (const name of names) {
-    if (!name.endsWith('.flac')) continue;
-    const base = name.slice(0, -5);
-    let meta = null;
-    try {
-      meta = JSON.parse(await fs.promises.readFile(path.join(dir, base + '.json'), 'utf8'));
-    } catch { /* rendu sans empreinte lisible : périmé par définition */ }
-    if (fingerprintMatches(meta?.source, current)) continue;
-    await remove(path.join(dir, name));
-    await remove(path.join(dir, base + '.json'));
-    // Les peaks du rendu vivent à côté, dans cache/<groove-path>/
-    await remove(path.resolve(CACHE_DIR, groovePath, `midi-${base}.peaks.json`));
-  }
-}
-
-// Rendu valide (empreinte à jour) d'une piste, ou null.
-async function readValidMidiRender(groovePath, trackIndex, res) {
-  const flacPath = resolveMidiRenderPath(groovePath, trackIndex, '.flac', res);
-  if (!flacPath) return null;
-  const metaPath = resolveMidiRenderPath(groovePath, trackIndex, '.json', res);
-  if (!metaPath) return null;
-  const grooveDir = resolveGrooveDir(groovePath, res);
-  if (!grooveDir) return null;
-
-  let meta;
-  try {
-    meta = JSON.parse(await fs.promises.readFile(metaPath, 'utf8'));
-  } catch {
-    return { stale: true };
-  }
-  const current = await gpFingerprint(grooveDir).catch(() => null);
-  if (!fingerprintMatches(meta.source, current)) return { stale: true };
-  try {
-    await fs.promises.access(flacPath);
-  } catch {
-    return { stale: true };
-  }
-  return { flacPath, meta };
-}
-
-app.get('/api/midi-render/*', async (req, res) => {
-  const params = splitMidiRenderParams(req.params[0], res);
-  if (!params) return;
-  let found;
-  try {
-    found = await readValidMidiRender(params.groovePath, params.trackIndex, res);
-  } catch (err) {
-    return midiRenderFailure(res, err);
-  }
-  if (!found) return;                       // réponse d'erreur déjà envoyée
-  if (found.stale) {
-    // Le client va refaire le rendu : c'est le moment de jeter le périmé.
-    const grooveDir = path.resolve(GROOVES_DIR, params.groovePath);
-    if (grooveDir.startsWith(GROOVES_DIR + path.sep)) {
-      await purgeStaleMidiRenders(params.groovePath, grooveDir).catch(
-        err => console.warn('[midi-render] purge impossible:', err));
-    }
-    return res.status(404).json({ error: 'Rendu introuvable' });
-  }
-  res.type('audio/flac');
-  res.sendFile(found.flacPath, err => {
-    if (err && !res.headersSent) res.status(404).json({ error: 'Rendu introuvable' });
-  });
-});
-
+// 39.3 — Écriture d'un rendu dans le dossier du groove. C'est la seule route
+// qui subsiste : la lecture passe par /audio/*, comme pour toute piste.
 app.post('/api/midi-render/*',
   express.raw({ type: ['audio/flac', 'application/octet-stream'], limit: MIDI_RENDER_MAX_BYTES }),
   async (req, res) => {
     const params = splitMidiRenderParams(req.params[0], res);
     if (!params) return;
-    const { groovePath, trackIndex } = params;
+    const { groovePath, fileName } = params;
 
-    const flacPath = resolveMidiRenderPath(groovePath, trackIndex, '.flac', res);
-    if (!flacPath) return;
-    const metaPath = resolveMidiRenderPath(groovePath, trackIndex, '.json', res);
-    if (!metaPath) return;
     const grooveDir = resolveGrooveDir(groovePath, res);
     if (!grooveDir) return;
+    const filePath = path.join(grooveDir, fileName);
+    // Ceinture et bretelles : isMidiRenderName() exclut déjà tout séparateur.
+    if (!filePath.startsWith(GROOVES_DIR + path.sep) || path.dirname(filePath) !== grooveDir) {
+      return res.status(400).json({ error: 'Chemin invalide' });
+    }
 
     if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
       return res.status(400).json({ error: 'Corps audio manquant' });
     }
-    // Le cache ne doit contenir que ce qu'il prétend contenir : un flux FLAC
-    // commence toujours par le marqueur « fLaC ».
+    // Le dossier du groove ne doit contenir que ce que le fichier prétend
+    // être : un flux FLAC commence toujours par le marqueur « fLaC ».
     if (req.body.length < 4 || req.body.subarray(0, 4).toString('latin1') !== 'fLaC') {
       return res.status(400).json({ error: 'Le corps n’est pas un flux FLAC' });
     }
@@ -862,48 +839,33 @@ app.post('/api/midi-render/*',
         throw err;
       }
       if (!source) return res.status(404).json({ error: 'Aucun fichier Guitar Pro dans ce groove' });
+
+      // Le `.gp` a changé depuis les rendus précédents : ils partent avant que
+      // le nouveau s'installe, sinon anciens et nouveaux cohabiteraient.
       await purgeStaleMidiRenders(groovePath, grooveDir);
-      await fs.promises.mkdir(path.dirname(flacPath), { recursive: true });
-      await fs.promises.writeFile(flacPath, req.body);
-      await fs.promises.writeFile(metaPath, JSON.stringify({
-        source,
-        trackIndex: Number(trackIndex),
-        // Nom de la piste : le serveur ne sait pas lire le .gp, c'est le client
-        // qui le fournit. Sert à nommer le fichier dans le zip.
-        trackName: typeof req.query.name === 'string' ? req.query.name.slice(0, 120) : null,
-        renderedAt: new Date().toISOString(),
-      }, null, 2), 'utf8');
-      res.status(201).json({ ok: true });
+
+      await fs.promises.writeFile(filePath, req.body);
+
+      const fpPath = midiFingerprintPath(groovePath);
+      if (fpPath) {
+        const stored = await readMidiFingerprint(groovePath);
+        const files = fingerprintMatches(stored?.source, source)
+          ? new Set(stored.files ?? [])
+          : new Set();
+        files.add(fileName);
+        await fs.promises.mkdir(path.dirname(fpPath), { recursive: true });
+        await fs.promises.writeFile(fpPath, JSON.stringify({
+          source,
+          files: [...files],
+          renderedAt: new Date().toISOString(),
+        }, null, 2), 'utf8');
+      }
+      res.status(201).json({ ok: true, file: fileName });
     } catch (err) {
       midiRenderFailure(res, err);
     }
   });
 
-// Rendus valides d'un groove, prêts à être ajoutés au zip de téléchargement.
-async function listValidMidiRenders(groovePath, grooveDir) {
-  const dir = path.resolve(CACHE_DIR, groovePath, 'midi');
-  if (!dir.startsWith(CACHE_DIR + path.sep)) return [];
-  let names;
-  try {
-    names = await fs.promises.readdir(dir);
-  } catch {
-    return [];
-  }
-  const current = await gpFingerprint(grooveDir).catch(() => null);
-  if (!current) return [];
-  const out = [];
-  for (const name of names) {
-    if (!name.endsWith('.flac')) continue;
-    const base = name.slice(0, -5);
-    try {
-      const meta = JSON.parse(await fs.promises.readFile(path.join(dir, base + '.json'), 'utf8'));
-      if (!fingerprintMatches(meta.source, current)) continue;
-      const label = (meta.trackName || `piste-${base}`).replace(/[^\w .()\-À-ÿ]/g, '_');
-      out.push({ path: path.join(dir, name), name: `midi-${base}-${label}.flac` });
-    } catch { /* rendu sans empreinte lisible : ignoré */ }
-  }
-  return out;
-}
 
 // ── Epic 22 — Commentaires ────────────────────────────────────────────────
 
