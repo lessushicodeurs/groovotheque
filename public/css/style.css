@@ -551,9 +551,6 @@ body {
   padding: 0.75rem 1.25rem;
   background: #131313;
   border-top: 1px solid #1a1a1a;
-  position: sticky;
-  bottom: var(--drawer-height, 0px);
-  z-index: 10;
 }
 
 .transport-row {
@@ -989,11 +986,26 @@ button, a, input[type="range"], .seek-bar {
   display: none;
 }
 
+/* Le transport est ferré en bas de la fenêtre, la tablature s'empile juste
+   au-dessus. Auparavant il était `sticky` à l'intérieur de son propre
+   conteneur, qui fait exactement sa hauteur : le collage n'avait donc aucun
+   jeu et la barre repartait dans le flux de la page, noyée au milieu des
+   pistes dès qu'elles étaient nombreuses. */
+.transport-drawer {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 12;
+  background: #131313;
+}
+
 /* ── Tablature drawer (Epic 13) ──────────── */
 
-/* player-main gets bottom padding so transport doesn't hide under drawer (strip/collapsed) */
+/* player-main réserve la hauteur des deux barres ferrées en bas (tablature +
+   transport) pour que la dernière piste reste atteignable. */
 #player-main {
-  padding-bottom: var(--drawer-height, 0px);
+  padding-bottom: calc(var(--drawer-height, 0px) + var(--transport-height, 0px));
 }
 
 /* En mode élargi : contraindre player-main pour éviter le scroll de page */
@@ -1005,7 +1017,7 @@ html.tab-no-scroll #player-main {
 
 .tab-drawer {
   position: fixed;
-  bottom: 0;
+  bottom: var(--transport-height, 0px);
   left: 0;
   right: 0;
   z-index: 8; /* below transport z-index 10 */

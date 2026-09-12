@@ -324,6 +324,21 @@ function isMarkerInSelection(marker) {
 function nextMarkerId() { return 'mk_' + (++markerIdCounter) }
 
 // ── Drawer (mobile bottom sheet) ──────────────────────────────────────────
+// Hauteur réelle de la barre de transport, ferrée en bas de la fenêtre.
+// La tablature s'adosse dessus et player-main réserve la place des deux :
+// on la mesure plutôt que de la coder en dur, la barre passant sur deux
+// lignes ou plus selon la largeur de fenêtre.
+function observeTransportHeight() {
+  if (!drawerEl) return
+  const publish = () => {
+    const h = drawerEl.getBoundingClientRect().height
+    document.documentElement.style.setProperty('--transport-height', Math.round(h) + 'px')
+  }
+  publish()
+  if (typeof ResizeObserver === 'function') new ResizeObserver(publish).observe(drawerEl)
+  window.addEventListener('resize', publish)
+}
+
 
 function setDrawerOpen(open) {
   drawerOpen = open
@@ -1501,12 +1516,16 @@ function buildMidiTrackRow(track, idx, color) {
 
   // Aire vide colorée (v1) — pas de piano-roll
   const waveEl = document.createElement('div')
+  // La piste est de fait muette : on l'affiche mute (bouton M allumé), sans
+  // possibilité de la démuter tant qu'il y a de l'audio.
   waveEl.className = 'track-wave track-wave--midi'
   waveEl.style.setProperty('--midi-color', color)
   waveEl.style.height = (isMobile ? 48 : 64) + 'px'
 
   row.append(sidebar, waveEl)
   tracksContainer.insertBefore(row, firstAudioRowEl())
+    btnMute.classList.add('active')
+    btnMute.setAttribute('aria-pressed', 'true')
 
   const state = { track, muted: false, soloed: false, volume: 1, visible: true, btnShow, waveEl }
   midiTracks.push(state)
@@ -1516,16 +1535,12 @@ function buildMidiTrackRow(track, idx, color) {
     state.muted = !state.muted
     btnMute.classList.toggle('active', state.muted)
     btnMute.setAttribute('aria-pressed', String(state.muted))
-  // La piste est de fait muette : on l'affiche mute (bouton M allumé), sans
-  // possibilité de la démuter tant qu'il y a de l'audio.
     applyMix()
   })
 
   btnSolo.addEventListener('click', () => {
     state.soloed = !state.soloed
     btnSolo.classList.toggle('active', state.soloed)
-    btnMute.classList.add('active')
-    btnMute.setAttribute('aria-pressed', 'true')
     btnSolo.setAttribute('aria-pressed', String(state.soloed))
     applyMix()
   })
@@ -1627,8 +1642,9 @@ function setTabState(newState) {
 
   // En mode plein écran : contraindre player-main + bloquer scroll page
   if (newState === 'fullscreen') {
-    const headerH = document.querySelector('.player-header')?.getBoundingClientRect().height || 60
-    const playerH = window.innerHeight - headerH - h
+    const headerH    = document.querySelector('.player-header')?.getBoundingClientRect().height || 60
+    const transportH = drawerEl?.getBoundingClientRect().height || 0
+    const playerH    = window.innerHeight - headerH - h - transportH
     document.documentElement.style.setProperty('--player-main-h', playerH + 'px')
     document.documentElement.classList.add('tab-no-scroll')
     document.body.classList.add('tab-no-scroll')
@@ -4033,6 +4049,7 @@ async function init() {
         isPlaying ? pauseAll() : playAll()
       } else if (e.key === 'Escape') {
         e.preventDefault()
+    observeTransportHeight()
         stopAll()
       } else if (e.key === 'l' || e.key === 'L') {
         e.preventDefault()
