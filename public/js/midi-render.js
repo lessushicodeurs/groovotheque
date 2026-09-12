@@ -66,7 +66,19 @@ export async function renderMidiTrack({ api, alphaTab, score, trackIndex, soundF
   // passés en options sont indexés par piste, pas par canal : impossible de
   // distinguer le canal 16 de la piste qui le porte. À reprendre si AlphaTab
   // corrige le calcul ou ouvre l'accès aux canaux de l'exporteur.
-  const exporter = await api.exportAudio(options)
+  // Collision de canaux : `trackVolume` est indexé par piste, mais AlphaTab le
+  // retraduit en canaux MIDI (voir isolateTrackChannels). Deux pistes sur le
+  // même canal s’écrasent. On écarte donc les voisines avant l'export.
+  const relocated = isolateTrackChannels(score, trackIndex)
+  let exporter
+  try {
+    exporter = await api.exportAudio(options)
+  } finally {
+    // Le MIDI est généré de bout en bout par exportAudio() avant qu'il ne rende
+    // la main : les canaux d'origine peuvent revenir tout de suite, et le
+    // synthétiseur du player (mode tab-only) les retrouve intacts.
+    restoreTrackChannels(relocated)
+  }
 
   const chunks = []
   let totalSamples = 0
@@ -93,16 +105,125 @@ export async function renderMidiTrack({ api, alphaTab, score, trackIndex, soundF
 
   // Un rendu plein de zéros s'encode et se met en cache sans broncher : la
   // piste reviendrait muette à chaque ouverture du groove sans que rien ne le
-  // dise. Les causes sont connues (soundfont absent, piste muette ou à volume
-  // nul dans le .gp — `trackVolume` est un multiplicateur), autant les nommer.
+  // dise. Les causes qui restent une fois les canaux démêlés tiennent au
+  // fichier lui-même ou au soundfont — `trackVolume` n'est qu'un multiplicateur.
+  // (La collision de canaux, qui produisait exactement ce silence sur les
+  // pistes de percussion, est traitée en amont par isolateTrackChannels.)
   if (peakAmplitude(buffer) < SILENCE_PEAK) {
     throw new Error(
       'le rendu est muet (aucun signal au-dessus de −80 dBFS). '
-      + 'Vérifiez que la piste n’est ni muette ni à volume nul dans le fichier '
-      + 'Guitar Pro, et que le soundfont est bien disponible.',
+      + 'La piste est peut-être vide, muette ou à volume nul dans le fichier '
+      + 'Guitar Pro, ou son instrument est absent du soundfont.',
     )
   }
   return buffer
+}
+
+// ── Isolation d'une piste qui partage son canal MIDI ──────────────────────
+//
+// `AudioExportOptions.trackVolume` est indexé par piste, mais AlphaTab le
+// retraduit en canaux MIDI juste avant l'export :
+//
+//   trackVolume.set(track.playbackInfo.primaryChannel, volume)
+//   trackVolume.set(track.playbackInfo.secondaryChannel, volume)
+//
+// Deux pistes sur le même canal écrivent donc dans la même case, et la
+// dernière gagne. Or les pistes de percussion d'un fichier Guitar Pro sont
+// **toutes** sur le canal 10 (indice 9) : c'est le canal de percussion de la
+// norme General MIDI, et `Score.finish()` d'AlphaTab les y force. Sur « Just
+// the two of us » (Drums, Congas, Tambourin, Agogo, tous canal 9), isoler
+// Drums posait 1,0 sur le canal 9 puis Congas, Tambourin et Agogo y posaient
+// 0,0 : rendu parfaitement muet, refusé par le garde-fou. Et isoler Agogo — la
+// dernière piste, donc la dernière à écrire — donnait 1,0 sur le canal 9 et un
+// rendu contenant les quatre pistes mélangées.
+//
+// Correctif : avant l'export, la piste visée garde son canal (le 9 porte le kit
+// de batterie du soundfont, elle ne peut pas en changer sans perdre son timbre)
+// et **les autres pistes qui partagent ce canal sont déplacées** sur des canaux
+// libres. Leur volume étant à 0, le timbre qu'elles y prennent n'a aucune
+// importance : elles sont muettes, elles ne font plus que libérer la place.
+
+// Le canal 17 (indice 16) est celui du métronome de l'exporteur : on n'y
+// déplace jamais rien. Cf. la note sur la fuite du métronome plus haut.
+const MIDI_CHANNEL_COUNT = 16
+
+/**
+ * Déplace les pistes qui partagent un canal avec la piste visée, pour que
+ * `trackVolume` puisse réellement l'isoler.
+ *
+ * @param {object} score
+ * @param {number} trackIndex piste à isoler
+ * @returns {Array<{info: object, primary: number, secondary: number}>} les
+ *   canaux d'origine à rendre après l'export
+ */
+export function isolateTrackChannels(score, trackIndex) {
+  const tracks = score?.tracks ?? []
+  const target = tracks[trackIndex]
+  if (!target) return []
+
+  const targetChannels = new Set([
+    target.playbackInfo.primaryChannel,
+    target.playbackInfo.secondaryChannel,
+  ])
+
+  // Canaux occupés par l'ensemble du score : on ne déplace pas une piste sur le
+  // canal d'une autre, ce serait remplacer une collision par une autre.
+  const used = new Set()
+  for (const t of tracks) {
+    used.add(t.playbackInfo.primaryChannel)
+    used.add(t.playbackInfo.secondaryChannel)
+  }
+
+  const free = []
+  for (let c = 0; c < MIDI_CHANNEL_COUNT; c++) if (!used.has(c)) free.push(c)
+
+  const relocated = []
+  for (const t of tracks) {
+    if (t.index === trackIndex) continue
+    const info = t.playbackInfo
+    const hitsPrimary   = targetChannels.has(info.primaryChannel)
+    const hitsSecondary = targetChannels.has(info.secondaryChannel)
+    if (!hitsPrimary && !hitsSecondary) continue
+
+    const needed = (hitsPrimary ? 1 : 0)
+      + (hitsSecondary && info.secondaryChannel !== info.primaryChannel ? 1 : 0)
+    if (free.length < needed) {
+      restoreTrackChannels(relocated)
+      throw new Error(
+        `la piste « ${target.name} » partage le canal MIDI `
+        + `${[...targetChannels].map(c => c + 1).join(' / ')} avec d’autres pistes, `
+        + 'et il ne reste aucun canal libre pour les écarter : elle ne peut pas '
+        + 'être rendue seule.',
+      )
+    }
+
+    relocated.push({ info, primary: info.primaryChannel, secondary: info.secondaryChannel })
+    if (hitsPrimary) {
+      const c = free.shift()
+      used.add(c)
+      if (info.secondaryChannel === info.primaryChannel) {
+        // Piste à canal unique (cas des percussions) : les deux suivent.
+        info.primaryChannel = c
+        info.secondaryChannel = c
+        continue
+      }
+      info.primaryChannel = c
+    }
+    if (hitsSecondary && info.secondaryChannel !== info.primaryChannel) {
+      const c = free.shift()
+      used.add(c)
+      info.secondaryChannel = c
+    }
+  }
+  return relocated
+}
+
+/** Rend leurs canaux d'origine aux pistes déplacées. */
+export function restoreTrackChannels(relocated) {
+  for (const { info, primary, secondary } of relocated) {
+    info.primaryChannel = primary
+    info.secondaryChannel = secondary
+  }
 }
 
 /** Pic absolu d'un AudioBuffer, tous canaux confondus. */
