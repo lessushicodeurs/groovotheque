@@ -27,6 +27,7 @@ En mode mixte (fichier Guitar Pro + fichiers audio), AlphaTab tourne en `PlayerM
 | Statut des pistes une fois rendues | Pistes WaveSurfer ordinaires : le code de mix, de boucle et d'export de l'epic 38 les traite sans branche spécifique |
 | Tempo | Les pistes rendues suivent l'étirement WaveSurfer comme les autres pistes audio. Pas de re-rendu au changement de tempo |
 | Transposition / changement de soundfont | Hors périmètre — invaliderait le rendu, à traiter plus tard si le besoin apparaît |
+| Distinction visuelle | Une piste MIDI se reconnaît à l'œil : toute sa ligne est teintée de la couleur que l'epic 35 attribue à la piste, avec un liseré de la même couleur à gauche. Assez discret pour ne pas gêner la lecture de la forme d'onde. La teinte vaut avant et après le rendu, et la couleur d'une piste ne change pas d'une session à l'autre |
 | Mode tab-only | Inchangé : le synthétiseur joue en direct (`EnabledSynthesizer`), aucun rendu n'est proposé |
 
 ---
@@ -122,6 +123,7 @@ Un `.gp` sans `SyncPoint` reste rendable, mais l'alignement n'est alors plus gar
 - [ ] Une piste MIDI rendue n'apparaît qu'une seule fois dans le player, sous son nom de piste sans le préfixe `midi-`
 - [ ] À la seconde ouverture du groove, les pistes rendues se chargent sans nouvelle synthèse
 - [ ] Modifier le `.gp` périme les rendus : ils sont effacés du dossier et refaits à l'ouverture suivante
+- [ ] Une piste MIDI se distingue à l'œil d'une piste audio, avant comme après son rendu
 - [ ] Une piste rendue est incluse dans l'export de mix et dans le zip de téléchargement, une seule fois
 - [ ] Les réglages de volume et de pan d'une piste rendue sont sauvegardés et rechargés comme ceux de toute autre piste
 - [ ] Un `.gp` sans point de synchro affiche un marqueur d'avertissement sur ses lignes, sans bloquer le rendu

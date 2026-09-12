@@ -1083,6 +1083,25 @@ body {
   cursor: default;
 }
 
+/* 39.6 — Une piste MIDI se reconnaît à l'œil, rendue ou non : toute la ligne
+   est teintée de la couleur que l'epic 35 attribue à la piste (celle de l'aire
+   vide), et un liseré de la même couleur marque son bord gauche. Assez discret
+   pour ne pas gêner la lecture de la forme d'onde une fois la piste rendue.
+   La teinte survit au rendu : la piste devient audio pour le mix et l'export,
+   mais reste identifiable. --midi-color est posée en inline sur la ligne. */
+.track-row--midi,
+.track-row--midi-rendered {
+  background: color-mix(in srgb, var(--midi-color, #4fc3f7) 8%, transparent);
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--midi-color, #4fc3f7) 55%, transparent);
+}
+
+/* La sidebar a un fond opaque : sans cette règle la teinte s'arrêterait à la
+   forme d'onde et ne se lirait pas comme une ligne entière. */
+.track-row--midi .track-sidebar,
+.track-row--midi-rendered .track-sidebar {
+  background: color-mix(in srgb, var(--midi-color, #4fc3f7) 9%, #141414);
+}
+
 /* 39.5 — marqueur de dérive : le fichier n'a aucun point de synchro, la piste
    est rendue au tempo écrit. Avertissement non bloquant, le rendu se fait. */
 .midi-drift-warning {
