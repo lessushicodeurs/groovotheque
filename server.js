@@ -734,6 +734,35 @@ function midiRenderFailure(res, err) {
   if (!res.headersSent) res.status(500).json({ error: 'Erreur interne' });
 }
 
+// Un .gp modifié rend tous les rendus du groove obsolètes. Sans purge, le
+// .flac, son empreinte et les peaks associés resteraient indéfiniment dans le
+// cache. Les rendus dont l'empreinte correspond encore sont laissés en place.
+async function purgeStaleMidiRenders(groovePath, grooveDir) {
+  const dir = path.resolve(CACHE_DIR, groovePath, 'midi');
+  if (!dir.startsWith(CACHE_DIR + path.sep)) return;
+  let names;
+  try {
+    names = await fs.promises.readdir(dir);
+  } catch {
+    return;   // pas de rendus pour ce groove
+  }
+  const current = await gpFingerprint(grooveDir).catch(() => null);
+  const remove = p => fs.promises.rm(p, { force: true }).catch(() => {});
+  for (const name of names) {
+    if (!name.endsWith('.flac')) continue;
+    const base = name.slice(0, -5);
+    let meta = null;
+    try {
+      meta = JSON.parse(await fs.promises.readFile(path.join(dir, base + '.json'), 'utf8'));
+    } catch { /* rendu sans empreinte lisible : périmé par définition */ }
+    if (fingerprintMatches(meta?.source, current)) continue;
+    await remove(path.join(dir, name));
+    await remove(path.join(dir, base + '.json'));
+    // Les peaks du rendu vivent à côté, dans cache/<groove-path>/
+    await remove(path.resolve(CACHE_DIR, groovePath, `midi-${base}.peaks.json`));
+  }
+}
+
 // Rendu valide (empreinte à jour) d'une piste, ou null.
 async function readValidMidiRender(groovePath, trackIndex, res) {
   const flacPath = resolveMidiRenderPath(groovePath, trackIndex, '.flac', res);
@@ -770,6 +799,12 @@ app.get('/api/midi-render/*', async (req, res) => {
   }
   if (!found) return;                       // réponse d'erreur déjà envoyée
   if (found.stale) {
+    // Le client va refaire le rendu : c'est le moment de jeter le périmé.
+    const grooveDir = path.resolve(GROOVES_DIR, params.groovePath);
+    if (grooveDir.startsWith(GROOVES_DIR + path.sep)) {
+      await purgeStaleMidiRenders(params.groovePath, grooveDir).catch(
+        err => console.warn('[midi-render] purge impossible:', err));
+    }
     return res.status(404).json({ error: 'Rendu introuvable' });
   }
   res.type('audio/flac');
@@ -813,6 +848,7 @@ app.post('/api/midi-render/*',
         throw err;
       }
       if (!source) return res.status(404).json({ error: 'Aucun fichier Guitar Pro dans ce groove' });
+      await purgeStaleMidiRenders(groovePath, grooveDir);
       await fs.promises.mkdir(path.dirname(flacPath), { recursive: true });
       await fs.promises.writeFile(flacPath, req.body);
       await fs.promises.writeFile(metaPath, JSON.stringify({
