@@ -1578,23 +1578,19 @@ function buildMidiTrackRow(track, idx, color, fileName) {
   nameEl.textContent = label
   nameEl.title = label
 
-  // 39.2 — en mode mixte le rendu part tout seul à l'ouverture : ce bouton
-  // n'est qu'un repli, révélé par updateMidiRenderUi() si le rendu a échoué.
-  // En tab-only le synthétiseur joue la piste en direct, le bouton n'existe pas.
-  let btnRender = null
-  if (tabExternal) {
-    btnRender = document.createElement('button')
-    btnRender.className = 'track-btn btn-midi-render'
-    btnRender.textContent = '⏺'
-    btnRender.title = 'Réessayer le rendu en audio'
-    btnRender.setAttribute('aria-label', `Réessayer le rendu de « ${label} » en audio`)
-    btnRender.hidden = true
-  }
+  // 39.2 — le rendu part tout seul à l'ouverture, en mode mixte comme en
+  // tab-only : ce bouton n'est qu'un repli, révélé par updateMidiRenderUi()
+  // si le rendu a échoué.
+  const btnRender = document.createElement('button')
+  btnRender.className = 'track-btn btn-midi-render'
+  btnRender.textContent = '⏺'
+  btnRender.title = 'Réessayer le rendu en audio'
+  btnRender.setAttribute('aria-label', `Réessayer le rendu de « ${label} » en audio`)
+  btnRender.hidden = true
 
   const sidebarTop = document.createElement('div')
   sidebarTop.className = 'track-sidebar-top'
-  sidebarTop.append(dot, nameEl, warnEl, btnShow)
-  if (btnRender) sidebarTop.append(btnRender)
+  sidebarTop.append(dot, nameEl, warnEl, btnShow, btnRender)
 
   const btnMute = document.createElement('button')
   btnMute.className = 'track-btn btn-mute'
@@ -1689,6 +1685,7 @@ function buildMidiTrackRows(score) {
   // de fichier pour les rattacher à leur piste MIDI, plutôt que d'ajouter une
   // seconde ligne pour la même piste.
   const renderNames = midiRenderFileNames(score)
+  midiRenderNames = new Set(renderNames)
   // Couleurs : palette existante, indices après les *vraies* pistes audio. Les
   // rendus sont comptés à part, sinon la couleur d'une piste changerait entre la
   // session qui la rend et celle qui la retrouve dans le dossier.
@@ -1727,6 +1724,12 @@ const MIDI_RENDER_PREFIX = 'midi-'
 
 let midiRenderBusy = false
 let midiSoundFontBytes = null
+// Noms de fichiers des rendus de ce score, posés par buildMidiTrackRows() :
+// ils distinguent une piste audio « enregistrement » d'un rendu MIDI.
+let midiRenderNames = new Set()
+// 39.2 — tab-only : rechargement du player une fois les rendus écrits (une
+// seule fois par page, cf. scheduleTabOnlyReload).
+let midiReloadScheduled = false
 // Décalage de palette des pistes MIDI : nombre de pistes audio « fichier » du
 // groove, rendus exclus. Posé par buildMidiTrackRows().
 let midiColorOffset = 0
@@ -1795,10 +1798,19 @@ function midiScoreHasSyncPoints() {
   return (tabSyncPoints?.length ?? 0) > 0
 }
 
+// Vrai si le groove contient un enregistrement — une piste audio déposée par
+// l'utilisateur ou le backing track du `.gp` — par rapport auquel un rendu au
+// tempo écrit pourrait dériver. Un groove dont toutes les pistes sont des
+// rendus MIDI n'a rien à suivre : le tempo écrit y fait foi, sans dérive possible.
+function hasRecordingToFollow() {
+  return currentTracks.some(t => !midiRenderNames.has(t.filename))
+    || (tabScore?.backingTrack?.rawAudioFile?.length ?? 0) > 0
+}
+
 // Les points de synchro sont lus après la construction des lignes MIDI : le
 // marqueur est créé masqué, puis révélé ici.
 function updateMidiSyncWarnings() {
-  const drift = tabExternal && !midiScoreHasSyncPoints()
+  const drift = !midiScoreHasSyncPoints() && hasRecordingToFollow()
   midiTracks.forEach(t => {
     if (t.warnEl) t.warnEl.toggleAttribute('hidden', !drift)
   })
@@ -1810,7 +1822,7 @@ function updateMidiRenderUi() {
   if (btnRenderMidiEl) {
     // Le rendu part tout seul à l'ouverture : ce bouton n'est qu'un repli,
     // proposé quand une piste au moins n'a pas pu être rendue automatiquement.
-    btnRenderMidiEl.toggleAttribute('hidden', !(tabExternal && failed > 0))
+    btnRenderMidiEl.toggleAttribute('hidden', failed === 0)
     btnRenderMidiEl.disabled = midiRenderBusy
     btnRenderMidiEl.textContent = midiRenderBusy
       ? 'Rendu…'
@@ -1877,6 +1889,9 @@ function makeMidiTrackState(track, idx, color, { rendered, fileName }) {
     muted: false, soloed: false, volume: 1, visible: true,
     btnShow, warnEl, btnRender: null, progressEl: null, waveEl: null, row: null,
     rendered, autoFailed: false,
+    // 39.2 — tab-only : rendu écrit sur le disque, en attente du rechargement
+    // qui le fera revenir comme piste audio ordinaire.
+    savedPendingReload: false,
   }
 }
 
@@ -1976,6 +1991,7 @@ async function renderMidiTrackToAudio(i) {
     // rendu : la piste est ajoutée depuis le blob, audible pour cette session,
     // et refaite au prochain chargement du groove.
     let url = null
+    let writeError = null
     try {
       const res = await fetch(midiRenderPostUrl(state.fileName), {
         method: 'POST', headers: { 'Content-Type': 'audio/flac' }, body: blob,
@@ -1985,8 +2001,22 @@ async function renderMidiTrackToAudio(i) {
       // on le charge par son URL, sans garder le blob en mémoire.
       url = `/audio/${encodePath(grooveSlug)}/${encodeURIComponent(state.fileName)}`
     } catch (err) {
+      writeError = err
       console.warn('[midi-render] écriture dans le dossier du groove impossible:', err)
     }
+
+    // 39.2 — tab-only : AlphaTab tourne en EnabledSynthesizer et son horloge
+    // porte le transport et le curseur de tablature. Promouvoir la piste ici
+    // ferait sonner le rendu par-dessus le synthétiseur, sous deux horloges
+    // distinctes. Le rendu est donc seulement écrit sur le disque ; le player
+    // se recharge ensuite et le groove revient en mode mixte ordinaire, où
+    // tout — curseur, transport, mix, boucle — est le code déjà éprouvé.
+    if (!tabExternal) {
+      if (!url) throw writeError ?? new Error('écriture du rendu impossible')
+      markMidiTrackSaved(state)
+      return 'ok'
+    }
+
     promoteMidiTrackToAudio(state, { url, blob })
     return 'ok'
   } catch (err) {
@@ -2000,6 +2030,44 @@ async function renderMidiTrackToAudio(i) {
     midiRenderBusy = false
     updateMidiRenderUi()
   }
+}
+
+// 39.2 — tab-only : le rendu est sur le disque mais la ligne reste celle du
+// synthétiseur jusqu'au rechargement. On la marque faite pour ne pas la rendre
+// deux fois, et on le montre.
+function markMidiTrackSaved(state) {
+  state.rendered = true
+  state.autoFailed = false
+  state.savedPendingReload = true
+  if (state.progressEl) {
+    state.progressEl.hidden = false
+    state.progressEl.style.setProperty('--render-progress', '100%')
+    state.progressEl.textContent = 'Rendu enregistré ✓'
+  }
+  state.btnRender?.setAttribute('hidden', '')
+}
+
+// 39.2 — tab-only : une fois les rendus écrits, le groove a des pistes audio
+// sur le disque. Un rechargement du player suffit à le rouvrir en mode mixte,
+// pistes WaveSurfer comprises, sans aucune bascule de mode à chaud (AlphaTab
+// ne sait pas changer de PlayerMode après coup). Le rechargement attend l'arrêt
+// de la lecture : il ne coupe jamais la parole à l'utilisateur.
+function scheduleTabOnlyReload() {
+  if (midiReloadScheduled) return
+  midiReloadScheduled = true
+  const reload = () => window.location.reload()
+  if (!isPlaying) {
+    showDownloadStatus('Pistes MIDI rendues — rechargement du player…')
+    setTimeout(reload, 1200)
+    return
+  }
+  showDownloadStatus(
+    'Pistes MIDI rendues — le player se rechargera à l\'arrêt de la lecture.')
+  const timer = setInterval(() => {
+    if (isPlaying) return
+    clearInterval(timer)
+    reload()
+  }, 500)
 }
 
 // 39.2 — rend séquentiellement toutes les pistes MIDI restantes. Séquentiel et
@@ -2019,9 +2087,13 @@ async function renderPendingMidiTracks() {
 // à une, chacune remplaçant son aire vide dès que son rendu est prêt. Les
 // pistes déjà rendues ont été adoptées depuis le dossier : rien à refaire.
 async function autoRenderMidiTracks() {
-  // Tab-only : le synthétiseur joue en direct, il n'y a rien à rendre.
-  if (!tabExternal) return
   const rest = await renderPendingMidiTracks()
+  // Tab-only : au moins un rendu est sur le disque, le groove n'est plus
+  // « tab-only ». On le rouvre en mode mixte.
+  if (!tabExternal && midiTracks.some(t => t.savedPendingReload)) {
+    scheduleTabOnlyReload()
+    return
+  }
   if (rest > 0) {
     showDownloadStatus(
       `${rest} piste${rest > 1 ? 's' : ''} MIDI non rendue${rest > 1 ? 's' : ''} — `
@@ -2035,6 +2107,10 @@ async function autoRenderMidiTracks() {
 async function renderAllMidiTracks() {
   if (midiRenderBusy) return
   const rest = await renderPendingMidiTracks()
+  if (!tabExternal && midiTracks.some(t => t.savedPendingReload)) {
+    scheduleTabOnlyReload()
+    return
+  }
   if (rest > 0) {
     showDownloadStatus(
       `Rendu impossible pour ${rest} piste${rest > 1 ? 's' : ''} MIDI.`, true,
