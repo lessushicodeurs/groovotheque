@@ -1231,6 +1231,48 @@ body {
   cursor: default;
 }
 
+/* 40.1 — Menu d'export déplacé dans le tiroir ≡ (mobile) : plus un popup mais
+   une liste dépliée, posée au-dessus de la description du morceau. */
+.download-wrap--panel {
+  position: static;
+  margin: 0;
+}
+
+.download-wrap--panel .btn-download-all {
+  display: none;
+}
+
+.download-wrap--panel .download-menu {
+  position: static;
+  margin: 0;
+  padding: 0.4rem 1.25rem;
+  min-width: 0;
+  background: none;
+  border: none;
+  border-bottom: 1px solid #1e1e1e;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* Cible tactile de 44 px, comme le reste des commandes mobiles. */
+.download-wrap--panel .download-menu-item {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 0.4rem;
+  font-size: 0.88rem;
+}
+
+/* :not([hidden]) est indispensable : sans lui, ce sélecteur à deux classes
+   l'emporterait sur le [hidden] du navigateur et laisserait un span vide —
+   donc une bande morte — entre les entrées d'export et la description. */
+.download-wrap--panel .download-status:not([hidden]) {
+  position: static;
+  display: block;
+  margin: 0.4rem 1.25rem 0;
+  white-space: normal;
+}
+
 /* 38.4 — Message discret de fin de rendu (atténuation, erreur) */
 .download-status {
   position: absolute;
@@ -1635,10 +1677,12 @@ body.tab-no-scroll { overflow: hidden; }
     font-size: 1.05rem;
   }
 
-  /* Player header: hide secondary actions */
+  /* Player header: hide secondary actions.
+     40.1 — Le masquage vise le header seul : le menu d'export déménage dans le
+     tiroir ≡ et doit y rester visible. */
   .btn-save-mix,
-  .download-wrap,
-  .btn-download-all {
+  .player-header .download-wrap,
+  .player-header .btn-download-all {
     display: none;
   }
 
