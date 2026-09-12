@@ -23,12 +23,14 @@ En mode mixte (fichier Guitar Pro + fichiers audio), AlphaTab tourne en `PlayerM
 | Déclenchement | Automatique à l'ouverture du groove, en tâche de fond et piste par piste. Le player reste utilisable pendant ce temps et les pistes apparaissent au fur et à mesure. Un bouton de repli, par ligne et global, ne sert qu'à relancer un rendu qui a échoué |
 | Persistance | Fichiers écrits à plat dans le dossier du groove, sous `midi-<nom de piste>.flac`. L'utilisateur les a chez lui, comme toute autre piste. Le préfixe `midi-` est le seul marqueur : il dit au player qu'un rendu existe déjà, et il est retiré du nom affiché. Seule l'empreinte du `.gp` reste en cache |
 | Format de stockage | FLAC via `encodeFlac()` de l'epic 38 — sans perte, et le soundfont produit déjà un son fragile qu'un second encodage destructif dégraderait |
-| Invalidation | Empreinte du `.gp` (nom + taille + mtime), conservée dans `cache/<groove-path>/midi/fingerprint.json` avec la liste des fichiers produits ; un `.gp` modifié périme les rendus, qui sont effacés du dossier du groove et refaits à l'ouverture suivante. Seuls les fichiers que le player a écrits sont effaçables : un `midi-*.flac` déposé à la main reste une piste audio ordinaire |
+| Invalidation | Empreinte du `.gp` (nom + taille + mtime) **et du soundfont retenu** (nom + taille), conservée dans `cache/<groove-path>/midi/fingerprint.json` avec la liste des fichiers produits ; un `.gp` modifié périme les rendus, qui sont effacés du dossier du groove et refaits à l'ouverture suivante. Seuls les fichiers que le player a écrits sont effaçables : un `midi-*.flac` déposé à la main reste une piste audio ordinaire |
 | Statut des pistes une fois rendues | Pistes WaveSurfer ordinaires : le code de mix, de boucle et d'export de l'epic 38 les traite sans branche spécifique |
 | Tempo | Les pistes rendues suivent l'étirement WaveSurfer comme les autres pistes audio. Pas de re-rendu au changement de tempo |
-| Transposition / changement de soundfont | Hors périmètre — invaliderait le rendu, à traiter plus tard si le besoin apparaît |
+| Soundfont | Paramétrable dans `config.json` (clé `soundFont`), une seule valeur pour le rendu hors-ligne **et** la lecture directe du synthétiseur. Défaut `MuseScore_General.sf3` (MIT, 38 Mo) ; le fichier vit dans `soundfonts/`, ignoré par git, récupéré par `scripts/fetch-soundfont.sh`. Absent, repli sur le `sonivox.sf2` livré avec AlphaTab : un clone frais est fonctionnel sans étape manuelle. Valeurs et compromis documentés dans le README |
+| Changement de soundfont | Le soundfont entre dans l'empreinte : en changer périme les `midi-*.flac`, qui sont effacés et refaits à l'ouverture suivante. Un seul soundfont à la fois — AlphaTab sait les empiler, mais la clé de config est unique |
+| Transposition | Hors périmètre — invaliderait le rendu, à traiter plus tard si le besoin apparaît |
 | Distinction visuelle | Une piste MIDI se reconnaît à l'œil : toute sa ligne est teintée de la couleur que l'epic 35 attribue à la piste, avec un liseré de la même couleur à gauche. Assez discret pour ne pas gêner la lecture de la forme d'onde. La teinte vaut avant et après le rendu, et la couleur d'une piste ne change pas d'une session à l'autre |
-| Mode tab-only | Inchangé : le synthétiseur joue en direct (`EnabledSynthesizer`), aucun rendu n'est proposé |
+| Mode tab-only | Rendu aussi. Les pistes MIDI d'un groove sans aucun fichier audio sont rendues et sauvegardées comme les autres. AlphaTab ne sachant pas changer de `PlayerMode` après coup, la piste rendue n'est **pas** promue à chaud : le synthétiseur continue de jouer et de porter curseur et transport, puis, une fois les rendus écrits, le player se recharge — à l'arrêt de la lecture, jamais en plein morceau. Le groove rouvre alors en mode mixte ordinaire, pistes WaveSurfer comprises, sans aucune horloge ni branche nouvelle |
 
 ---
 
@@ -62,7 +64,10 @@ pistes MIDI qui n'ont pas encore de rendu dans le dossier sont rendues sans aucu
 - Les contrôles mute/solo/volume restent désactivés tant que la piste n'est pas rendue, avec l'infobulle actuelle
 - Repli en cas d'échec seulement : la ligne ratée retrouve un bouton « Réessayer le rendu en
   audio », et un bouton global relance les pistes restantes. Rien n'apparaît en marche nominale
-- En tab-only, aucun rendu et aucun bouton
+- En tab-only le rendu part aussi tout seul, mais la piste n'est pas promue à chaud : la ligne
+  affiche « Rendu enregistré ✓ » et le player se recharge une fois la série finie, à l'arrêt
+  de la lecture. Le groove revient alors en mode mixte, où tout est le chemin déjà éprouvé.
+  Si l'écriture du fichier échoue, rien n'est promu ni rechargé : la ligne garde son bouton de repli
 
 ### 39.3 — Le rendu est un fichier du groove
 
@@ -113,7 +118,8 @@ Un `.gp` sans `SyncPoint` reste rendable, mais l'alignement n'est alors plus gar
 
 ## Critères d'acceptance
 
-- [ ] En mode mixte, les pistes MIDI se rendent d'elles-mêmes à l'ouverture, sans clic ; en tab-only, aucun rendu et aucun bouton
+- [ ] Les pistes MIDI se rendent d'elles-mêmes à l'ouverture, sans clic, en mode mixte comme en tab-only
+- [ ] En tab-only, curseur de tablature et transport restent pilotés par le synthétiseur pendant le rendu, et le player se recharge ensuite en mode mixte : curseur et transport corrects, aucune piste en double
 - [ ] Pendant le rendu le player reste utilisable : la lecture démarre et avance, et les pistes apparaissent une à une
 - [ ] Le rendu d'une piste produit une piste audio avec forme d'onde, insérée à la place de l'aire vide
 - [ ] Une piste rendue est audible, et son mute / solo / volume agit sur le son
@@ -123,6 +129,8 @@ Un `.gp` sans `SyncPoint` reste rendable, mais l'alignement n'est alors plus gar
 - [ ] Une piste MIDI rendue n'apparaît qu'une seule fois dans le player, sous son nom de piste sans le préfixe `midi-`
 - [ ] À la seconde ouverture du groove, les pistes rendues se chargent sans nouvelle synthèse
 - [ ] Modifier le `.gp` périme les rendus : ils sont effacés du dossier et refaits à l'ouverture suivante
+- [ ] Changer `soundFont` dans `config.json` périme les rendus de la même façon, et le nouveau rendu s'entend
+- [ ] Le soundfont configuré sert au rendu comme à la lecture directe ; absent, le serveur retombe sur `sonivox.sf2` sans rien casser
 - [ ] Une piste MIDI se distingue à l'œil d'une piste audio, avant comme après son rendu
 - [ ] Une piste rendue est incluse dans l'export de mix et dans le zip de téléchargement, une seule fois
 - [ ] Les réglages de volume et de pan d'une piste rendue sont sauvegardés et rechargés comme ceux de toute autre piste
