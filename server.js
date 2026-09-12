@@ -358,6 +358,20 @@ app.get('/api/grooves/*/download', async (req, res) => {
   });
   archive.pipe(res);
 
+  // Deux entrées de même nom dans un zip donnent une archive dont une moitié
+  // est inaccessible : le nom des doublons est suffixé.
+  const usedNames = new Set();
+  const uniqueName = (name) => {
+    if (!usedNames.has(name)) { usedNames.add(name); return name; }
+    const ext = path.extname(name);
+    const base = name.slice(0, name.length - ext.length);
+    let n = 2;
+    while (usedNames.has(`${base} (${n})${ext}`)) n++;
+    const unique = `${base} (${n})${ext}`;
+    usedNames.add(unique);
+    return unique;
+  };
+
   try {
     const entries = await fs.promises.readdir(grooveDir, { withFileTypes: true });
     for (const entry of entries) {
@@ -366,13 +380,13 @@ app.get('/api/grooves/*/download', async (req, res) => {
       // Le fichier Guitar Pro accompagne les pistes : il embarque sa tablature et
       // son éventuel backing track, qu'aucun fichier du dossier ne contient.
       if (AUDIO_EXTENSIONS.has(ext) || GP_EXTENSIONS.has(ext) || ext === '.md') {
-        archive.file(path.join(grooveDir, entry.name), { name: entry.name });
+        archive.file(path.join(grooveDir, entry.name), { name: uniqueName(entry.name) });
       }
     }
     // 39.4 — les pistes MIDI rendues en audio sont des pistes du groove comme
     // les autres : elles vivent dans le cache mais appartiennent au zip.
     for (const render of await listValidMidiRenders(groovePath, grooveDir)) {
-      archive.file(render.path, { name: render.name });
+      archive.file(render.path, { name: uniqueName(render.name) });
     }
   } catch (err) {
     archive.abort();
