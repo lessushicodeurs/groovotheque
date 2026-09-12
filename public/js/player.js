@@ -114,11 +114,11 @@ const tabDrawerEl       = document.getElementById('tab-drawer')
 const tabHandleEl       = document.getElementById('tab-handle')
 const tabContentEl      = document.getElementById('tab-content')
 const tabTrackListEl    = document.getElementById('tab-track-list')
-const tabLoopControlsEl  = document.getElementById('tab-loop-controls')
+
 const btnTabFullscreen   = document.getElementById('btn-tab-fullscreen')
 const btnTabStrip        = document.getElementById('btn-tab-strip')
 const btnTabCollapse     = document.getElementById('btn-tab-collapse')
-const btnTabLoopClear    = document.getElementById('btn-tab-loop-clear')
+
 const btnTabScrollResume = document.getElementById('btn-tab-scroll-resume')
 
 let prevSlug = null
@@ -993,7 +993,6 @@ function clearLoop() {
   trackRegions.forEach(rp => rp.clearRegions())
   activeLoopIn = null
   activeLoopOut = null
-  tabLoopControlsEl?.setAttribute('hidden', '')
   updateLoopFields()
   if (loopEnabled) setLoopEnabled(false)
 }
@@ -1019,10 +1018,6 @@ function syncRegionToAll(start, end, opts = {}) {
   activeLoopIn = start
   activeLoopOut = end
   updateLoopFields()
-
-  // 35.2 — en tab-only il n'y a aucune waveform pour dessiner la région : les
-  // contrôles de boucle de la tablature sont le seul retour visuel.
-  if (tabScore) tabLoopControlsEl?.removeAttribute('hidden')
 
   trackRegions.forEach(rp => {
     rp.clearRegions()
@@ -2662,12 +2657,6 @@ async function initTabDrawer(tabFile) {
   btnTabStrip?.addEventListener('click',     () => setTabState('strip'))
   btnTabCollapse?.addEventListener('click',  () => setTabState('collapsed'))
 
-  btnTabLoopClear?.addEventListener('click', () => {
-    clearLoop()
-    tabDragBeat = null
-    tabLoopControlsEl?.setAttribute('hidden', '')
-  })
-
   // Note: le package alphaTab utilise un T majuscule dans les noms de fichiers dist
   const AT_BASE = '/vendor/alphatab'
 
@@ -2890,12 +2879,22 @@ async function initTabDrawer(tabFile) {
 
     const loopStart = tickToAudioSec(startBeat.absolutePlaybackStart)
     const loopEnd   = tickToAudioSec(lastBeat.absolutePlaybackStart + lastBeat.playbackDuration)
+    const singleBeat = startBeat === lastBeat
     tabDragBeat = null
+
+    // Clic simple sur une note : on place la tête de lecture à son attaque.
+    // Boucler sur une seule note n'a aucun usage musical, alors que reprendre
+    // la lecture depuis un endroit précis de la partition en a un constamment.
+    // La boucle éventuellement en place n'est pas touchée : seul le glisser,
+    // qui désigne une plage, la redéfinit.
+    if (singleBeat) {
+      performSeek(loopStart)
+      return
+    }
 
     if (loopEnd - loopStart < 0.05) return
     syncRegionToAll(loopStart, loopEnd)
     setLoopEnabled(true)
-    tabLoopControlsEl?.removeAttribute('hidden')
   })
 
   alphaTabApi.load(preloadedScore ?? tabUrl)

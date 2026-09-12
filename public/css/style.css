@@ -1320,16 +1320,6 @@ body.tab-no-scroll { overflow: hidden; }
   color: #999;
 }
 
-/* Loop controls in drawer header */
-.tab-loop-controls {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  flex-shrink: 0;
-}
-
-.tab-loop-controls[hidden] { display: none; }
-
 /* Generic tab button */
 .tab-btn {
   background: #1c1c1c;
