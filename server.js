@@ -4,10 +4,143 @@ const bcrypt = require('bcrypt');
 const fs = require('fs');
 const path = require('path');
 const { ZipArchive } = require('archiver');
+const { countSamplesInFile } = require('./scripts/sf-mono');
 
 const app = express();
 const PORT = process.env.PORT || 3099;
 const CACHE_DIR = path.resolve(__dirname, 'cache');
+
+// ── Configuration du projet (config.json) ─────────────────────────────────
+// Même principe que `scripts/process-rehearsal.yaml` : un fichier local ignoré
+// par git, doublé d'un `config.example.json` suivi et documenté. Absent, le
+// projet tourne quand même sur ses valeurs par défaut — un clone frais n'a
+// aucune étape manuelle obligatoire.
+// `GROOVOTHEQUE_CONFIG` déplace ce fichier : de quoi faire tourner une instance
+// sur une autre configuration sans toucher à celle du dépôt (tests, déploiement).
+const CONFIG_FILE = process.env.GROOVOTHEQUE_CONFIG
+  ? path.resolve(process.env.GROOVOTHEQUE_CONFIG)
+  : path.join(__dirname, 'config.json');
+
+function readConfig() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+    return (parsed && typeof parsed === 'object') ? parsed : {};
+  } catch (err) {
+    if (err.code !== 'ENOENT') console.warn('[config] config.json illisible:', err.message);
+    return {};
+  }
+}
+
+// ── Soundfont (epic 39) ───────────────────────────────────────────────────
+// Une seule source de vérité pour tout le player : le rendu hors-ligne des
+// pistes MIDI et la lecture directe du synthétiseur chargent le même fichier,
+// servi par /soundfont/<nom>.
+//
+// Les soundfonts téléchargés vivent dans `soundfonts/`, ignoré par git — un
+// MuseScore_General pèse 38 Mo, il n'a rien à faire dans l'historique. Ceux
+// livrés avec AlphaTab (sonivox.sf2, sonivox.sf3) sont utilisables par leur
+// seul nom, sans rien télécharger.
+const SOUNDFONTS_DIR  = path.join(__dirname, 'soundfonts');
+const ALPHATAB_SF_DIR = path.join(__dirname, 'node_modules/@coderline/alphatab/dist/soundfont');
+// Défaut : MuseScore_General.sf3 (MIT, 38 Mo, samples Vorbis décodés nativement
+// par AlphaTab). Absent — cas du clone frais — on retombe sur le sonivox.sf2
+// livré avec AlphaTab : le projet reste fonctionnel, en moins bon son.
+const DEFAULT_SOUNDFONT  = 'MuseScore_General.sf3';
+const FALLBACK_SOUNDFONT = 'sonivox.sf2';
+
+// Chemins où chercher un soundfont désigné par son seul nom de fichier.
+function soundFontCandidates(name) {
+  if (path.isAbsolute(name)) return [path.normalize(name)];
+  // Aucun séparateur accepté : le nom vient d'un fichier de config, mais il
+  // finit dans une URL et dans un chemin de fichier.
+  if (path.basename(name) !== name || name === '.' || name === '..') return [];
+  return [path.join(SOUNDFONTS_DIR, name), path.join(ALPHATAB_SF_DIR, name)];
+}
+
+function statSoundFont(name) {
+  for (const candidate of soundFontCandidates(name)) {
+    try {
+      const st = fs.statSync(candidate);
+      if (st.isFile()) {
+        return {
+          name: path.basename(candidate),
+          path: candidate,
+          size: st.size,
+          mtimeMs: Math.round(st.mtimeMs),
+        };
+      }
+    } catch { /* candidat suivant */ }
+  }
+  return null;
+}
+
+// ── Samples stéréo : le piège à NaN (epic 39) ─────────────────────────────
+// AlphaTab ne charge que les samples mono et écarte les samples stéréo, tout
+// en gardant les régions qui les référencent. Ces régions lisent hors d'un
+// tableau vide, produisent des NaN, et comme NaN × 0 = NaN, une seule piste
+// fautive — fût-elle à volume nul — anéantit le rendu de toutes les autres.
+// `scripts/fetch-soundfont.sh` repasse le soundfont en mono à l'installation ;
+// il reste à repérer un fichier déposé à la main sans cette étape.
+//
+// Le compte entre aussi dans l'empreinte des rendus MIDI : convertir un
+// soundfont sur place ne change ni son nom ni sa taille, mais fait tomber ce
+// compte à zéro — c'est ce qui périme les `midi-*.flac` synthétisés avant.
+const stereoCountCache = new Map();
+
+function soundFontStereoCount(sf) {
+  const key = `${sf.path}:${sf.size}:${sf.mtimeMs}`;
+  if (stereoCountCache.has(key)) return stereoCountCache.get(key);
+  const counted = countSamplesInFile(sf.path);
+  // Soundfont illisible : `null` plutôt que 0, pour ne pas prétendre qu'il est sain.
+  const stereo = counted ? counted.stereo : null;
+  stereoCountCache.clear();          // un seul soundfont à la fois, inutile d'accumuler
+  stereoCountCache.set(key, stereo);
+  if (stereo > 0) {
+    console.warn(`[soundfont] « ${sf.name} » contient ${stereo} sample(s) stéréo :`
+      + ` AlphaTab les ignore et le rendu MIDI en sort muet ou saturé de NaN.`
+      + ` Corriger avec : node scripts/sf-mono.js ${sf.path}`);
+  }
+  return stereo;
+}
+
+let lastSoundFontWarning = null;
+
+// Soundfont effectivement servi : celui de la config s'il existe, sinon le
+// repli livré avec AlphaTab. Relu à chaque appel — changer config.json ne
+// demande pas de redémarrer le serveur, un rechargement de page suffit.
+function resolveSoundFont() {
+  const requested = String(readConfig().soundFont || DEFAULT_SOUNDFONT);
+  const found = statSoundFont(requested);
+  if (found) {
+    lastSoundFontWarning = null;
+    return { ...found, requested, fallback: false };
+  }
+  if (lastSoundFontWarning !== requested) {
+    lastSoundFontWarning = requested;
+    console.warn(`[soundfont] « ${requested} » introuvable — repli sur ${FALLBACK_SOUNDFONT}.`
+      + ` Voir README (« Soundfont ») ou scripts/fetch-soundfont.sh.`);
+  }
+  const fallback = statSoundFont(FALLBACK_SOUNDFONT);
+  if (!fallback) return null;
+  return { ...fallback, requested, fallback: true };
+}
+
+// Vue publique : ce que le player a besoin de savoir. `size` entre dans
+// l'empreinte des rendus MIDI, il distingue deux fichiers de même nom.
+function soundFontInfo() {
+  const sf = resolveSoundFont();
+  if (!sf) return null;
+  return {
+    name:      sf.name,
+    size:      sf.size,
+    requested: sf.requested,
+    fallback:  sf.fallback,
+    // Nombre de samples qu'AlphaTab refusera de charger. > 0 = soundfont non
+    // converti, rendu MIDI inexploitable (voir soundFontStereoCount).
+    stereoSamples: soundFontStereoCount(sf),
+    url:       `/soundfont/${encodeURIComponent(sf.name)}`,
+  };
+}
 
 function loadUsers() {
   const authFile = path.join(__dirname, '.auth');
@@ -54,25 +187,59 @@ app.use(express.urlencoded({ extended: false }));
 app.get('/player.html', (req, res) => {
   const template = fs.readFileSync(path.join(__dirname, 'public', 'player.html'), 'utf8');
   const user = req.auth?.user ?? 'anonymous';
+  // 39.2 — le soundfont est injecté ici plutôt que récupéré en fetch : le
+  // player en a besoin avant d'instancier AlphaTab, et les deux usages (rendu
+  // hors-ligne et lecture directe) doivent lire la même valeur.
   const injected = template.replace(
     '</head>',
-    `  <script>window.CURRENT_USER = ${JSON.stringify(user)};</script>\n</head>`
+    `  <script>window.CURRENT_USER = ${JSON.stringify(user)};`
+    + `window.SOUNDFONT = ${JSON.stringify(soundFontInfo())};</script>\n</head>`
   );
   res.type('html').send(injected);
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
 
+// 39.2 — Le soundfont configuré, servi sous son vrai nom de fichier : AlphaTab
+// distingue le SF2 du SF3 à l'extension autant qu'aux octets. Un nom qui n'est
+// pas celui du soundfont courant n'est pas servi — pas de lecture arbitraire.
+app.get('/soundfont/:name', (req, res) => {
+  const sf = resolveSoundFont();
+  if (!sf || req.params.name !== sf.name) {
+    return res.status(404).json({ error: 'Soundfont introuvable' });
+  }
+  res.type('application/octet-stream');
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  res.sendFile(sf.path);
+});
+
+// Vue de la configuration côté client (diagnostic et tests).
+app.get('/api/config', (req, res) => {
+  res.json({ soundFont: soundFontInfo() });
+});
+
 // 20.1 — Extensions media pour la détection groove vs conteneur
 const AUDIO_EXTENSIONS     = new Set(['.mp3', '.wav', '.flac', '.ogg']);
 const GP_EXTENSIONS        = new Set(['.gp', '.gpx', '.gp5', '.gp4', '.gp8']);
 const ALL_MEDIA_EXTENSIONS = new Set([...AUDIO_EXTENSIONS, ...GP_EXTENSIONS]);
 
+// 39.3 — Les rendus audio des pistes MIDI vivent à plat dans le dossier du
+// groove, comme n'importe quelle piste. Ce préfixe est leur seul marqueur :
+// c'est lui qui dit au player qu'un rendu existe déjà, et il est retiré du nom
+// affiché. Le nom du fichier reste `midi-<nom de la piste>.flac`.
+const MIDI_RENDER_PREFIX = 'midi-';
+const MIDI_RENDER_EXT    = '.flac';
+
 const GROOVES_DIR = path.normalize(path.resolve(__dirname, 'grooves'));
 
 function getTrackDisplayName(filename) {
   const withoutExt = filename.replace(/\.[^.]+$/, '');
-  return withoutExt.replace(/^\d+_/, '').replace(/_/g, ' ');
+  return withoutExt
+    // 39.3 — « midi-Electric Bass.flac » est un rendu de piste MIDI : le préfixe
+    // est un marqueur technique, pas une partie du nom de la piste.
+    .replace(new RegExp(`^${MIDI_RENDER_PREFIX}`), '')
+    .replace(/^\d+_/, '')
+    .replace(/_/g, ' ');
 }
 
 function trackSortKey(filename) {
@@ -348,6 +515,12 @@ app.get('/api/grooves/*/download', async (req, res) => {
     return res.status(404).json({ error: 'Groove introuvable' });
   }
 
+  // 39.3 — les rendus MIDI sont des fichiers du dossier du groove : le scan
+  // ci-dessous les prend comme n'importe quelle piste, une seule fois et sous
+  // leur vrai nom. Il suffit d'écarter d'abord ceux qu'un `.gp` modifié a périmés.
+  await purgeStaleMidiRenders(groovePath, grooveDir).catch(
+    err => console.warn('[midi-render] purge impossible:', err));
+
   const slug = groovePath.split('/').pop();
   res.setHeader('Content-Type', 'application/zip');
   res.setHeader('Content-Disposition', `attachment; filename="${slug}.zip"`);
@@ -383,6 +556,11 @@ app.get('/api/grooves/*', async (req, res) => {
   const grooveDir = resolveGrooveDir(groovePath, res);
   if (!grooveDir) return;
   try {
+    // 39.3 — porte d'entrée du player : les rendus MIDI périmés par un `.gp`
+    // modifié disparaissent ici, avant d'être listés comme des pistes. Le
+    // player ne voit que les rendus valides, et refait les manquants.
+    await purgeStaleMidiRenders(groovePath, grooveDir).catch(
+      err => console.warn('[midi-render] purge impossible:', err));
     const entries = await fs.promises.readdir(grooveDir, { withFileTypes: true });
     const audioEntries = entries.filter(
       e => e.isFile() && !e.name.endsWith('~') && AUDIO_EXTENSIONS.has(path.extname(e.name).toLowerCase())
@@ -397,11 +575,23 @@ app.get('/api/grooves/*', async (req, res) => {
     });
     const slug = groovePath.split('/').pop();
     const encodedPath = groovePath.split('/').map(encodeURIComponent).join('/');
+    // Copies recalables déjà en cache : elles remplacent l'original à la
+    // lecture, sans rien changer à ce qui s'affiche ni à ce qui se télécharge.
+    const seekable = await listFreshSeekables(groovePath, grooveDir, [
+      ...audioEntries.map(e => e.name).filter(
+        n => SEEKABLE_SOURCE_EXTENSIONS.has(path.extname(n).toLowerCase())),
+      BACKING_SEEKABLE_NAME,
+    ]);
     const tracks = audioEntries.map(({ name: filename }, index) => ({
       index,
       filename,
       displayName: getTrackDisplayName(filename),
       url: `/audio/${encodedPath}/${encodeURIComponent(filename)}`,
+      // Absente quand la piste se cale déjà juste (WAV, FLAC, OGG) ; sinon le
+      // player la construit en tâche de fond et la dépose dans le cache.
+      playbackUrl: seekable[filename] ?? null,
+      needsSeekable: SEEKABLE_SOURCE_EXTENSIONS.has(path.extname(filename).toLowerCase())
+        && !seekable[filename],
     }));
     const mdEntry = entries.find(e => e.isFile() && e.name.endsWith('.md'));
     let mdContent = null;
@@ -412,7 +602,12 @@ app.get('/api/grooves/*', async (req, res) => {
       e => e.isFile() && GP_EXTENSIONS.has(path.extname(e.name).toLowerCase())
     );
     const tabFile = gpEntry ? gpEntry.name : null;
-    res.json({ slug, tracks, mdContent, tabFile });
+    res.json({
+      slug, tracks, mdContent, tabFile,
+      // Le backing track n'est pas une piste du dossier : sa copie se retrouve
+      // ici, sous le nom que le cache lui donne.
+      backingPlaybackUrl: seekable[BACKING_SEEKABLE_NAME] ?? null,
+    });
   } catch (err) {
     if (err.code === 'ENOENT') return res.status(404).json({ error: 'Groove introuvable' });
     res.status(500).json({ error: err.message });
@@ -659,6 +854,406 @@ app.post('/api/peaks/*', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// ── Epic 39 — Rendus audio des pistes MIDI ────────────────────────────────
+// 39.3 — Le rendu lui-même est un fichier ordinaire du dossier du groove :
+// `<groove>/midi-<nom de piste>.flac`. Il est donc découvert par le scan des
+// pistes, servi par /audio/*, téléchargé dans le zip et mixé comme les autres —
+// aucune route ne le relit. Seule l'empreinte du `.gp` source reste dans le
+// cache : elle ne regarde pas l'utilisateur et n'a rien à faire chez lui.
+
+// Version du moteur de rendu. À incrémenter dès qu'un changement modifie le
+// son produit à `.gp` et soundfont identiques — le niveau de sortie, par
+// exemple. Elle entre dans l'empreinte : l'incrémenter périme tous les rendus
+// existants, qui repartent en synthèse à l'ouverture du groove.
+//   1 — rendu initial (epic 39)
+//   2 — conversion mono du soundfont + masterVolume ramené à 0,5 (plus d'écrêtage)
+//   3 — isolation par canal MIDI : les pistes qui partageaient un canal (toutes
+//       les percussions d'un .gp sont sur le canal 10) sortaient muettes ou
+//       mélangées, et la piste portant le canal du métronome sortait avec un clic
+const MIDI_RENDER_VERSION = 3;
+
+// Empreinte du fichier Guitar Pro source : taille + mtime. Un `.gp` modifié rend
+// tous les rendus du groove obsolètes.
+async function gpFingerprint(grooveDir) {
+  const entries = await fs.promises.readdir(grooveDir, { withFileTypes: true });
+  const gpEntry = entries.find(
+    e => e.isFile() && GP_EXTENSIONS.has(path.extname(e.name).toLowerCase())
+  );
+  if (!gpEntry) return null;
+  const st = await fs.promises.stat(path.join(grooveDir, gpEntry.name));
+  // Le soundfont fait partie de l'empreinte : rien dans le nom du rendu ne dit
+  // avec quoi il a été synthétisé, donc c'est ici qu'un changement de soundfont
+  // dans config.json périme les `midi-*.flac` et déclenche un nouveau rendu.
+  const sf = resolveSoundFont();
+  return {
+    tabFile: gpEntry.name,
+    size: st.size,
+    mtimeMs: Math.round(st.mtimeMs),
+    // Nom + taille ne suffisent pas : la conversion mono du soundfont réécrit
+    // 2 octets par sample sans changer la taille du fichier. Le compte de
+    // samples stéréo, lui, passe de 146 à 0 — un rendu fait avec la version
+    // stéréo est donc bien périmé.
+    soundFont: sf ? `${sf.name}:${sf.size}:${soundFontStereoCount(sf)}` : null,
+    renderVersion: MIDI_RENDER_VERSION,
+  };
+}
+
+function fingerprintMatches(a, b) {
+  return !!a && !!b && a.tabFile === b.tabFile && a.size === b.size
+    && a.mtimeMs === b.mtimeMs && a.soundFont === b.soundFont
+    && (a.renderVersion ?? 1) === (b.renderVersion ?? 1);
+}
+
+// Même garde de traversée que resolvePeaksPath() : le chemin résolu doit rester
+// sous CACHE_DIR. Renvoie null si `groovePath` tente d'en sortir.
+function midiFingerprintPath(groovePath) {
+  const filePath = path.resolve(CACHE_DIR, groovePath, 'midi', 'fingerprint.json');
+  return filePath.startsWith(CACHE_DIR + path.sep) ? filePath : null;
+}
+
+async function readMidiFingerprint(groovePath) {
+  const filePath = midiFingerprintPath(groovePath);
+  if (!filePath) return null;
+  try {
+    return JSON.parse(await fs.promises.readFile(filePath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+// Un `.gp` modifié périme tous les rendus qu'il a produits : ils sont effacés du
+// dossier du groove, avec leurs peaks, et le player les refait à l'ouverture.
+// Seuls les fichiers que l'on a nous-mêmes écrits (listés dans l'empreinte) sont
+// supprimés : un `midi-*.flac` déposé à la main par l'utilisateur n'est jamais
+// touché, et reste une piste audio ordinaire.
+async function purgeStaleMidiRenders(groovePath, grooveDir) {
+  const stored = await readMidiFingerprint(groovePath);
+  if (!stored) return;
+  let current = null;
+  try {
+    current = await gpFingerprint(grooveDir);
+  } catch { /* groove disparu : on purge */ }
+  if (fingerprintMatches(stored.source, current)) return;
+
+  const remove = p => fs.promises.rm(p, { force: true }).catch(() => {});
+  for (const name of stored.files ?? []) {
+    if (!isMidiRenderName(name)) continue;
+    await remove(path.join(grooveDir, name));
+    // Les peaks de la piste vivent dans le cache, comme pour toute piste audio.
+    const peaks = path.resolve(CACHE_DIR, groovePath, name + '.peaks.json');
+    if (peaks.startsWith(CACHE_DIR + path.sep)) await remove(peaks);
+  }
+  const fp = midiFingerprintPath(groovePath);
+  if (fp) await remove(fp);
+}
+
+// Nom de rendu valide : le préfixe marqueur, une extension .flac, et surtout
+// aucun séparateur ni segment de remontée — le fichier est écrit dans le
+// dossier du groove, pas ailleurs.
+function isMidiRenderName(name) {
+  return typeof name === 'string'
+    && name.startsWith(MIDI_RENDER_PREFIX)
+    && name.toLowerCase().endsWith(MIDI_RENDER_EXT)
+    && name.length > MIDI_RENDER_PREFIX.length + MIDI_RENDER_EXT.length
+    && name.length <= 180
+    && !name.includes('/') && !name.includes('\\') && !name.includes('\0')
+    && path.basename(name) === name
+    && name !== '.' && name !== '..';
+}
+
+// Plafond du corps accepté au POST. Un rendu est du FLAC stéréo 16 bits à
+// 44,1 kHz, soit 10,6 Mo/min de PCM brut ; le FLAC d'une piste d'instrument
+// seule descend couramment sous la moitié. 64 Mo couvrent donc largement une
+// dizaine de minutes de morceau, sans laisser passer n'importe quoi.
+const MIDI_RENDER_MAX_BYTES = 64 * 1024 * 1024;
+
+// Découpe « <groove-path>/<nom de fichier> » en ses deux parties.
+// decodeURIComponent() lève sur un « % » malformé : la sortie doit être un 400,
+// pas un rejet non rattrapé qui laisserait la requête pendante (Express 4 ne
+// rattrape pas les rejets d'un handler async).
+function splitMidiRenderParams(raw, res) {
+  const parts = String(raw).split('/');
+  if (parts.length < 2) {
+    res.status(400).json({ error: 'Chemin invalide' });
+    return null;
+  }
+  let fileName, groovePath;
+  try {
+    fileName = decodeURIComponent(parts.pop());
+    groovePath = parts.map(decodeURIComponent).join('/');
+  } catch {
+    res.status(400).json({ error: 'Chemin invalide' });
+    return null;
+  }
+  if (!isMidiRenderName(fileName)) {
+    res.status(400).json({ error: 'Nom de rendu invalide' });
+    return null;
+  }
+  return { groovePath, fileName };
+}
+
+// Une erreur interne ne doit pas renvoyer err.message au client : il porte le
+// chemin absolu du serveur. Le détail reste dans les logs.
+function midiRenderFailure(res, err) {
+  console.error('[midi-render]', err);
+  if (!res.headersSent) res.status(500).json({ error: 'Erreur interne' });
+}
+
+// 39.3 — Écriture d'un rendu dans le dossier du groove. C'est la seule route
+// qui subsiste : la lecture passe par /audio/*, comme pour toute piste.
+app.post('/api/midi-render/*',
+  express.raw({ type: ['audio/flac', 'application/octet-stream'], limit: MIDI_RENDER_MAX_BYTES }),
+  async (req, res) => {
+    const params = splitMidiRenderParams(req.params[0], res);
+    if (!params) return;
+    const { groovePath, fileName } = params;
+
+    const grooveDir = resolveGrooveDir(groovePath, res);
+    if (!grooveDir) return;
+    const filePath = path.join(grooveDir, fileName);
+    // Ceinture et bretelles : isMidiRenderName() exclut déjà tout séparateur.
+    if (!filePath.startsWith(GROOVES_DIR + path.sep) || path.dirname(filePath) !== grooveDir) {
+      return res.status(400).json({ error: 'Chemin invalide' });
+    }
+
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+      return res.status(400).json({ error: 'Corps audio manquant' });
+    }
+    // Le dossier du groove ne doit contenir que ce que le fichier prétend
+    // être : un flux FLAC commence toujours par le marqueur « fLaC ».
+    if (req.body.length < 4 || req.body.subarray(0, 4).toString('latin1') !== 'fLaC') {
+      return res.status(400).json({ error: 'Le corps n’est pas un flux FLAC' });
+    }
+
+    try {
+      let source;
+      try {
+        source = await gpFingerprint(grooveDir);
+      } catch (err) {
+        // Chemin bien formé mais dossier absent : c'est un 404, pas un 500.
+        if (err.code === 'ENOENT' || err.code === 'ENOTDIR') {
+          return res.status(404).json({ error: 'Groove introuvable' });
+        }
+        throw err;
+      }
+      if (!source) return res.status(404).json({ error: 'Aucun fichier Guitar Pro dans ce groove' });
+
+      // Le `.gp` a changé depuis les rendus précédents : ils partent avant que
+      // le nouveau s'installe, sinon anciens et nouveaux cohabiteraient.
+      await purgeStaleMidiRenders(groovePath, grooveDir);
+
+      await fs.promises.writeFile(filePath, req.body);
+
+      const fpPath = midiFingerprintPath(groovePath);
+      if (fpPath) {
+        const stored = await readMidiFingerprint(groovePath);
+        const files = fingerprintMatches(stored?.source, source)
+          ? new Set(stored.files ?? [])
+          : new Set();
+        files.add(fileName);
+        await fs.promises.mkdir(path.dirname(fpPath), { recursive: true });
+        await fs.promises.writeFile(fpPath, JSON.stringify({
+          source,
+          files: [...files],
+          renderedAt: new Date().toISOString(),
+        }, null, 2), 'utf8');
+      }
+      res.status(201).json({ ok: true, file: fileName });
+    } catch (err) {
+      midiRenderFailure(res, err);
+    }
+  });
+
+// ── Copies recalables des pistes ──────────────────────────────────────────
+// Chrome ne sait pas rejoindre une position exacte dans un MP3 à débit
+// variable : il passe par la table Xing, qui ne compte que 100 entrées pour
+// tout le fichier — sur un morceau de cinq minutes, chaque entrée couvre une
+// seconde d'audio. Mesuré sur « Ha Ya » : un seek rate sa cible de −67 ms,
+// +369 ms ou −225 ms selon l'endroit visé. Toutes les pistes MP3 d'un groove
+// se trompent ensemble (même encodeur, même table), mais le backing track
+// embarqué dans le `.gp` — de l'AAC, dont Chrome oublie les 2112 échantillons
+// d'amorce après un seek, soit +47,9 ms constants — ne se trompe pas pareil :
+// après un seek, backing et stems ne jouent plus ensemble.
+//
+// La parade : garder dans le cache une copie FLAC de chaque piste qui se cale
+// mal, et la lire à sa place. Le FLAC se rejoint à la trame près (≤ 12 ms
+// mesurés), le WAV et l'OGG aussi — eux n'ont donc rien à faire ici. Le
+// dossier de l'utilisateur n'est pas touché : la copie vit dans le cache,
+// comme les peaks, et l'original reste ce qui s'affiche et se télécharge.
+
+const SEEKABLE_DIR_NAME = 'seekable';
+const SEEKABLE_EXT      = '.flac';
+
+// Seul le MP3 se cale mal parmi les formats lus depuis le dossier du groove.
+const SEEKABLE_SOURCE_EXTENSIONS = new Set(['.mp3']);
+
+// Le backing track n'est pas un fichier du dossier : il est embarqué dans le
+// `.gp`. Ce nom le désigne dans le cache, comme pour ses peaks.
+const BACKING_SEEKABLE_NAME = '_backing';
+
+// Une copie est du FLAC stéréo 16 bits à 44,1 kHz : 10,6 Mo/min de PCM brut,
+// couramment moitié moins une fois compressé. 128 Mo laissent passer un
+// morceau d'une demi-heure sans ouvrir la porte à n'importe quoi.
+const SEEKABLE_MAX_BYTES = 128 * 1024 * 1024;
+
+// Nom de copie valide : un nom de fichier simple, sans séparateur ni segment
+// de remontée. `_backing` est le seul nom qui ne désigne pas un fichier.
+function isSeekableName(name) {
+  return typeof name === 'string'
+    && name.length > 0 && name.length <= 180
+    && !name.includes('/') && !name.includes('\\') && !name.includes('\0')
+    && path.basename(name) === name
+    && name !== '.' && name !== '..'
+    && (name === BACKING_SEEKABLE_NAME
+        || SEEKABLE_SOURCE_EXTENSIONS.has(path.extname(name).toLowerCase()));
+}
+
+// Même garde de traversée que resolvePeaksPath() : le chemin résolu doit
+// rester sous CACHE_DIR. `suffix` distingue la copie de son horodatage.
+function seekablePath(groovePath, name, suffix) {
+  const filePath = path.resolve(CACHE_DIR, groovePath, SEEKABLE_DIR_NAME, name + suffix);
+  return filePath.startsWith(CACHE_DIR + path.sep) ? filePath : null;
+}
+
+// Date de la source d'une copie : le fichier du dossier, ou le `.gp` quand la
+// copie est celle du backing track qu'il embarque. Une source modifiée périme
+// la copie, exactement comme un `.gp` modifié périme les rendus MIDI.
+async function seekableSourceStamp(grooveDir, name) {
+  let fileName = name;
+  if (name === BACKING_SEEKABLE_NAME) {
+    const entries = await fs.promises.readdir(grooveDir, { withFileTypes: true });
+    const gpEntry = entries.find(
+      e => e.isFile() && GP_EXTENSIONS.has(path.extname(e.name).toLowerCase())
+    );
+    if (!gpEntry) return null;
+    fileName = gpEntry.name;
+  }
+  const st = await fs.promises.stat(path.join(grooveDir, fileName));
+  return { file: fileName, size: st.size, mtimeMs: Math.round(st.mtimeMs) };
+}
+
+function seekableStampMatches(a, b) {
+  return !!a && !!b && a.file === b.file && a.size === b.size && a.mtimeMs === b.mtimeMs;
+}
+
+// URL de lecture d'une copie à jour, ou null : c'est elle que le player passe
+// à WaveSurfer à la place de l'originale.
+async function freshSeekableUrl(groovePath, grooveDir, name) {
+  const filePath  = seekablePath(groovePath, name, SEEKABLE_EXT);
+  const stampPath = seekablePath(groovePath, name, '.json');
+  if (!filePath || !stampPath) return null;
+  try {
+    const [stored, current] = await Promise.all([
+      fs.promises.readFile(stampPath, 'utf8').then(JSON.parse),
+      seekableSourceStamp(grooveDir, name),
+    ]);
+    if (!seekableStampMatches(stored?.source, current)) return null;
+    await fs.promises.access(filePath);
+  } catch {
+    return null;
+  }
+  const encodedPath = groovePath.split('/').map(encodeURIComponent).join('/');
+  return `/seekable/${encodedPath}/${encodeURIComponent(name)}`;
+}
+
+// Copies à jour d'un groove, par nom de piste. Les noms absents de cette table
+// sont ceux que le player a encore à convertir — ou qui n'en ont pas besoin.
+async function listFreshSeekables(groovePath, grooveDir, names) {
+  const found = {};
+  await Promise.all(names.map(async name => {
+    const url = await freshSeekableUrl(groovePath, grooveDir, name);
+    if (url) found[name] = url;
+  }));
+  return found;
+}
+
+// Découpe « <groove-path>/<nom> » en ses deux parties, comme pour les rendus.
+function splitSeekableParams(raw, res) {
+  const parts = String(raw).split('/');
+  if (parts.length < 2) {
+    res.status(400).json({ error: 'Chemin invalide' });
+    return null;
+  }
+  let name, groovePath;
+  try {
+    name = decodeURIComponent(parts.pop());
+    groovePath = parts.map(decodeURIComponent).join('/');
+  } catch {
+    res.status(400).json({ error: 'Chemin invalide' });
+    return null;
+  }
+  if (!isSeekableName(name)) {
+    res.status(400).json({ error: 'Nom de piste invalide' });
+    return null;
+  }
+  return { groovePath, name };
+}
+
+// Lecture d'une copie. Périmée ou absente, c'est un 404 : le player retombe
+// alors sur le fichier original et refait la copie.
+app.get('/seekable/*', async (req, res) => {
+  const params = splitSeekableParams(req.params[0], res);
+  if (!params) return;
+  const { groovePath, name } = params;
+  const grooveDir = resolveGrooveDir(groovePath, res);
+  if (!grooveDir) return;
+  const url = await freshSeekableUrl(groovePath, grooveDir, name).catch(() => null);
+  if (!url) return res.status(404).json({ error: 'Copie absente ou périmée' });
+  res.type('audio/flac');
+  res.sendFile(seekablePath(groovePath, name, SEEKABLE_EXT), err => {
+    if (err && !res.headersSent) {
+      res.status(err.code === 'ENOENT' ? 404 : 500).json({ error: 'Fichier introuvable' });
+    }
+  });
+});
+
+// Dépôt d'une copie, avec la date de sa source : c'est elle qui la périmera.
+app.post('/api/seekable/*',
+  express.raw({ type: ['audio/flac', 'application/octet-stream'], limit: SEEKABLE_MAX_BYTES }),
+  async (req, res) => {
+    const params = splitSeekableParams(req.params[0], res);
+    if (!params) return;
+    const { groovePath, name } = params;
+    const grooveDir = resolveGrooveDir(groovePath, res);
+    if (!grooveDir) return;
+
+    if (!Buffer.isBuffer(req.body) || req.body.length < 4
+        || req.body.subarray(0, 4).toString('latin1') !== 'fLaC') {
+      return res.status(400).json({ error: 'Le corps n’est pas un flux FLAC' });
+    }
+
+    try {
+      let source;
+      try {
+        source = await seekableSourceStamp(grooveDir, name);
+      } catch (err) {
+        if (err.code === 'ENOENT' || err.code === 'ENOTDIR') {
+          return res.status(404).json({ error: 'Piste introuvable' });
+        }
+        throw err;
+      }
+      if (!source) return res.status(404).json({ error: 'Piste introuvable' });
+
+      const filePath  = seekablePath(groovePath, name, SEEKABLE_EXT);
+      const stampPath = seekablePath(groovePath, name, '.json');
+      if (!filePath || !stampPath) return res.status(400).json({ error: 'Chemin invalide' });
+
+      await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+      // La copie d'abord, son horodatage ensuite : une écriture interrompue
+      // laisse au pire un fichier sans date, donc considéré périmé et refait.
+      await fs.promises.writeFile(filePath, req.body);
+      await fs.promises.writeFile(
+        stampPath,
+        JSON.stringify({ source, builtAt: new Date().toISOString() }, null, 2),
+        'utf8');
+      res.status(201).json({ ok: true, name });
+    } catch (err) {
+      console.error('[seekable]', err);
+      if (!res.headersSent) res.status(500).json({ error: 'Erreur interne' });
+    }
+  });
+
 
 // ── Epic 22 — Commentaires ────────────────────────────────────────────────
 

@@ -539,6 +539,8 @@ body {
 .track-wave--midi {
   flex: 1;
   min-width: 0;
+  /* Ancre du calque de progression du rendu (epic 39) */
+  position: relative;
   background:
     repeating-linear-gradient(
       90deg,
@@ -1052,6 +1054,105 @@ body {
   cursor: default;
 }
 
+
+/* ── Epic 39 — Rendu audio des pistes MIDI ── */
+
+/* Bouton global : rend toutes les pistes MIDI restantes, séquentiellement. */
+.btn-render-midi {
+  flex-shrink: 0;
+  background: #1a2433;
+  border: 1px solid #33668f;
+  color: #6db6ef;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.3rem 0.7rem;
+  border-radius: 4px;
+  cursor: pointer;
+  letter-spacing: 0.03em;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+
+.btn-render-midi:hover:not(:disabled) {
+  background: #21324a;
+  border-color: #4a86b8;
+  color: #9ad2ff;
+}
+
+.btn-render-midi:disabled {
+  color: #3d5a72;
+  cursor: default;
+}
+
+/* 39.6 — Une piste MIDI se reconnaît à l'œil, rendue ou non : toute la ligne
+   est teintée de la couleur que l'epic 35 attribue à la piste (celle de l'aire
+   vide), et un liseré de la même couleur marque son bord gauche. Assez discret
+   pour ne pas gêner la lecture de la forme d'onde une fois la piste rendue.
+   La teinte survit au rendu : la piste devient audio pour le mix et l'export,
+   mais reste identifiable. --midi-color est posée en inline sur la ligne. */
+.track-row--midi,
+.track-row--midi-rendered {
+  background: color-mix(in srgb, var(--midi-color, #4fc3f7) 8%, transparent);
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--midi-color, #4fc3f7) 55%, transparent);
+}
+
+/* La sidebar a un fond opaque : sans cette règle la teinte s'arrêterait à la
+   forme d'onde et ne se lirait pas comme une ligne entière. */
+.track-row--midi .track-sidebar,
+.track-row--midi-rendered .track-sidebar {
+  background: color-mix(in srgb, var(--midi-color, #4fc3f7) 9%, #141414);
+}
+
+/* 39.5 — marqueur de dérive : le fichier n'a aucun point de synchro, la piste
+   est rendue au tempo écrit. Avertissement non bloquant, le rendu se fait. */
+.midi-drift-warning {
+  flex-shrink: 0;
+  color: #d9a441;
+  font-size: 0.8rem;
+  line-height: 1;
+  cursor: help;
+}
+
+/* Bouton de rendu d'une piste, dans la sidebar de la ligne MIDI */
+.btn-midi-render {
+  padding: 0.1rem 0.35rem;
+  font-size: 0.75rem;
+  line-height: 1.1;
+}
+
+.btn-midi-render:hover:not(:disabled) {
+  background: #2a1f14;
+  border-color: #8f6633;
+  color: #efb66d;
+}
+
+.btn-midi-render:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Progression du rendu, posée dans l'aire vide de la piste MIDI */
+.midi-render-progress {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #efb66d;
+  letter-spacing: 0.04em;
+  background: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--midi-color) 40%, transparent) 0 var(--render-progress, 0%),
+    transparent var(--render-progress, 0%) 100%
+  );
+}
+
+/* `display: flex` l'emporterait sur la règle générique [hidden] : sans ceci le
+   calque resterait affiché — et couvrirait l'aire — après un rendu en échec. */
+.midi-render-progress[hidden] {
+  display: none;
+}
 
 /* ── Download ────────────────────────────── */
 

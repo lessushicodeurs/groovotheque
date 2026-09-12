@@ -4,6 +4,9 @@ server.log
 server.pid
 grooves/
 cache/*
+config.json
+soundfonts/*
+!soundfonts/.gitkeep
 !cache/.gitkeep
 .auth
 cache/comments.json

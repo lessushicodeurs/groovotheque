@@ -12,6 +12,7 @@
  */
 
 const { test, expect } = require('@playwright/test')
+const { snapshotRenders, cleanNewRenders } = require('./midi-render-guard')
 const { spawn }        = require('child_process')
 const path             = require('path')
 const fs               = require('fs')
@@ -66,7 +67,12 @@ async function waitForPort(port, timeout = 10000) {
 
 // ── Setup / teardown ─────────────────────────────────────────────────────────
 
+// 39.3 — le rendu MIDI part tout seul à l'ouverture et s'écrit dans le dossier
+// du groove : on efface après coup ce que la série a produit, et rien d'autre.
+let renderSnapshot = null
+
 test.beforeAll(async () => {
+  renderSnapshot = snapshotRenders()
   // Génère hash bcrypt pour le user de test (cost 5 = rapide pour tests)
   const hash = bcrypt.hashSync(TEST_PASS, 5)
   addTestUser(hash)
@@ -85,6 +91,7 @@ test.beforeAll(async () => {
 test.afterAll(() => {
   removeTestUser()
   serverProcess?.kill()
+  cleanNewRenders(renderSnapshot)
 })
 
 // ── Shared context factory ────────────────────────────────────────────────────
