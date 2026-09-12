@@ -575,11 +575,23 @@ app.get('/api/grooves/*', async (req, res) => {
     });
     const slug = groovePath.split('/').pop();
     const encodedPath = groovePath.split('/').map(encodeURIComponent).join('/');
+    // Copies recalables déjà en cache : elles remplacent l'original à la
+    // lecture, sans rien changer à ce qui s'affiche ni à ce qui se télécharge.
+    const seekable = await listFreshSeekables(groovePath, grooveDir, [
+      ...audioEntries.map(e => e.name).filter(
+        n => SEEKABLE_SOURCE_EXTENSIONS.has(path.extname(n).toLowerCase())),
+      BACKING_SEEKABLE_NAME,
+    ]);
     const tracks = audioEntries.map(({ name: filename }, index) => ({
       index,
       filename,
       displayName: getTrackDisplayName(filename),
       url: `/audio/${encodedPath}/${encodeURIComponent(filename)}`,
+      // Absente quand la piste se cale déjà juste (WAV, FLAC, OGG) ; sinon le
+      // player la construit en tâche de fond et la dépose dans le cache.
+      playbackUrl: seekable[filename] ?? null,
+      needsSeekable: SEEKABLE_SOURCE_EXTENSIONS.has(path.extname(filename).toLowerCase())
+        && !seekable[filename],
     }));
     const mdEntry = entries.find(e => e.isFile() && e.name.endsWith('.md'));
     let mdContent = null;
@@ -590,7 +602,12 @@ app.get('/api/grooves/*', async (req, res) => {
       e => e.isFile() && GP_EXTENSIONS.has(path.extname(e.name).toLowerCase())
     );
     const tabFile = gpEntry ? gpEntry.name : null;
-    res.json({ slug, tracks, mdContent, tabFile });
+    res.json({
+      slug, tracks, mdContent, tabFile,
+      // Le backing track n'est pas une piste du dossier : sa copie se retrouve
+      // ici, sous le nom que le cache lui donne.
+      backingPlaybackUrl: seekable[BACKING_SEEKABLE_NAME] ?? null,
+    });
   } catch (err) {
     if (err.code === 'ENOENT') return res.status(404).json({ error: 'Groove introuvable' });
     res.status(500).json({ error: err.message });
@@ -1045,6 +1062,195 @@ app.post('/api/midi-render/*',
       res.status(201).json({ ok: true, file: fileName });
     } catch (err) {
       midiRenderFailure(res, err);
+    }
+  });
+
+// ── Copies recalables des pistes ──────────────────────────────────────────
+// Chrome ne sait pas rejoindre une position exacte dans un MP3 à débit
+// variable : il passe par la table Xing, qui ne compte que 100 entrées pour
+// tout le fichier — sur un morceau de cinq minutes, chaque entrée couvre une
+// seconde d'audio. Mesuré sur « Ha Ya » : un seek rate sa cible de −67 ms,
+// +369 ms ou −225 ms selon l'endroit visé. Toutes les pistes MP3 d'un groove
+// se trompent ensemble (même encodeur, même table), mais le backing track
+// embarqué dans le `.gp` — de l'AAC, dont Chrome oublie les 2112 échantillons
+// d'amorce après un seek, soit +47,9 ms constants — ne se trompe pas pareil :
+// après un seek, backing et stems ne jouent plus ensemble.
+//
+// La parade : garder dans le cache une copie FLAC de chaque piste qui se cale
+// mal, et la lire à sa place. Le FLAC se rejoint à la trame près (≤ 12 ms
+// mesurés), le WAV et l'OGG aussi — eux n'ont donc rien à faire ici. Le
+// dossier de l'utilisateur n'est pas touché : la copie vit dans le cache,
+// comme les peaks, et l'original reste ce qui s'affiche et se télécharge.
+
+const SEEKABLE_DIR_NAME = 'seekable';
+const SEEKABLE_EXT      = '.flac';
+
+// Seul le MP3 se cale mal parmi les formats lus depuis le dossier du groove.
+const SEEKABLE_SOURCE_EXTENSIONS = new Set(['.mp3']);
+
+// Le backing track n'est pas un fichier du dossier : il est embarqué dans le
+// `.gp`. Ce nom le désigne dans le cache, comme pour ses peaks.
+const BACKING_SEEKABLE_NAME = '_backing';
+
+// Une copie est du FLAC stéréo 16 bits à 44,1 kHz : 10,6 Mo/min de PCM brut,
+// couramment moitié moins une fois compressé. 128 Mo laissent passer un
+// morceau d'une demi-heure sans ouvrir la porte à n'importe quoi.
+const SEEKABLE_MAX_BYTES = 128 * 1024 * 1024;
+
+// Nom de copie valide : un nom de fichier simple, sans séparateur ni segment
+// de remontée. `_backing` est le seul nom qui ne désigne pas un fichier.
+function isSeekableName(name) {
+  return typeof name === 'string'
+    && name.length > 0 && name.length <= 180
+    && !name.includes('/') && !name.includes('\\') && !name.includes('\0')
+    && path.basename(name) === name
+    && name !== '.' && name !== '..'
+    && (name === BACKING_SEEKABLE_NAME
+        || SEEKABLE_SOURCE_EXTENSIONS.has(path.extname(name).toLowerCase()));
+}
+
+// Même garde de traversée que resolvePeaksPath() : le chemin résolu doit
+// rester sous CACHE_DIR. `suffix` distingue la copie de son horodatage.
+function seekablePath(groovePath, name, suffix) {
+  const filePath = path.resolve(CACHE_DIR, groovePath, SEEKABLE_DIR_NAME, name + suffix);
+  return filePath.startsWith(CACHE_DIR + path.sep) ? filePath : null;
+}
+
+// Date de la source d'une copie : le fichier du dossier, ou le `.gp` quand la
+// copie est celle du backing track qu'il embarque. Une source modifiée périme
+// la copie, exactement comme un `.gp` modifié périme les rendus MIDI.
+async function seekableSourceStamp(grooveDir, name) {
+  let fileName = name;
+  if (name === BACKING_SEEKABLE_NAME) {
+    const entries = await fs.promises.readdir(grooveDir, { withFileTypes: true });
+    const gpEntry = entries.find(
+      e => e.isFile() && GP_EXTENSIONS.has(path.extname(e.name).toLowerCase())
+    );
+    if (!gpEntry) return null;
+    fileName = gpEntry.name;
+  }
+  const st = await fs.promises.stat(path.join(grooveDir, fileName));
+  return { file: fileName, size: st.size, mtimeMs: Math.round(st.mtimeMs) };
+}
+
+function seekableStampMatches(a, b) {
+  return !!a && !!b && a.file === b.file && a.size === b.size && a.mtimeMs === b.mtimeMs;
+}
+
+// URL de lecture d'une copie à jour, ou null : c'est elle que le player passe
+// à WaveSurfer à la place de l'originale.
+async function freshSeekableUrl(groovePath, grooveDir, name) {
+  const filePath  = seekablePath(groovePath, name, SEEKABLE_EXT);
+  const stampPath = seekablePath(groovePath, name, '.json');
+  if (!filePath || !stampPath) return null;
+  try {
+    const [stored, current] = await Promise.all([
+      fs.promises.readFile(stampPath, 'utf8').then(JSON.parse),
+      seekableSourceStamp(grooveDir, name),
+    ]);
+    if (!seekableStampMatches(stored?.source, current)) return null;
+    await fs.promises.access(filePath);
+  } catch {
+    return null;
+  }
+  const encodedPath = groovePath.split('/').map(encodeURIComponent).join('/');
+  return `/seekable/${encodedPath}/${encodeURIComponent(name)}`;
+}
+
+// Copies à jour d'un groove, par nom de piste. Les noms absents de cette table
+// sont ceux que le player a encore à convertir — ou qui n'en ont pas besoin.
+async function listFreshSeekables(groovePath, grooveDir, names) {
+  const found = {};
+  await Promise.all(names.map(async name => {
+    const url = await freshSeekableUrl(groovePath, grooveDir, name);
+    if (url) found[name] = url;
+  }));
+  return found;
+}
+
+// Découpe « <groove-path>/<nom> » en ses deux parties, comme pour les rendus.
+function splitSeekableParams(raw, res) {
+  const parts = String(raw).split('/');
+  if (parts.length < 2) {
+    res.status(400).json({ error: 'Chemin invalide' });
+    return null;
+  }
+  let name, groovePath;
+  try {
+    name = decodeURIComponent(parts.pop());
+    groovePath = parts.map(decodeURIComponent).join('/');
+  } catch {
+    res.status(400).json({ error: 'Chemin invalide' });
+    return null;
+  }
+  if (!isSeekableName(name)) {
+    res.status(400).json({ error: 'Nom de piste invalide' });
+    return null;
+  }
+  return { groovePath, name };
+}
+
+// Lecture d'une copie. Périmée ou absente, c'est un 404 : le player retombe
+// alors sur le fichier original et refait la copie.
+app.get('/seekable/*', async (req, res) => {
+  const params = splitSeekableParams(req.params[0], res);
+  if (!params) return;
+  const { groovePath, name } = params;
+  const grooveDir = resolveGrooveDir(groovePath, res);
+  if (!grooveDir) return;
+  const url = await freshSeekableUrl(groovePath, grooveDir, name).catch(() => null);
+  if (!url) return res.status(404).json({ error: 'Copie absente ou périmée' });
+  res.type('audio/flac');
+  res.sendFile(seekablePath(groovePath, name, SEEKABLE_EXT), err => {
+    if (err && !res.headersSent) {
+      res.status(err.code === 'ENOENT' ? 404 : 500).json({ error: 'Fichier introuvable' });
+    }
+  });
+});
+
+// Dépôt d'une copie, avec la date de sa source : c'est elle qui la périmera.
+app.post('/api/seekable/*',
+  express.raw({ type: ['audio/flac', 'application/octet-stream'], limit: SEEKABLE_MAX_BYTES }),
+  async (req, res) => {
+    const params = splitSeekableParams(req.params[0], res);
+    if (!params) return;
+    const { groovePath, name } = params;
+    const grooveDir = resolveGrooveDir(groovePath, res);
+    if (!grooveDir) return;
+
+    if (!Buffer.isBuffer(req.body) || req.body.length < 4
+        || req.body.subarray(0, 4).toString('latin1') !== 'fLaC') {
+      return res.status(400).json({ error: 'Le corps n’est pas un flux FLAC' });
+    }
+
+    try {
+      let source;
+      try {
+        source = await seekableSourceStamp(grooveDir, name);
+      } catch (err) {
+        if (err.code === 'ENOENT' || err.code === 'ENOTDIR') {
+          return res.status(404).json({ error: 'Piste introuvable' });
+        }
+        throw err;
+      }
+      if (!source) return res.status(404).json({ error: 'Piste introuvable' });
+
+      const filePath  = seekablePath(groovePath, name, SEEKABLE_EXT);
+      const stampPath = seekablePath(groovePath, name, '.json');
+      if (!filePath || !stampPath) return res.status(400).json({ error: 'Chemin invalide' });
+
+      await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+      // La copie d'abord, son horodatage ensuite : une écriture interrompue
+      // laisse au pire un fichier sans date, donc considéré périmé et refait.
+      await fs.promises.writeFile(filePath, req.body);
+      await fs.promises.writeFile(
+        stampPath,
+        JSON.stringify({ source, builtAt: new Date().toISOString() }, null, 2),
+        'utf8');
+      res.status(201).json({ ok: true, name });
+    } catch (err) {
+      console.error('[seekable]', err);
+      if (!res.headersSent) res.status(500).json({ error: 'Erreur interne' });
     }
   });
 
