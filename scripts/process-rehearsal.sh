@@ -49,7 +49,7 @@ check_deps() {
   if command -v aubiotrack &>/dev/null; then
     HAS_AUBIO=true
   else
-    warn "aubiotrack introuvable — création des fiches .md désactivée"
+    warn "aubiotrack introuvable — création des fiches notes.md désactivée"
   fi
 }
 
@@ -889,10 +889,10 @@ convert_output() {
 # ────────────────────────── Fiches BPM ──────────────────────
 
 create_md_sheets() {
-  next_step "Création des fiches .md (BPM)"
+  next_step "Création des fiches notes.md (BPM)"
 
   if [[ "$HAS_AUBIO" != "true" ]]; then
-    warn "aubiotrack introuvable — création des fiches .md désactivée"
+    warn "aubiotrack introuvable — création des fiches notes.md désactivée"
     return
   fi
 
@@ -902,9 +902,9 @@ create_md_sheets() {
 
     [[ "$out_dir_name" == *blabla* ]] && continue
 
-    local md_file="${out_dir}/${out_dir_name}.md"
+    local md_file="${out_dir}/notes.md"
     if [[ -f "$md_file" ]]; then
-      warn "fiche existante, ignorée : ${out_dir_name}.md"
+      warn "fiche existante, ignorée : ${out_dir_name}/notes.md"
       continue
     fi
 
@@ -951,7 +951,7 @@ if len(times) >= 2:
       "$bpm_median" "$title" "$bpm_median" > "$md_file"
 
     SEG_BPM["$out_dir_name"]="$bpm_median"
-    ok "→ ${out_dir_name}.md (BPM : ${bpm_median})"
+    ok "→ ${out_dir_name}/notes.md (BPM : ${bpm_median})"
   done
 }
 

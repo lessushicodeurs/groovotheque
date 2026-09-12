@@ -71,6 +71,7 @@ const downloadStatusEl = document.getElementById('download-status')
 // ── Epic 22 — DOM refs commentaires ──────────────────────────────────────
 const btnAddComment        = document.getElementById('btn-add-comment')
 const btnToggleComments    = document.getElementById('btn-toggle-comments')
+const transportCommentsEl  = document.getElementById('transport-comments')
 const commentBadgeEl       = document.getElementById('comment-badge')
 const commentModalBackdrop = document.getElementById('comment-modal-backdrop')
 const commentModalPosition = document.getElementById('comment-modal-position')
@@ -100,6 +101,13 @@ const tempoSliderEl    = document.getElementById('tempo-slider')
 const tempoValueEl     = document.getElementById('tempo-value')
 const tempoBadgeEl     = document.getElementById('tempo-badge')
 const tempoPresets     = Array.from(document.querySelectorAll('.tempo-preset'))
+
+// ── Epic 18 — Contrôles de zoom ──────────────────────────────────────────
+const btnZoomOut   = document.getElementById('btn-zoom-out')
+const btnZoomIn    = document.getElementById('btn-zoom-in')
+const btnZoomLevel = document.getElementById('btn-zoom-level')
+const wfScrollbarEl    = document.getElementById('waveform-scrollbar')
+const wfScrollThumbEl  = document.getElementById('waveform-scrollbar-thumb')
 
 // 13.2 — Tab drawer DOM elements
 const tabDrawerEl       = document.getElementById('tab-drawer')
@@ -175,13 +183,16 @@ const gainNodes    = []   // GainNode per track (volume in Web Audio graph)
 const panNodes     = []   // StereoPannerNode per track
 const panKnobs       = []   // PanKnob UI per track
 const webAudioRouted = []   // true if MediaElementSource successfully connected
-const waveEls        = []   // .track-wave div per track (for proportional width)
+const waveEls        = []   // .track-wave div per track (contenu à la largeur effective)
+const waveVpEls      = []   // .track-wave-vp div per track (viewport, largeur proportionnelle)
 // Source décodable de chaque piste pour l'export (URL serveur, ou URL d'objet
 // pour le backing track embarqué dans le fichier GP), null si non exportable.
 const trackSourceUrls = []
 const trackDurations = []   // duration in seconds per track, set on 'ready'
 let timelinePluginRef = null  // TimelinePlugin instance (track 0), for duration correction
 let timelineExtEl     = null  // container DOM element for TimelinePlugin (in .timeline-row)
+let timelineVpEl      = null  // .timeline-wave-vp (viewport de la rangée timeline)
+let timelineWaveColEl = null  // .timeline-wave-col (contenu à la largeur effective)
 let currentTracks  = []   // groove.tracks list, set at init time
 let pendingLoop    = null // loop à restaurer dès que toutes les waveforms sont prêtes
 let isPlaying       = false
@@ -204,6 +215,21 @@ let markerAnchorId    = null  // premier marqueur cliqué (ancre de la sélectio
 let markerSelectionIn = null  // borne gauche de la sélection courante (peut couvrir N marqueurs)
 let markerSelectionOut= null  // borne droite
 let markerIdCounter   = 0
+
+// ── Epic 18 — Zoom horizontal ─────────────────────────────────────────────
+// Le zoom élargit le *contenu* (timeline, bande de marqueurs, waveforms) à
+// `largeurViewport × zoomLevel`. Tout le positionnement existant est en % du
+// contenu, il suit donc le zoom sans calcul supplémentaire. Le défilement est
+// une simple translation appliquée identiquement à toutes les rangées, ce qui
+// garantit un alignement au pixel près.
+// Le plafond n'est pas le navigateur mais le cache de peaks, figé à 8000 points
+// par piste : au-delà de 8000 × (barWidth + barGap) / largeur du viewport, le
+// zoom n'affiche plus d'information supplémentaire. 32× est le dernier palier
+// qui apporte encore de la précision de pointage.
+const ZOOM_LEVELS = [1, 2, 4, 8, 16, 32]
+let zoomLevel        = 1      // palier courant (session uniquement, jamais persisté)
+let zoomScrollX      = 0      // décalage horizontal courant, en pixels
+let zoomUserScrolled = false  // 18.5 — l'utilisateur a repris la main sur le défilement
 
 // ── Epic 22 — Comments state ──────────────────────────────────────────────
 let commentMarkersLaneEl  = null  // div dans .timeline-wave-col pour les triangles
@@ -814,6 +840,7 @@ function checkLoopRebound(t) {
 
 async function playAll() {
   if (isPlaying) return
+  zoomUserScrolled = false  // 18.5 — Play relance le suivi de la tête de lecture
   // Resume Web Audio graph if suspended (requires prior user gesture — satisfied by this click)
   if (sharedAudioCtx.state === 'suspended') await sharedAudioCtx.resume()
   if (loopEnabled && activeLoopIn !== null && activeLoopOut !== null) {
@@ -852,6 +879,9 @@ function stopAll() {
   btnPlay.textContent = '▶'
   updateTabScrollButton()
   updateTimeDisplay(0)
+  // 18.4 — setTime() direct : il faut réancrer la vue nous-mêmes, sinon la tête
+  // repart à 0 hors écran dès que l'utilisateur avait défilé à la main.
+  ensurePlayheadVisible(0)
 }
 
 // Called when any track fires 'finish'. Stops and rewinds all tracks, or loops.
@@ -885,6 +915,7 @@ function seekAllTo(time) {
     alphaTabApi.tickPosition = audioSecToTick(time)
   }
   if (tabMaster) updateTimeDisplay(time)
+  ensurePlayheadVisible(time)  // 18.4 — la tête reste visible en mode zoomé
 }
 
 // Shared seek-with-resume logic: pauses if playing, seeks all tracks, then
@@ -1025,11 +1056,22 @@ function buildTimelineRow() {
   const sidebar = document.createElement('div')
   sidebar.className = 'timeline-sidebar'
 
+  timelineVpEl = document.createElement('div')
+  timelineVpEl.className = 'timeline-wave-vp'
+
   const waveCol = document.createElement('div')
   waveCol.className = 'timeline-wave-col'
+  timelineWaveColEl = waveCol
 
   timelineExtEl = document.createElement('div')
   timelineExtEl.className = 'track-timeline-ext'
+  // 18.6 — la règle temporelle repositionne la tête ; la conversion px → s
+  // passe par laneXToTime() qui mesure le contenu zoomé et défilé.
+  timelineExtEl.addEventListener('click', (e) => {
+    if (!totalDuration) return
+    zoomUserScrolled = false  // 18.5 — repositionner la tête rend la main au suivi
+    performSeek(laneXToTime(e.clientX))
+  })
 
   // 35.5 — graduations de mesures, affichées à la place du TimelinePlugin
   // quand le mode BBT est actif
@@ -1045,7 +1087,8 @@ function buildTimelineRow() {
   commentMarkersLaneEl.className = 'comment-markers-lane'
 
   waveCol.append(timelineExtEl, bbtTimelineEl, markerLaneEl, commentMarkersLaneEl)
-  row.append(sidebar, waveCol)
+  timelineVpEl.appendChild(waveCol)
+  row.append(sidebar, timelineVpEl)
   tracksContainer.appendChild(row)
 }
 
@@ -1122,13 +1165,20 @@ function buildTrackRow(track, idx, cachedPeaks = null, opts = {}) {
   sidebar.append(sidebarTop, sidebarCtrl)
 
   // ── Waveform container ────────────────────────
+  // Epic 18 — .track-wave-vp est le viewport (largeur proportionnelle à la
+  // durée de la piste) ; .track-wave est le contenu, élargi par le zoom.
+  const waveVp = document.createElement('div')
+  waveVp.className = 'track-wave-vp'
+
   const waveEl = document.createElement('div')
   waveEl.className = 'track-wave'
+  waveVp.appendChild(waveEl)
 
-  row.append(sidebar, waveEl)
+  row.append(sidebar, waveVp)
   if (opts.insertBefore) tracksContainer.insertBefore(row, opts.insertBefore)
   else                   tracksContainer.appendChild(row)
   waveEls.push(waveEl)
+  waveVpEls.push(waveVp)
 
   // ── Plugins ───────────────────────────────────
   const regionsPlugin = RegionsPlugin.create()
@@ -1241,6 +1291,9 @@ function buildTrackRow(track, idx, cachedPeaks = null, opts = {}) {
       alphaTabApi.tickPosition = audioSecToTick(newTime)
     }
     if (tabMaster) updateTimeDisplay(newTime)
+    // 18.5 — repositionner la tête à la main rend la main à l'auto-défilement.
+    // Pas de recentrage ici : l'endroit cliqué est déjà sous les yeux.
+    zoomUserScrolled = false
     if (wasPlaying) {
       if (tabMaster && alphaTabApi) alphaTabApi.play()
       try {
@@ -1286,6 +1339,9 @@ function buildTrackRow(track, idx, cachedPeaks = null, opts = {}) {
       // tant que le synthé n'a rien émis, et au-delà de la fin du score.
       if (tabClockDrives() && t < scoreDurationSec - 0.05) return
       updateTimeDisplay(t)
+      // 18.5 — en mode zoomé, la vue suit la tête pendant la lecture, sauf si
+      // l'utilisateur a repris la main sur le défilement.
+      if (isPlaying && !zoomUserScrolled) zoomAutoScroll(t)
       checkLoopRebound(t)
     })
   }
@@ -1350,7 +1406,9 @@ function adjustTrackWidths() {
     wavesurfers[0]?.emit('redraw')
   }
 
-  waveEls.forEach((el, i) => {
+  // Epic 18 — la largeur proportionnelle s'applique au viewport ; le contenu
+  // (.track-wave) en dérive via applyZoomWidths().
+  waveVpEls.forEach((el, i) => {
     setWaveWidth(el, (trackDurations[i] ?? maxDur) / maxDur)
   })
 
@@ -1362,6 +1420,8 @@ function adjustTrackWidths() {
   }
 
   renderBbtTimeline()
+  applyZoomWidths()  // 18.1 — largeur effective = largeur viewport × zoomLevel
+
   renderMarkers()
   renderCommentMarkers()
   animateSeenComments()
@@ -1621,6 +1681,368 @@ async function buildBackingTrackRow(score) {
   )
   // Tab-only : le backing track est la seule piste mixable du groove.
   setMixDownloadsAvailable(true)
+// ── Epic 18 — Zoom horizontal ──────────────────────────────────────────────
+
+// Largeur visible d'un viewport, en pixels *fractionnaires*. clientWidth arrondit
+// à l'entier : à 32× cette demi-pixel perdue devient 16 px de décalage, et une
+// piste plus courte que le morceau retrouve la largeur d'une piste pleine — donc
+// une waveform étirée et un clic qui ne tombe plus sur l'instant visé.
+function vpWidth(el) {
+  return el ? el.getBoundingClientRect().width : 0
+}
+
+// Largeur visible de la zone waveform (rangée timeline = piste la plus longue).
+function zoomViewportWidth() {
+  return vpWidth(timelineVpEl)
+}
+
+// Largeur effective du contenu à zoomLevel.
+function zoomContentWidth() {
+  return zoomViewportWidth() * zoomLevel
+}
+
+function zoomMaxScrollX() {
+  return Math.max(0, zoomContentWidth() - zoomViewportWidth())
+}
+
+// Applique la largeur effective à la colonne timeline et à chaque piste.
+// À 1× les largeurs sont remises à leur valeur CSS (100 %) : comportement
+// strictement identique à l'avant-epic.
+function applyZoomWidths() {
+  tracksContainer.classList.toggle('tracks-container--zoomed', zoomLevel > 1)
+  setScrollbarVisible(zoomLevel > 1)
+
+  // Conteneur masqué (tablature plein écran) ou pas encore mis en page : toutes
+  // les mesures valent 0 et un recalcul écraserait les largeurs à zéro, sans
+  // que rien ne les restaure ensuite. On garde les dernières valeurs connues ;
+  // adjustTrackWidths() repasse dès que les pistes redeviennent visibles.
+  if (zoomLevel > 1 && zoomViewportWidth() <= 0) return
+
+  if (timelineVpEl && timelineWaveColEl) {
+    timelineWaveColEl.style.width = zoomLevel > 1
+      ? `${(vpWidth(timelineVpEl) * zoomLevel).toFixed(2)}px`
+      : ''
+  }
+  waveVpEls.forEach((vp, i) => {
+    const el = waveEls[i]
+    if (!el) return
+    if (zoomLevel <= 1) { el.style.width = ''; return }
+    const w = vpWidth(vp)
+    if (w <= 0) return
+    el.style.width = `${(w * zoomLevel).toFixed(2)}px`
+  })
+
+  setZoomScrollX(zoomScrollX)
+  applyTimelineIntervals()
+  // Le TimelinePlugin recalcule ses graduations depuis la largeur du wrapper.
+  wavesurfers[0]?.emit('redraw')
+}
+
+// Paliers de graduation « ronds » pour la règle temporelle. Les deux plus fins
+// ne servent qu'aux forts grossissements sur les morceaux courts, où 0,1 s
+// passerait sous le seuil de lisibilité.
+const TIMELINE_INTERVALS = [0.02, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120]
+
+function pickTimelineInterval(pxPerSec, minPx) {
+  return TIMELINE_INTERVALS.find(v => v * pxPerSec >= minPx)
+      ?? TIMELINE_INTERVALS[TIMELINE_INTERVALS.length - 1]
+}
+
+// « a est-il un multiple entier de b ? » — le modulo flottant ne suffit pas en
+// dessous de la seconde : 0.25 % 0.05 vaut 0.049999…, ce qui ferait retomber
+// le libellé principal sur le secondaire et poserait un libellé sur chaque
+// graduation.
+function isMultipleOf(a, b) {
+  if (b <= 0) return false
+  const ratio = a / b
+  return Math.abs(ratio - Math.round(ratio)) < 1e-6
+}
+
+// Sans cela les graduations resteraient tous les 5 s : illisibles à 32×, où
+// l'utilisateur cherche justement la seconde près. À 1× on restaure exactement
+// les valeurs d'origine.
+function applyTimelineIntervals() {
+  if (!timelinePluginRef || !totalDuration) return
+  if (zoomLevel <= 1) {
+    timelinePluginRef.options.timeInterval           = 5
+    timelinePluginRef.options.primaryLabelInterval   = 30
+    timelinePluginRef.options.secondaryLabelInterval = 10
+    return
+  }
+  const pxPerSec = zoomContentWidth() / totalDuration
+  if (pxPerSec <= 0) return
+  const secondary = pickTimelineInterval(pxPerSec, 45)
+  // Le libellé principal doit tomber sur un libellé secondaire, sinon la règle
+  // alterne deux rythmes sans rapport (10 s / 15 s).
+  const primary = TIMELINE_INTERVALS.find(
+    v => v * pxPerSec >= 110 && isMultipleOf(v, secondary)
+  ) ?? secondary
+  timelinePluginRef.options.timeInterval           = pickTimelineInterval(pxPerSec, 18)
+  timelinePluginRef.options.secondaryLabelInterval = secondary
+  timelinePluginRef.options.primaryLabelInterval   = primary
+}
+
+// Applique le décalage horizontal, identique pour toutes les rangées.
+function setZoomScrollX(x) {
+  zoomScrollX = Math.max(0, Math.min(zoomMaxScrollX(), x))
+  const transform = zoomLevel > 1 ? `translateX(${-zoomScrollX}px)` : ''
+  if (timelineWaveColEl) timelineWaveColEl.style.transform = transform
+  waveEls.forEach(el => { el.style.transform = transform })
+  updateScrollbarThumb()
+}
+
+// Largeur minimale du curseur, en pixels. Vit ici et non en CSS : le placement
+// se calcule à partir d'elle, les deux ne peuvent donc pas diverger.
+const SCROLLBAR_THUMB_MIN_W = 24
+
+// 18.7 — Affiche ou masque la scrollbar de la zone waveform. `hidden` la retire
+// déjà de l'arbre d'accessibilité, mais aria-hidden est piloté avec lui pour ne
+// pas laisser d'attribut figé qui la masquerait une fois affichée.
+function setScrollbarVisible(visible) {
+  if (!wfScrollbarEl) return
+  wfScrollbarEl.hidden = !visible
+  wfScrollbarEl.setAttribute('aria-hidden', String(!visible))
+}
+
+// Géométrie du curseur, en pixels réels : c'est le repère qu'utilise aussi
+// scrollFromBarX() pour convertir un clic en décalage.
+function scrollbarThumbGeometry() {
+  const barW = wfScrollbarEl?.clientWidth ?? 0
+  if (barW <= 0) return null
+  const thumbW = Math.min(barW, Math.max(SCROLLBAR_THUMB_MIN_W, barW / zoomLevel))
+  return { barW, thumbW, travel: barW - thumbW }
+}
+
+// 18.7 — Le curseur reflète la portion visible du morceau.
+function updateScrollbarThumb() {
+  if (!wfScrollThumbEl || zoomLevel <= 1) return
+  const geo = scrollbarThumbGeometry()
+  if (!geo) return
+  const maxScroll = zoomMaxScrollX()
+  const progress  = maxScroll > 0 ? zoomScrollX / maxScroll : 0
+  wfScrollThumbEl.style.width = `${geo.thumbW.toFixed(2)}px`
+  wfScrollThumbEl.style.left  = `${(progress * geo.travel).toFixed(2)}px`
+  wfScrollbarEl.setAttribute('aria-valuenow', String(Math.round(progress * 100)))
+}
+
+// Conversion temps → pixel dans le repère du contenu zoomé.
+function zoomTimeToPx(t) {
+  if (!totalDuration) return 0
+  return (t / totalDuration) * zoomContentWidth()
+}
+
+// Défilement de bord pendant un glisser en mode zoomé : sans lui, impossible
+// d'étendre ou de déplacer un marqueur (epic 17) au-delà de la portion visible
+// sans lâcher, défiler, reprendre — alors que c'est le cas d'usage annoncé du
+// zoom. `onScroll` rejoue le calcul du glisser quand la vue a bougé sous le
+// curseur resté immobile.
+const EDGE_SCROLL_ZONE  = 44   // largeur de la zone sensible, en pixels
+const EDGE_SCROLL_SPEED = 22   // déplacement maximal par image, en pixels
+
+function startEdgeScroll(onScroll) {
+  let clientX = null
+  let raf     = null
+
+  const step = () => {
+    raf = null
+    if (clientX === null || zoomLevel <= 1) return
+    const vp = timelineVpEl?.getBoundingClientRect()
+    if (vp) {
+      let delta = 0
+      if (clientX < vp.left + EDGE_SCROLL_ZONE) {
+        delta = -EDGE_SCROLL_SPEED *
+          Math.min(1, (vp.left + EDGE_SCROLL_ZONE - clientX) / EDGE_SCROLL_ZONE)
+      } else if (clientX > vp.right - EDGE_SCROLL_ZONE) {
+        delta = EDGE_SCROLL_SPEED *
+          Math.min(1, (clientX - (vp.right - EDGE_SCROLL_ZONE)) / EDGE_SCROLL_ZONE)
+      }
+      if (delta !== 0) {
+        const before = zoomScrollX
+        setZoomScrollX(zoomScrollX + delta)
+        if (zoomScrollX !== before) {
+          zoomUserScrolled = true
+          onScroll(clientX)
+        }
+      }
+    }
+    raf = requestAnimationFrame(step)
+  }
+
+  return {
+    update(x) {
+      clientX = x
+      if (raf === null) raf = requestAnimationFrame(step)
+    },
+    stop() {
+      clientX = null
+      if (raf !== null) { cancelAnimationFrame(raf); raf = null }
+    },
+  }
+}
+
+// Position courante de la tête de lecture, en secondes.
+function playheadTime() {
+  return wavesurfers[0]?.getCurrentTime() ?? 0
+}
+
+// 18.4 — Recentre la vue sur la tête de lecture, en restant dans les bornes.
+function centerPlayhead(time = playheadTime()) {
+  if (zoomLevel <= 1) return
+  setZoomScrollX(zoomTimeToPx(time) - zoomViewportWidth() / 2)
+}
+
+// 18.4 — Ne bouge que si la tête sort de la zone visible (marge de 10 %).
+function ensurePlayheadVisible(time = playheadTime(), margin = 0.1) {
+  if (zoomLevel <= 1) return
+  const vpW = zoomViewportWidth()
+  const px  = zoomTimeToPx(time)
+  if (px < zoomScrollX + vpW * margin || px > zoomScrollX + vpW * (1 - margin)) {
+    centerPlayhead(time)
+  }
+}
+
+// 18.5 — Défilement automatique pendant la lecture : la tête est ramenée au
+// centre dès qu'elle dépasse les trois quarts de la zone visible, ce qui laisse
+// voir ce qui arrive plutôt que de recentrer à chaque image.
+function zoomAutoScroll(time) {
+  if (zoomLevel <= 1) return
+  const vpW = zoomViewportWidth()
+  const px  = zoomTimeToPx(time)
+  if (px < zoomScrollX || px > zoomScrollX + vpW * 0.75) {
+    setZoomScrollX(px - vpW * 0.5)
+  }
+}
+
+// 18.2 — Passage à un palier de zoom. L'ancrage se fait sur la tête de lecture :
+// elle reste au centre de l'écran (ou au plus près que les bornes permettent).
+function applyZoom(level) {
+  if (!ZOOM_LEVELS.includes(level) || level === zoomLevel) return
+  const time = playheadTime()
+  zoomLevel = level
+  zoomUserScrolled = false  // 18.5 — la vue est réancrée sur la tête, le suivi reprend
+  updateZoomUI()
+  applyZoomWidths()
+  centerPlayhead(time)
+}
+
+function updateZoomUI() {
+  if (btnZoomLevel) {
+    btnZoomLevel.textContent = `${zoomLevel}×`
+    btnZoomLevel.setAttribute('aria-label', `Niveau de zoom : ${zoomLevel}×`)
+    btnZoomLevel.classList.toggle('zoom-level-btn--active', zoomLevel > 1)
+  }
+  if (btnZoomOut) btnZoomOut.disabled = zoomLevel <= ZOOM_LEVELS[0]
+  if (btnZoomIn)  btnZoomIn.disabled  = zoomLevel >= ZOOM_LEVELS[ZOOM_LEVELS.length - 1]
+}
+
+function stepZoom(direction) {
+  const idx  = ZOOM_LEVELS.indexOf(zoomLevel)
+  const next = ZOOM_LEVELS[idx + direction]
+  if (next) applyZoom(next)
+}
+
+function initZoomControls() {
+  updateZoomUI()
+  btnZoomIn?.addEventListener('click', () => stepZoom(1))
+  btnZoomOut?.addEventListener('click', () => stepZoom(-1))
+  btnZoomLevel?.addEventListener('click', () => applyZoom(1))
+}
+
+// 18.3 — Défilement manuel : molette / trackpad sur desktop, swipe sur mobile.
+// Un seul décalage est appliqué à toutes les rangées, donc l'alignement entre
+// timeline, bande de marqueurs et pistes est conservé au pixel près.
+function initZoomScroll() {
+  tracksContainer.addEventListener('wheel', (e) => {
+    if (zoomLevel <= 1) return
+    const horizontal = Math.abs(e.deltaX) > Math.abs(e.deltaY)
+    const delta = horizontal ? e.deltaX : (e.shiftKey ? e.deltaY : 0)
+    if (!delta) return
+    e.preventDefault()
+    setZoomScrollX(zoomScrollX + delta)
+    zoomUserScrolled = true
+  }, { passive: false })
+
+  // Swipe tactile. Les écouteurs sont en phase de capture : preventDefault()
+  // y est appliqué avant que WaveSurfer ne traite le pointermove, ce qui
+  // l'empêche de démarrer une création de région pendant le défilement.
+  let swipeId = null
+  let swipeStartX = 0
+  let swipeStartY = 0
+  let swipeStartScroll = 0
+  let swiping = false
+
+  tracksContainer.addEventListener('pointerdown', (e) => {
+    if (zoomLevel <= 1 || e.pointerType !== 'touch') return
+    swipeId          = e.pointerId
+    swipeStartX      = e.clientX
+    swipeStartY      = e.clientY
+    swipeStartScroll = zoomScrollX
+    swiping          = false
+  }, { capture: true })
+
+  tracksContainer.addEventListener('pointermove', (e) => {
+    if (swipeId === null || e.pointerId !== swipeId) return
+    const dx = e.clientX - swipeStartX
+    const dy = e.clientY - swipeStartY
+    if (!swiping) {
+      if (Math.abs(dx) < 8 || Math.abs(dx) <= Math.abs(dy)) return
+      swiping = true
+    }
+    e.preventDefault()
+    setZoomScrollX(swipeStartScroll - dx)
+    zoomUserScrolled = true
+  }, { capture: true, passive: false })
+
+  const endSwipe = (e) => {
+    if (swipeId === null || e.pointerId !== swipeId) return
+    swipeId = null
+    swiping = false
+  }
+  window.addEventListener('pointerup', endSwipe, true)
+  window.addEventListener('pointercancel', endSwipe, true)
+}
+
+// 18.7 — Scrollbar horizontale sous les pistes. Sur mobile elle reste un simple
+// indicateur : la navigation se fait au swipe.
+function initZoomScrollbar() {
+  if (!wfScrollbarEl || !wfScrollThumbEl || isMobile) return
+
+  // Convertit une abscisse écran sur la barre en décalage de défilement, dans
+  // le même repère en pixels que scrollbarThumbGeometry().
+  const scrollFromBarX = (clientX) => {
+    const geo = scrollbarThumbGeometry()
+    if (!geo || geo.travel <= 0) return 0
+    const left  = wfScrollbarEl.getBoundingClientRect().left
+    const ratio = (clientX - left - geo.thumbW / 2) / geo.travel
+    return Math.max(0, Math.min(1, ratio)) * zoomMaxScrollX()
+  }
+
+  let dragging = false
+
+  wfScrollThumbEl.addEventListener('mousedown', (e) => {
+    e.preventDefault()
+    dragging = true
+    wfScrollThumbEl.classList.add('waveform-scrollbar-thumb--dragging')
+  })
+
+  window.addEventListener('mousemove', (e) => {
+    if (!dragging) return
+    setZoomScrollX(scrollFromBarX(e.clientX))
+    zoomUserScrolled = true
+  })
+
+  window.addEventListener('mouseup', () => {
+    if (!dragging) return
+    dragging = false
+    wfScrollThumbEl.classList.remove('waveform-scrollbar-thumb--dragging')
+  })
+
+  // Clic sur la piste de la barre (hors curseur) : saut direct.
+  wfScrollbarEl.addEventListener('click', (e) => {
+    if (e.target === wfScrollThumbEl) return
+    setZoomScrollX(scrollFromBarX(e.clientX))
+    zoomUserScrolled = true
+  })
 }
 
 // ── Epic 13 — Tablature synchronisée ──────────────────────────────────────
@@ -1671,8 +2093,11 @@ function setTabState(newState) {
   const tracksEl  = document.getElementById('tracks-container')
   if (newState === 'fullscreen') {
     tracksEl?.classList.add('tab-hidden')
-  } else {
-    tracksEl?.classList.remove('tab-hidden')
+  } else if (tracksEl?.classList.contains('tab-hidden')) {
+    tracksEl.classList.remove('tab-hidden')
+    // Epic 18 — les largeurs n'ont pas pu être mesurées tant que le conteneur
+    // était masqué : les recalculer une fois la mise en page rétablie.
+    requestAnimationFrame(adjustTrackWidths)
   }
 
   const stateMap = { fullscreen: btnTabFullscreen, strip: btnTabStrip, collapsed: btnTabCollapse }
@@ -2400,6 +2825,9 @@ async function initTabDrawer(tabFile) {
         ws.setTime(audioSec)
       }
     }
+    // 18.5 — l'horloge AlphaTab pilote aussi le suivi de la vue zoomée,
+    // puisque le timeupdate de WaveSurfer ne fait plus rien dans ce mode.
+    if (isPlaying && !zoomUserScrolled) zoomAutoScroll(audioSec)
     checkLoopRebound(audioSec)
   })
 
@@ -2985,20 +3413,27 @@ function setupRegionInteraction(el, marker) {
     const startX = e.clientX
     const m = markers.find(mk => mk.id === marker.id)
     if (!m) return
-    const origStart = m.start
     const duration  = m.end - m.start
     const { minStart, maxEnd } = getMoveBounds(m.id)
+    // Décalage entre le début de la région et le point saisi, en secondes.
+    // Raisonner en temps absolu (et non en delta d'abscisse écran) rend le
+    // déplacement correct quand la vue défile sous un curseur immobile.
+    const grabOffset = m.start - laneXToTime(startX)
 
-    const onMove = (ev) => {
-      if (Math.abs(ev.clientX - startX) > 3) didDrag = true
-      const rect = markerLaneEl.getBoundingClientRect()
-      const dt   = ((ev.clientX - startX) / rect.width) * totalDuration
-      let ns = Math.max(minStart, Math.min(origStart + dt, maxEnd - duration))
+    const applyMove = (clientX) => {
+      const ns = Math.max(minStart, Math.min(laneXToTime(clientX) + grabOffset, maxEnd - duration))
       m.start = ns
       m.end   = ns + duration
       updateRegionElPosition(el, m)
     }
+    const edge = startEdgeScroll(applyMove)
+    const onMove = (ev) => {
+      if (Math.abs(ev.clientX - startX) > 3) didDrag = true
+      applyMove(ev.clientX)
+      edge.update(ev.clientX)
+    }
     const onUp = () => {
+      edge.stop()
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
       // Update cycle if this is the selected region
@@ -3018,13 +3453,19 @@ function setupRegionInteraction(el, marker) {
       if (!m) return
       const { leftBound, rightBound } = getResizeBounds(m.id)
 
-      const onMove = (ev) => {
-        const t = laneXToTime(ev.clientX)
+      const applyResize = (clientX) => {
+        const t = laneXToTime(clientX)
         if (isLeft) m.start = Math.max(leftBound,  Math.min(t, m.end - 0.1))
         else        m.end   = Math.min(rightBound, Math.max(t, m.start + 0.1))
         updateRegionElPosition(el, m)
       }
+      const edge = startEdgeScroll(applyResize)
+      const onMove = (ev) => {
+        applyResize(ev.clientX)
+        edge.update(ev.clientX)
+      }
       const onUp = () => {
+        edge.stop()
         window.removeEventListener('mousemove', onMove)
         window.removeEventListener('mouseup', onUp)
         if (isMarkerInSelection(m)) syncRegionToAll(markerSelectionIn, markerSelectionOut)
@@ -3202,15 +3643,22 @@ function setupLaneDragCreate() {
     ghost.style.width = '0%'
     markerLaneEl.appendChild(ghost)
 
-    const onMove = (ev) => {
-      const cur = laneXToTime(ev.clientX)
+    const applyGhost = (clientX) => {
+      const cur = laneXToTime(clientX)
       const s   = Math.max(bounds.minStart, Math.min(anchorTime, cur))
       const end = Math.min(bounds.maxEnd,   Math.max(anchorTime, cur))
+      if (!ghost) return
       ghost.style.left  = ((s / totalDuration) * 100) + '%'
       ghost.style.width = (((end - s) / totalDuration) * 100) + '%'
     }
+    const edge = startEdgeScroll(applyGhost)
+    const onMove = (ev) => {
+      applyGhost(ev.clientX)
+      edge.update(ev.clientX)
+    }
 
     const onUp = (ev) => {
+      edge.stop()
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
       ghost.remove()
@@ -3755,9 +4203,10 @@ async function loadComments() {
   renderCommentMarkers()
   updateCommentBadge()
 
-  // Révéler les boutons dans le transport
-  btnToggleComments.removeAttribute('hidden')
-  btnAddComment.removeAttribute('hidden')
+  // Révéler les boutons dans le transport. C'est le groupe entier qui est
+  // masqué, séparateur compris : sans cela il resterait deux « | » collés
+  // entre le zoom et le temps quand les commentaires ne sont pas affichés.
+  transportCommentsEl?.removeAttribute('hidden')
 
   // 37.4 — commentaires prêts, pistes peut-être aussi
   commentsLoaded = true
@@ -4129,6 +4578,11 @@ async function init() {
     btnLoopGoOut.addEventListener('click', navigateNextMarker)
     btnLoopClear.addEventListener('click', clearLoop)
 
+    // ── Zoom horizontal (epic 18) ──────────────
+    initZoomControls()
+    initZoomScroll()
+    initZoomScrollbar()
+
     // ── Tempo control ──────────────────────────
     tempoSliderEl.addEventListener('input', () => applyTempo(Number(tempoSliderEl.value)))
     tempoSliderEl.addEventListener('dblclick', () => applyTempo(100))
@@ -4215,7 +4669,21 @@ async function init() {
   let resizeTimer
   window.addEventListener('resize', () => {
     clearTimeout(resizeTimer)
-    resizeTimer = setTimeout(adjustTrackWidths, 150)
+    resizeTimer = setTimeout(() => {
+      // 18.4 — le décalage est en pixels : il doit être repris après un
+      // changement de largeur.
+      const maxBefore = zoomMaxScrollX()
+      const ratio     = maxBefore > 0 ? zoomScrollX / maxBefore : 0
+      adjustTrackWidths()
+      if (zoomUserScrolled) {
+        // L'utilisateur s'est positionné à la main : on conserve la portion
+        // qu'il regarde. Sur mobile, l'apparition de la barre d'URL déclenche
+        // des resize ; sauter sur la tête à chaque fois serait intenable.
+        setZoomScrollX(ratio * zoomMaxScrollX())
+      } else {
+        ensurePlayheadVisible()
+      }
+    }, 150)
   }, { passive: true })
 })()
 

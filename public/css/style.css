@@ -326,9 +326,27 @@ body {
   border-right: 1px solid #1a1a1a;
 }
 
-.timeline-wave-col {
+/* Epic 18 — le viewport occupe la place disponible et masque le débordement
+   quand le zoom > 1 ; la colonne interne porte la largeur effective (× zoom)
+   et la translation de scroll. */
+.timeline-wave-vp {
   flex: 1;
   min-width: 0;
+}
+
+.tracks-container--zoomed .timeline-wave-vp {
+  overflow: hidden;
+}
+
+/* 18.3 — Le geste horizontal est traité par le player (défilement solidaire) ;
+   le geste vertical reste au navigateur (défilement de page). */
+.tracks-container--zoomed .timeline-wave-vp,
+.tracks-container--zoomed .track-wave-vp {
+  touch-action: pan-y;
+}
+
+.timeline-wave-col {
+  width: 100%;
   display: flex;
   flex-direction: column;
 }
@@ -444,9 +462,11 @@ body {
   background: #0f0f0f;
   overflow: hidden;
   flex-shrink: 0;
+  cursor: pointer;
 }
 
-.track-wave {
+/* Epic 18 — même découpage viewport / contenu que la rangée timeline. */
+.track-wave-vp {
   flex: 1;
   min-width: 0;
   background: #0f0f0f;
@@ -540,6 +560,12 @@ body {
   background: #1a2433;
   border-color: #33668f;
   color: #6db6ef;
+}
+
+/* Epic 18 — le contenu remplit son viewport ; la largeur effective
+   (× zoom) est posée en inline par applyZoomWidths(). */
+.track-wave {
+  width: 100%;
 }
 
 /* ── Transport ───────────────────────────── */
@@ -795,6 +821,180 @@ body {
   background: #1e1000;
   border-color: #ff8c00;
   color: #ff8c00;
+}
+
+/* ── Epic 18 — Scrollbar de la zone waveform ─ */
+
+/* .tracks-container est une colonne flex et les rangées y sont ajoutées au fil
+   du chargement : `order` garde la barre sous les pistes sans arbitrage JS. */
+.waveform-scrollbar {
+  order: 1;
+  height: 9px;
+  flex-shrink: 0;
+  background: #0a0a0a;
+  position: relative;
+  border-bottom: 1px solid #161616;
+  margin-left: 176px;
+  cursor: pointer;
+}
+
+.waveform-scrollbar-thumb {
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  background: #2a2a2a;
+  border-radius: 3px;
+  cursor: grab;
+  transition: background 0.15s;
+}
+
+.waveform-scrollbar-thumb:hover {
+  background: #3a3a3a;
+}
+
+.waveform-scrollbar-thumb--dragging {
+  background: #4a4a4a;
+  cursor: grabbing;
+}
+
+/* La sidebar des pistes passe pleine largeur : plus de décalage à compenser. */
+@media (max-width: 1023px) {
+  .waveform-scrollbar {
+    margin-left: 0;
+  }
+}
+
+/* Mobile : indicateur de position seulement, la navigation se fait au swipe. */
+@media (max-width: 767px) {
+  .waveform-scrollbar-thumb {
+    cursor: default;
+  }
+}
+
+/* ── Epic 18 — Contrôles de zoom (transport) ─ */
+
+.transport-sep {
+  color: #2a2a2a;
+  font-size: 0.7rem;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  flex-shrink: 0;
+}
+
+/* Groupe commentaires : il porte son propre séparateur pour apparaître et
+   disparaître d'un bloc. `gap: inherit` reprend l'espacement de la rangée,
+   y compris sa valeur mobile. */
+.transport-comments {
+  display: flex;
+  align-items: center;
+  gap: inherit;
+  flex-shrink: 0;
+}
+
+/* display:flex ci-dessus l'emporterait sur le display:none du navigateur. */
+.transport-comments[hidden] {
+  display: none;
+}
+
+.transport-time-group {
+  display: flex;
+  align-items: center;
+  gap: inherit;
+  flex-shrink: 0;
+}
+
+.zoom-btn {
+  background: #1c1c1c;
+  border: 1px solid #2a2a2a;
+  color: #777;
+  padding: 0;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  flex-shrink: 0;
+  transition: background 0.1s, border-color 0.1s, color 0.1s;
+}
+
+.zoom-btn:hover:not(:disabled) {
+  background: #252525;
+  border-color: #3a3a3a;
+  color: #ccc;
+}
+
+.zoom-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+/* Loupe dessinée au trait : elle prend la couleur du bouton (donc ses états
+   survol et désactivé) sans règle supplémentaire. */
+.zoom-icon {
+  width: 1rem;
+  height: 1rem;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+
+.zoom-level-btn {
+  min-width: 2.4rem;
+  height: 1.6rem;
+  padding: 0 0.3rem;
+  background: #1c1c1c;
+  border: 1px solid #2a2a2a;
+  border-radius: 4px;
+  color: #aaa;
+  font-size: 0.72rem;
+  font-family: monospace;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  text-align: center;
+  flex-shrink: 0;
+  transition: background 0.1s, color 0.1s;
+}
+
+.zoom-level-btn:hover {
+  background: #252525;
+  color: #ddd;
+}
+
+.zoom-level-btn--active {
+  color: #4fc3f7;
+  border-color: #1a3a4a;
+  background: #0a1a20;
+}
+
+/* Sur mobile les contrôles de zoom rejoignent la taille des autres boutons du
+   transport : cible tactile de 44 px. */
+@media (max-width: 767px) {
+  .zoom-btn,
+  .zoom-level-btn {
+    min-height: 44px;
+    height: 2.75rem;
+  }
+
+  .zoom-btn {
+    min-width: 44px;
+    width: 2.75rem;
+  }
+
+  .zoom-icon {
+    width: 1.3rem;
+    height: 1.3rem;
+  }
 }
 
 /* ── Nav buttons ─────────────────────────── */
@@ -1231,6 +1431,21 @@ body.tab-no-scroll { overflow: hidden; }
     padding: 1rem 1.25rem;
   }
 
+  /* La première ligne du transport ne tient plus d'un bloc sous ~1000 px :
+     elle se replie au lieu de déborder (les cibles tactiles sont conservées).
+     Les réglages de boucle passent alors sur leur propre ligne. */
+  .transport-row {
+    flex-wrap: wrap;
+  }
+
+  .transport-loop {
+    flex-basis: 100%;
+    border-left: none;
+    padding-left: 0;
+    border-top: 1px solid #1c1c1c;
+    padding-top: 0.375rem;
+  }
+
   .groove-list {
     grid-template-columns: repeat(2, 1fr);
     padding: 1.25rem;
@@ -1460,6 +1675,12 @@ body.tab-no-scroll { overflow: hidden; }
   }
 
   .transport-btn--marker-nav {
+    display: none;
+  }
+
+  /* Le temps passe sur sa propre ligne : le séparateur qui le précède
+     ouvrirait la ligne tout seul, on le retire. */
+  .transport-time-group .transport-sep {
     display: none;
   }
 

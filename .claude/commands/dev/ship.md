@@ -74,3 +74,5 @@ Annoncer :
 - Le worktree supprimé
 - L'epic archivée (ou déjà archivée)
 - Les serveurs arrêtés (ou aucun trouvé)
+
+Puis mentionner que le skill `dev:release` existe pour publier une version sur GitHub (changelog + tag + release). **Ne jamais le déclencher automatiquement** : c'est à l'utilisateur de le demander.

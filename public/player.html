@@ -43,7 +43,17 @@
   </div>
   <div id="note-panel" class="note-panel" role="region" aria-label="Notes"></div>
   <main id="player-main" class="loading">
-    <div id="tracks-container" class="tracks-container" hidden></div>
+    <div id="tracks-container" class="tracks-container" hidden>
+      <!-- 18.7 — Scrollbar horizontale, visible uniquement quand le zoom > 1×.
+           Placée dans le conteneur des pistes pour disparaître avec elles
+           (tablature plein écran). -->
+      <div id="waveform-scrollbar" class="waveform-scrollbar" hidden aria-hidden="true"
+           role="scrollbar" aria-orientation="horizontal" aria-controls="tracks-container"
+           aria-label="Position dans le morceau"
+           aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div id="waveform-scrollbar-thumb" class="waveform-scrollbar-thumb"></div>
+      </div>
+    </div>
   </main>
   <div id="transport-drawer" class="transport-drawer" hidden>
     <button id="transport-handle" class="transport-handle" aria-expanded="true" aria-label="Ouvrir/fermer le transport">
@@ -55,15 +65,46 @@
         <button id="btn-play" class="transport-btn" aria-label="Lecture / Pause">▶</button>
         <button id="btn-stop" class="transport-btn transport-btn--stop" aria-label="Stop">■</button>
         <button id="btn-loop-go-out" class="transport-btn transport-btn--marker-nav" aria-label="Région suivante">⏭</button>
-        <button id="btn-add-comment" class="transport-btn transport-btn--marker-nav" aria-label="Ajouter un commentaire" title="Ajouter un commentaire" hidden>✚</button>
-        <button id="btn-toggle-comments" class="transport-btn btn-comments" aria-label="Afficher/masquer les commentaires" aria-pressed="true" title="Commentaires" hidden>
-          💬<span id="comment-badge" class="comment-badge" hidden>0</span>
-        </button>
-        <div class="transport-time">
-          <span id="timecode" class="timecode">0:00.000</span>
-          <span class="timecode-sep">/</span>
-          <span id="duration" class="timecode timecode--dim">—</span>
-          <button id="btn-time-mode" class="timecode-toggle" title="Basculer mesure:temps (BBT) / mm:ss" aria-pressed="false" hidden>m:s</button>
+        <span class="transport-sep" aria-hidden="true">|</span>
+        <!-- 18.2 — Zoom horizontal des waveforms -->
+        <div class="zoom-controls" role="group" aria-label="Zoom des waveforms">
+          <button id="btn-zoom-out" class="zoom-btn" type="button" aria-label="Dézoomer" title="Dézoomer" disabled>
+            <svg class="zoom-icon" viewBox="0 0 18 18" aria-hidden="true" focusable="false">
+              <circle cx="7.5" cy="7.5" r="5"></circle>
+              <path d="M11.3 11.3 L16 16"></path>
+              <path d="M5 7.5 H10"></path>
+            </svg>
+          </button>
+          <button id="btn-zoom-level" class="zoom-level-btn" type="button"
+                  title="Cliquer pour revenir à 1×" aria-label="Niveau de zoom : 1×">1×</button>
+          <button id="btn-zoom-in" class="zoom-btn" type="button" aria-label="Zoomer" title="Zoomer">
+            <svg class="zoom-icon" viewBox="0 0 18 18" aria-hidden="true" focusable="false">
+              <circle cx="7.5" cy="7.5" r="5"></circle>
+              <path d="M11.3 11.3 L16 16"></path>
+              <path d="M5 7.5 H10"></path>
+              <path d="M7.5 5 V10"></path>
+            </svg>
+          </button>
+        </div>
+        <!-- Les commentaires ne sont révélés qu'une fois chargés : le séparateur
+             qui les précède vit dans le même groupe pour apparaître avec eux. -->
+        <div id="transport-comments" class="transport-comments" hidden>
+          <span class="transport-sep" aria-hidden="true">|</span>
+          <button id="btn-add-comment" class="transport-btn transport-btn--marker-nav" aria-label="Ajouter un commentaire" title="Ajouter un commentaire">✚</button>
+          <button id="btn-toggle-comments" class="transport-btn btn-comments" aria-label="Afficher/masquer les commentaires" aria-pressed="true" title="Commentaires">
+            💬<span id="comment-badge" class="comment-badge" hidden>0</span>
+          </button>
+        </div>
+        <!-- Le séparateur reste solidaire du temps pour ne pas se retrouver
+             seul en fin de ligne quand la rangée se replie. -->
+        <div class="transport-time-group">
+          <span class="transport-sep" aria-hidden="true">|</span>
+          <div class="transport-time">
+            <span id="timecode" class="timecode">0:00.000</span>
+            <span class="timecode-sep">/</span>
+            <span id="duration" class="timecode timecode--dim">—</span>
+            <button id="btn-time-mode" class="timecode-toggle" title="Basculer mesure:temps (BBT) / mm:ss" aria-pressed="false" hidden>m:s</button>
+          </div>
         </div>
         <div id="seek-bar" class="seek-bar" role="slider" aria-label="Position" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
           <div id="seek-fill" class="seek-fill"></div>
