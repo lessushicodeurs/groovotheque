@@ -103,6 +103,7 @@
             <span id="timecode" class="timecode">0:00.000</span>
             <span class="timecode-sep">/</span>
             <span id="duration" class="timecode timecode--dim">—</span>
+            <button id="btn-time-mode" class="timecode-toggle" title="Basculer mesure:temps (BBT) / mm:ss" aria-pressed="false" hidden>m:s</button>
           </div>
         </div>
         <div id="seek-bar" class="seek-bar" role="slider" aria-label="Position" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
@@ -141,9 +142,8 @@
       <div class="tab-drawer-header">
         <span class="tab-drawer-title">Tablature</span>
         <div id="tab-track-list" class="tab-track-list"></div>
-        <div id="tab-loop-controls" class="tab-loop-controls" hidden>
-          <button id="btn-tab-loop-clear" class="tab-btn" title="Effacer la boucle tablature">✕ boucle</button>
-        </div>
+        <button id="btn-tab-scroll-resume" class="tab-btn tab-btn--resume"
+                title="Reprendre le défilement automatique de la tablature" hidden>⤓ défilement</button>
         <button id="btn-tab-fullscreen" class="tab-btn tab-btn--state"        title="Plein écran" aria-pressed="false">⛶</button>
         <button id="btn-tab-strip"     class="tab-btn tab-btn--state active" title="Strip"       aria-pressed="true">▬</button>
         <button id="btn-tab-collapse"  class="tab-btn tab-btn--state"        title="Réduire"     aria-pressed="false">−</button>

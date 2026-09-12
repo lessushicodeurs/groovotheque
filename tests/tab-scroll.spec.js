@@ -5,9 +5,8 @@
  *  1. Démarre le serveur sur un port de test avec un user de test temporaire
  *  2. Ouvre le player sur un groove avec un fichier GP
  *  3. Attend le rendu AlphaTab (.at-surface visible) + isReadyForPlayback
- *  4. Active __tabTestMode pour suspendre la sync audio (empêche RAF d'écraser timePosition)
- *  5. Avance timePosition via window.__alphaTabApi
- *  6. Attend que le curseur ait bougé, puis vérifie scrollLeft/scrollTop
+ *  4. Avance timePosition via window.__alphaTabApi
+ *  5. Attend que le curseur ait bougé, puis vérifie scrollLeft/scrollTop
  *
  * Usage : npx playwright test tests/tab-scroll.spec.js
  */
@@ -26,7 +25,7 @@ const PORT       = 3198
 
 // Groove avec fichier GP : The Clark Sisters - Ha Ya
 // (The Clark Sisters - Ha Ya.gp + audio MP3)
-const GROOVE_SLUG = 'The Clark Sisters - Ha Ya'
+const GROOVE_SLUG = 'Ghismo/Tabs/The_Clark_Sisters_-_Ha_Ya'
 const BASE_URL    = `http://localhost:${PORT}`
 
 let serverProcess = null
@@ -107,7 +106,6 @@ async function openPlayer(browser, groove = GROOVE_SLUG) {
 
 /**
  * Attend que AlphaTab ait rendu ET que le soundfont soit chargé (isReadyForPlayback).
- * Aussi active __tabTestMode pour empêcher le RAF d'écraser timePosition.
  */
 async function waitForTabReady(page, timeout = 60000) {
   await page.waitForSelector('.tab-drawer:not([hidden])', { timeout })
@@ -118,9 +116,6 @@ async function waitForTabReady(page, timeout = 60000) {
     () => window.__alphaTabApi?.score != null,
     { timeout }
   )
-
-  // Activer le mode test AVANT de charger le soundfont (ou au plus tôt)
-  await page.evaluate(() => { window.__tabTestMode = true })
 
   // Attendre isReadyForPlayback (soundfont + MIDI chargés)
   await page.waitForFunction(
@@ -163,8 +158,22 @@ async function setTimeAndGetScroll(page, synthMs, minCursorX = 0) {
     // Si timeout, continuer quand même (cursor peut être déjà à la bonne position)
   })
 
-  // Laisser le RAF processer l'enforceTabCursorVisible
-  await page.waitForTimeout(150)
+  // Laisser le scroll converger. Le défilement est amorti (la vitesse est un
+  // état persistant, cf. smoothDamp dans player.js) : après un seek il rejoint
+  // sa cible en ~0,3 s et non en une frame. On attend donc la stabilisation
+  // plutôt qu'un délai fixe.
+  await page.waitForFunction(
+    () => {
+      const el = document.querySelector('#tab-content')
+      if (!el) return false
+      const prev = window.__testLastScrollLeft
+      window.__testLastScrollLeft = el.scrollLeft
+      return prev !== undefined && Math.abs(prev - el.scrollLeft) < 0.5
+    },
+    null,
+    { timeout: 3000, polling: 100 }
+  ).catch(() => { /* pas stabilisé : on mesure quand même */ })
+  await page.evaluate(() => { delete window.__testLastScrollLeft })
 
   const result = await page.evaluate(() => {
     const el  = document.querySelector('#tab-content')
@@ -270,9 +279,6 @@ test('fullscreen — scrollTop augmente quand le curseur descend', async ({ brow
   )
   // Attendre le re-render complet (Page layout peut prendre du temps)
   await page.waitForTimeout(4000)
-
-  // Réactiver test mode (peut avoir été levé lors du re-render)
-  await page.evaluate(() => { window.__tabTestMode = true })
 
   await page.evaluate(() => { window.__alphaTabApi.timePosition = 0 })
   await page.waitForTimeout(200)

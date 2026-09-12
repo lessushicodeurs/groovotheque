@@ -363,7 +363,9 @@ app.get('/api/grooves/*/download', async (req, res) => {
     for (const entry of entries) {
       if (!entry.isFile() || entry.name.endsWith('~')) continue;
       const ext = path.extname(entry.name).toLowerCase();
-      if (AUDIO_EXTENSIONS.has(ext) || ext === '.md') {
+      // Le fichier Guitar Pro accompagne les pistes : il embarque sa tablature et
+      // son éventuel backing track, qu'aucun fichier du dossier ne contient.
+      if (AUDIO_EXTENSIONS.has(ext) || GP_EXTENSIONS.has(ext) || ext === '.md') {
         archive.file(path.join(grooveDir, entry.name), { name: entry.name });
       }
     }
@@ -491,6 +493,23 @@ app.get('/api/loop/*', async (req, res) => {
   }
 });
 
+// 35.6 — une borne de boucle est soit des secondes (format historique),
+// soit une position musicale { bar, beat } 1-indexée quand le groove a un
+// fichier Guitar Pro et que l'affichage est en BBT.
+// Mesures et temps sont 1-indexés côté client : une borne { bar: 0 } ou
+// { beat: 0 } n'a pas de sens et serait rejetée silencieusement au chargement.
+function normalizeLoopBound(v) {
+  if (typeof v === 'number' && Number.isFinite(v) && v >= 0) return v;
+  if (v && typeof v === 'object' &&
+      Number.isFinite(v.bar) && Number.isFinite(v.beat)) {
+    const bar = Math.round(v.bar);
+    const beat = Math.round(v.beat);
+    if (bar < 1 || beat < 1) return null;
+    return { bar, beat };
+  }
+  return null;
+}
+
 app.post('/api/loop/*', async (req, res) => {
   if (req.auth?.user !== 'admin') return res.status(403).json({ error: 'Réservé à l\'admin' });
   const groovePath = req.params[0];
@@ -499,10 +518,18 @@ app.post('/api/loop/*', async (req, res) => {
   const loopPath = path.join(grooveDir, 'loop.json');
   try {
     const { in: loopIn, out: loopOut } = req.body;
+    const normIn = normalizeLoopBound(loopIn);
+    const normOut = normalizeLoopBound(loopOut);
+    // Les deux bornes doivent être exprimées dans la même unité : le client
+    // rejette silencieusement une boucle à bornes mixtes (secondes + mesure).
+    if (normIn !== null && normOut !== null &&
+        (typeof normIn) !== (typeof normOut)) {
+      return res.status(400).json({ error: 'Bornes de boucle incohérentes' });
+    }
     // Si aucune borne fournie (loop effacé côté client), écrire {} pour
     // représenter "pas de loop" et écraser un éventuel loop.json existant.
-    const loopData = (typeof loopIn === 'number' && typeof loopOut === 'number')
-      ? { in: loopIn, out: loopOut }
+    const loopData = (normIn !== null && normOut !== null)
+      ? { in: normIn, out: normOut }
       : {};
     await fs.promises.writeFile(loopPath, JSON.stringify(loopData, null, 2), 'utf8');
     res.json({ ok: true });

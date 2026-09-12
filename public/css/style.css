@@ -394,6 +394,19 @@ body {
   gap: 0.3rem;
 }
 
+/* Pistes MIDI sans son (la tablature suit des pistes audio) : les réglages de
+   mixage sont inertes et le disent visuellement. */
+.track-sidebar-ctrl--inert {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+/* Piste MIDI muette faute de synthé : le M allumé doit rester lisible malgré
+   l'atténuation des contrôles inactifs. */
+.track-sidebar-ctrl--inert .btn-mute.active {
+  opacity: 1;
+}
+
 .track-btn {
   background: #1c1c1c;
   border: 1px solid #2a2a2a;
@@ -460,6 +473,97 @@ body {
   overflow: hidden;
 }
 
+/* ── Epic 35 — Timeline en mesures (BBT) ─── */
+
+.bbt-timeline {
+  position: relative;
+  height: 18px;
+  background: #0f0f0f;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.bbt-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: #2e2e2e;
+}
+
+.bbt-tick--labeled {
+  background: #555;
+}
+
+.bbt-tick-label {
+  position: absolute;
+  left: 3px;
+  top: 2px;
+  font-family: monospace;
+  font-size: 10px;
+  line-height: 1;
+  color: #555;
+  white-space: nowrap;
+}
+
+/* Bascule BBT ↔ mm:ss sur le timecode */
+.timecode-toggle {
+  background: #1c1c1c;
+  border: 1px solid #2a2a2a;
+  color: #555;
+  font-family: monospace;
+  font-size: 0.62rem;
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+  cursor: pointer;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.timecode-toggle:hover {
+  background: #242424;
+  color: #999;
+  border-color: #383838;
+}
+
+.timecode-toggle.active {
+  background: #1a2433;
+  border-color: #33668f;
+  color: #6db6ef;
+}
+
+/* ── Epic 35 — Pistes MIDI (AlphaTab) ────── */
+
+/* Aire vide colorée : v1 sans piano-roll. Le dégradé rappelle la couleur de
+   la piste sans imiter une forme d'onde. */
+.track-wave--midi {
+  flex: 1;
+  min-width: 0;
+  background:
+    repeating-linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--midi-color) 10%, transparent) 0 2px,
+      transparent 2px 5px
+    ),
+    color-mix(in srgb, var(--midi-color) 7%, #0f0f0f);
+  border-left: 2px solid color-mix(in srgb, var(--midi-color) 55%, transparent);
+}
+
+/* Bouton « afficher dans la tab » — seul signe distinctif d'une piste MIDI */
+.btn-tab-show {
+  padding: 0.1rem 0.35rem;
+  font-size: 0.75rem;
+  line-height: 1.1;
+}
+
+.btn-tab-show.active {
+  background: #1a2433;
+  border-color: #33668f;
+  color: #6db6ef;
+}
+
+/* Epic 18 — le contenu remplit son viewport ; la largeur effective
+   (× zoom) est posée en inline par applyZoomWidths(). */
 .track-wave {
   width: 100%;
 }
@@ -473,9 +577,6 @@ body {
   padding: 0.75rem 1.25rem;
   background: #131313;
   border-top: 1px solid #1a1a1a;
-  position: sticky;
-  bottom: var(--drawer-height, 0px);
-  z-index: 10;
 }
 
 .transport-row {
@@ -1085,11 +1186,26 @@ button, a, input[type="range"], .seek-bar {
   display: none;
 }
 
+/* Le transport est ferré en bas de la fenêtre, la tablature s'empile juste
+   au-dessus. Auparavant il était `sticky` à l'intérieur de son propre
+   conteneur, qui fait exactement sa hauteur : le collage n'avait donc aucun
+   jeu et la barre repartait dans le flux de la page, noyée au milieu des
+   pistes dès qu'elles étaient nombreuses. */
+.transport-drawer {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 12;
+  background: #131313;
+}
+
 /* ── Tablature drawer (Epic 13) ──────────── */
 
-/* player-main gets bottom padding so transport doesn't hide under drawer (strip/collapsed) */
+/* player-main réserve la hauteur des deux barres ferrées en bas (tablature +
+   transport) pour que la dernière piste reste atteignable. */
 #player-main {
-  padding-bottom: var(--drawer-height, 0px);
+  padding-bottom: calc(var(--drawer-height, 0px) + var(--transport-height, 0px));
 }
 
 /* En mode élargi : contraindre player-main pour éviter le scroll de page */
@@ -1101,7 +1217,7 @@ html.tab-no-scroll #player-main {
 
 .tab-drawer {
   position: fixed;
-  bottom: 0;
+  bottom: var(--transport-height, 0px);
   left: 0;
   right: 0;
   z-index: 8; /* below transport z-index 10 */
@@ -1204,16 +1320,6 @@ body.tab-no-scroll { overflow: hidden; }
   color: #999;
 }
 
-/* Loop controls in drawer header */
-.tab-loop-controls {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  flex-shrink: 0;
-}
-
-.tab-loop-controls[hidden] { display: none; }
-
 /* Generic tab button */
 .tab-btn {
   background: #1c1c1c;
@@ -1226,6 +1332,19 @@ body.tab-no-scroll { overflow: hidden; }
   cursor: pointer;
   flex-shrink: 0;
   transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+
+/* Défilement automatique suspendu : le bouton qui le reprend doit se voir. */
+.tab-btn--resume {
+  background: #2a2118;
+  border-color: #6b4f22;
+  color: #e0a244;
+}
+
+.tab-btn--resume:hover {
+  background: #3a2d1f;
+  border-color: #8a6629;
+  color: #f2b95c;
 }
 
 .tab-btn:hover {
@@ -1252,8 +1371,13 @@ body.tab-no-scroll { overflow: hidden; }
 }
 .tab-content::-webkit-scrollbar { display: none; } /* Chrome/Safari */
 
-/* Strip → scroll horizontal ; Fullscreen → scroll vertical */
-.tab-drawer--strip      .tab-content { overflow-x: auto; overflow-y: hidden; }
+/* Mode page : en-tête du tiroir resserré pour laisser la place à la partition */
+.tab-drawer--fullscreen .tab-drawer-header { padding-bottom: 0.2rem; }
+.tab-drawer--fullscreen .tab-handle-grip   { height: 6px; }
+
+/* Strip → scroll horizontal (vertical seulement si la partition, très fournie
+   en pistes, dépasse la hauteur plafonnée du tiroir) ; Fullscreen → vertical */
+.tab-drawer--strip      .tab-content { overflow-x: auto; overflow-y: auto; }
 .tab-drawer--fullscreen .tab-content { overflow-y: auto; overflow-x: hidden; }
 
 /* AlphaTab cursor + selection highlight */
@@ -3043,4 +3167,13 @@ body.tab-no-scroll { overflow: hidden; }
   .search-box {
     width: min(320px, 78vw);
   }
+}
+
+/* 35.4 — Backing track embarqué illisible : message à la place de la waveform */
+.track-wave--error {
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  font-size: 12px;
+  color: #c66;
 }

@@ -35,8 +35,10 @@ function encodePath(p) {
   return p.split('/').map(encodeURIComponent).join('/')
 }
 
-// 13.7 — Desktop only: tablature désactivée sur mobile
-const IS_DESKTOP = window.matchMedia('(min-width: 769px)').matches
+// 13.7 — Desktop only: tablature désactivée sur mobile.
+// Même seuil que isMobile : à 768 px exactement, un groove tab-only affichait
+// sinon le message « ouvrez-le sur desktop » sur un affichage desktop.
+const IS_DESKTOP = window.matchMedia('(min-width: 768px)').matches
 
 const titleEl          = document.getElementById('groove-title')
 const loadBarEl        = document.getElementById('load-bar')
@@ -49,6 +51,7 @@ const btnPlay          = document.getElementById('btn-play')
 const btnStop          = document.getElementById('btn-stop')
 const timecodeEl       = document.getElementById('timecode')
 const durationEl       = document.getElementById('duration')
+const btnTimeModeEl    = document.getElementById('btn-time-mode')
 const seekBarEl        = document.getElementById('seek-bar')
 const seekFillEl       = document.getElementById('seek-fill')
 const loopInEl         = document.getElementById('loop-in')
@@ -111,11 +114,12 @@ const tabDrawerEl       = document.getElementById('tab-drawer')
 const tabHandleEl       = document.getElementById('tab-handle')
 const tabContentEl      = document.getElementById('tab-content')
 const tabTrackListEl    = document.getElementById('tab-track-list')
-const tabLoopControlsEl  = document.getElementById('tab-loop-controls')
+
 const btnTabFullscreen   = document.getElementById('btn-tab-fullscreen')
 const btnTabStrip        = document.getElementById('btn-tab-strip')
 const btnTabCollapse     = document.getElementById('btn-tab-collapse')
-const btnTabLoopClear    = document.getElementById('btn-tab-loop-clear')
+
+const btnTabScrollResume = document.getElementById('btn-tab-scroll-resume')
 
 let prevSlug = null
 let nextSlug = null
@@ -181,6 +185,9 @@ const panKnobs       = []   // PanKnob UI per track
 const webAudioRouted = []   // true if MediaElementSource successfully connected
 const waveEls        = []   // .track-wave div per track (contenu à la largeur effective)
 const waveVpEls      = []   // .track-wave-vp div per track (viewport, largeur proportionnelle)
+// Source décodable de chaque piste pour l'export (URL serveur, ou URL d'objet
+// pour le backing track embarqué dans le fichier GP), null si non exportable.
+const trackSourceUrls = []
 const trackDurations = []   // duration in seconds per track, set on 'ready'
 let timelinePluginRef = null  // TimelinePlugin instance (track 0), for duration correction
 let timelineExtEl     = null  // container DOM element for TimelinePlugin (in .timeline-row)
@@ -343,6 +350,21 @@ function isMarkerInSelection(marker) {
 
 function nextMarkerId() { return 'mk_' + (++markerIdCounter) }
 
+// Hauteur réelle de la barre de transport, ferrée en bas de la fenêtre.
+// La tablature s'adosse dessus et player-main réserve la place des deux :
+// on la mesure plutôt que de la coder en dur, la barre passant sur deux
+// lignes ou plus selon la largeur de fenêtre.
+function observeTransportHeight() {
+  if (!drawerEl) return
+  const publish = () => {
+    const h = drawerEl.getBoundingClientRect().height
+    document.documentElement.style.setProperty('--transport-height', Math.round(h) + 'px')
+  }
+  publish()
+  if (typeof ResizeObserver === 'function') new ResizeObserver(publish).observe(drawerEl)
+  window.addEventListener('resize', publish)
+}
+
 // ── Drawer (mobile bottom sheet) ──────────────────────────────────────────
 
 function setDrawerOpen(open) {
@@ -374,9 +396,51 @@ function initDrawer() {
 // 13.3–13.6 — Tablature state
 let alphaTabApi    = null  // AlphaTabApi instance
 let tabState       = 'strip'  // 'collapsed' | 'strip' | 'fullscreen'
+// L'utilisateur a pris la main sur le scroll de la tablature : le défilement
+// automatique est suspendu. À l'arrêt c'est sans conséquence (rien ne défile) ;
+// en lecture le bouton « ⤓ défilement » permet de rendre la main, et toute
+// nouvelle lecture repart en défilement automatique.
+let tabAutoScroll = true
 let tabSyncRafId   = null
 let tabDragBeat    = null  // Beat object — start of drag selection
-let tabSyncPoints  = null  // BackingTrackSyncPoint[] from GP sync markers, or null
+// Points de synchro natifs du fichier GP (MidiFileGenerator.generateSyncPoints).
+// Chacun porte le couple (synthTick, syncTime) : position en ticks MIDI et
+// instant correspondant dans l'audio. Sert aux conversions hors lecture
+// (règle de mesures, bornes de boucle) ; pendant la lecture c'est AlphaTab
+// lui-même qui convertit, via le mode EnabledExternalMedia.
+let tabSyncPoints  = null  // BackingTrackSyncPoint[] triés par synthTick, ou null
+
+// 35.1 — AlphaTab pilote la position musicale
+let tabMaster        = false  // true dès qu'un score GP est chargé
+// Mode « média externe » : nos instances WaveSurfer sont l'axe temps d'AlphaTab.
+// C'est AlphaTab qui convertit temps audio ↔ position dans la partition, à
+// partir des points de synchro du fichier. Faux en tab-only sans aucun audio,
+// où le synthétiseur MIDI joue et porte sa propre horloge.
+let tabExternal      = false
+// Vrai pendant que le player déplace lui-même les waveforms : les ordres
+// renvoyés par AlphaTab au média externe sont alors ignorés (anti-boucle).
+let extSuppress      = false
+// En mode synthétiseur, l'horloge n'avance qu'une fois la soundfont chargée.
+// Tant que playerReady / playerPositionChanged n'ont rien émis, WaveSurfer
+// reste la source de temps : sinon un synthé lent ou en échec fige tout.
+let tabClockLive     = false
+let tabScore         = null   // Score AlphaTab chargé
+let scoreDurationSec = 0      // durée du score en secondes (axe temps audio)
+// 35.5 — affichage du temps : 'time' (mm:ss) ou 'bbt' (mesure:temps)
+const TIME_MODE_KEY  = 'groovotheque:time_mode'
+let timeMode         = 'time'
+let bbtTimelineEl    = null  // graduations de mesures (mode BBT)
+// 35.6 — boucle lue en BBT dans loop.json, à convertir dès que le score est là
+let pendingBbtLoop   = null
+// true si une tablature va être chargée (fichier GP présent et desktop) : sans
+// elle, une boucle enregistrée en mesure:temps n'est pas convertible.
+let tabWillLoad      = false
+// 35.3 — lignes de pistes MIDI : { track, muted, soloed, volume, visible, btnMute, btnSolo, btnShow }
+let midiTracks       = []
+// Tolérance de dérive avant de re-caler une instance WaveSurfer sur l'horloge
+// AlphaTab. Trop bas → re-seek permanent (audio haché) ; trop haut → décalage
+// audible. 80 ms est sous le seuil de perception pour un accompagnement.
+const WS_DRIFT_TOL   = 0.08
 
 // ── PanKnob ────────────────────────────────────────────────────────────────
 // Custom SVG knob for stereo pan (-1 to +1).
@@ -628,6 +692,13 @@ function applyTempo(pct) {
   currentTempo = pct
   const ratio = pct / 100
   wavesurfers.forEach(ws => ws.setPlaybackRate(ratio, true))
+  // AlphaTab suit le même ratio. Le changement de vitesse déclenche chez lui
+  // un recalage de position : on l'inhibe pour ne pas déplacer les waveforms.
+  if (alphaTabApi) {
+    extSuppress = true
+    try { alphaTabApi.playbackSpeed = ratio } catch { /* player pas encore prêt */ }
+    finally { extSuppress = false }
+  }
   tempoSliderEl.value = String(pct)
   tempoValueEl.textContent = `${pct}%`
   tempoValueEl.classList.toggle('tempo-value--active', pct !== 100)
@@ -644,8 +715,22 @@ function applyTempo(pct) {
 
 // Volume is controlled via GainNodes when Web Audio routing succeeded, or via
 // ws.setVolume() as fallback. Chain: MediaElementSource → GainNode → StereoPannerNode → dest.
+// 35.3 — Le solo porte sur l'ensemble des lignes du player, MIDI comprises :
+// soloer une piste MIDI doit couper les pistes audio, et inversement.
+function anySoloActive() {
+  // En média externe les pistes MIDI n'ont pas de son : leur solo ne doit pas
+  // couper les pistes audio, il n'isolerait rien.
+  return trackStates.some(s => s.soloed) || (!tabExternal && midiTracks.some(t => t.soloed))
+}
+
+// Applique l'état mute/solo/volume aux pistes audio ET aux pistes MIDI.
+function applyMix() {
+  applyVolumes()
+  applyMidiTracksAudio()
+}
+
 function applyVolumes() {
-  const anySolo = trackStates.some(s => s.soloed)
+  const anySolo = anySoloActive()
   gainNodes.forEach((gainNode, i) => {
     const s = trackStates[i]
     const vol = anySolo ? (s.soloed ? s.volume : 0) : (s.muted ? 0 : s.volume)
@@ -657,22 +742,120 @@ function applyVolumes() {
   })
 }
 
+// L'horloge du synthétiseur MIDI ne fait autorité qu'en tab-only : elle avance
+// au tempo écrit, sans rapport avec la durée réelle des enregistrements. En
+// présence d'audio c'est le média qui porte le temps et AlphaTab le suit.
+function tabClockDrives() {
+  return tabMaster && !!alphaTabApi && !tabExternal && (tabClockLive || wavesurfers.length === 0)
+}
+
+// Sortie « média externe » d'AlphaTab, une fois le mode actif et le player prêt.
+function externalOutput() {
+  const out = alphaTabApi?.player?.output
+  return (out && typeof out.updatePosition === 'function') ? out : null
+}
+
+// Pousse la position audio courante dans AlphaTab : c'est lui qui en déduit la
+// position dans la partition, via les points de synchro du fichier.
+function pushExternalPosition(sec) {
+  if (!tabExternal) return
+  const out = externalOutput()
+  if (!out) return
+  const t = (sec !== undefined) ? sec : wavesurfers[0]?.getCurrentTime()
+  if (t === undefined) return
+  out.updatePosition(t * 1000)
+}
+
+// Média externe piloté par AlphaTab : nos instances WaveSurfer.
+// Les temps échangés sont en millisecondes sur l'axe du fichier audio, comme
+// les `syncTime` des points de synchro. `extSuppress` évite le retour de
+// boucle quand c'est le player qui vient de déplacer les waveforms.
+const externalMediaHandler = {
+  get backingTrackDuration() { return (wavesurfers[0]?.getDuration() ?? 0) * 1000 },
+  get playbackRate() { return currentTempo / 100 },
+  set playbackRate(value) {
+    if (!(value > 0)) return
+    wavesurfers.forEach(ws => ws.setPlaybackRate(value, true))
+  },
+  // Le mixage se fait piste par piste (mute/solo/volume) : rien à faire ici.
+  get masterVolume() { return 1 },
+  set masterVolume(_value) { /* volume global non utilisé */ },
+  seekTo(ms) {
+    if (extSuppress) return
+    const sec = ms / 1000
+    wavesurfers.forEach(ws => ws.setTime(sec))
+  },
+  play() {
+    if (extSuppress) return
+    wavesurfers.forEach(ws => { ws.play().catch(() => { /* geste utilisateur requis */ }) })
+  },
+  pause() {
+    if (extSuppress) return
+    wavesurfers.forEach(ws => ws.pause())
+  },
+}
+
+// Branche le média externe dès que le player AlphaTab correspondant existe.
+function attachExternalMedia() {
+  const out = externalOutput()
+  if (!out) return false
+  out.handler = externalMediaHandler
+  pushExternalPosition(wavesurfers[0]?.getCurrentTime() ?? 0)
+  return true
+}
+
+// L'audio peut être plus long que le score (mixte) : passé la fin du score, le
+// synthé n'émet plus rien et c'est la piste audio qui pilote la fin.
+function audioOutlastsScore() {
+  return wavesurfers.length > 0 && totalDuration - scoreDurationSec > 0.25
+}
+
+// 35.1 — Position courante en secondes sur l'axe temps « audio ».
+// AlphaTab est la source de vérité dès qu'un score est chargé et que son
+// horloge tourne.
+function currentTimeSec() {
+  if (tabClockDrives()) return tickToAudioSec(alphaTabApi.tickPosition)
+  return wavesurfers[0]?.getCurrentTime() ?? 0
+}
+
+// Affichage timecode + seek bar, quelle que soit l'horloge maître.
+function updateTimeDisplay(t) {
+  timecodeEl.textContent = formatPosition(t)
+  if (totalDuration > 0) {
+    const ratio = Math.max(0, Math.min(1, t / totalDuration))
+    seekFillEl.style.width = `${ratio * 100}%`
+    seekBarEl.setAttribute('aria-valuenow', Math.round(ratio * 100))
+  }
+}
+
+// Rebond de boucle : quand la tête de lecture atteint OUT, saut vers IN.
+// loopJumping évite le double déclenchement avant que le seek ait pris effet.
+function checkLoopRebound(t) {
+  if (loopEnabled && activeLoopOut !== null && t >= activeLoopOut && !loopJumping && isPlaying) {
+    loopJumping = true
+    seekAllTo(activeLoopIn ?? 0)
+    setTimeout(() => { loopJumping = false }, 50)
+  }
+}
+
 async function playAll() {
   if (isPlaying) return
   zoomUserScrolled = false  // 18.5 — Play relance le suivi de la tête de lecture
   // Resume Web Audio graph if suspended (requires prior user gesture — satisfied by this click)
   if (sharedAudioCtx.state === 'suspended') await sharedAudioCtx.resume()
   if (loopEnabled && activeLoopIn !== null && activeLoopOut !== null) {
-    const cur = wavesurfers[0]?.getCurrentTime() ?? 0
+    const cur = currentTimeSec()
     if (cur < activeLoopIn || cur >= activeLoopOut) seekAllTo(activeLoopIn)
   }
   isPlaying = true
+  setTabAutoScroll(true)   // une nouvelle lecture recale toujours la tablature
   btnPlay.textContent = '⏸'
+  if (tabMaster && alphaTabApi) alphaTabApi.play()
   try {
     await Promise.all(wavesurfers.map(ws => ws.play()))
   } catch (err) {
     console.warn('play failed:', err)
-    if (!wavesurfers.some(ws => ws.isPlaying())) {
+    if (!tabMaster && !wavesurfers.some(ws => ws.isPlaying())) {
       isPlaying = false
       btnPlay.textContent = '▶'
     }
@@ -681,17 +864,21 @@ async function playAll() {
 
 function pauseAll() {
   if (!isPlaying) return
+  if (tabMaster && alphaTabApi) alphaTabApi.pause()
   wavesurfers.forEach(ws => ws.pause())
   isPlaying = false
   btnPlay.textContent = '▶'
+  updateTabScrollButton()
 }
 
 function stopAll() {
-  wavesurfers.forEach(ws => { ws.pause(); ws.setTime(0) })
+  if (tabMaster && alphaTabApi) alphaTabApi.stop()
+  wavesurfers.forEach(ws => ws.pause())
+  seekAllTo(0)
   isPlaying = false
   btnPlay.textContent = '▶'
-  timecodeEl.textContent = formatTimecode(0)
-  seekFillEl.style.width = '0%'
+  updateTabScrollButton()
+  updateTimeDisplay(0)
   // 18.4 — setTime() direct : il faut réancrer la vue nous-mêmes, sinon la tête
   // repart à 0 hors écran dès que l'utilisateur avait défilé à la main.
   ensurePlayheadVisible(0)
@@ -703,6 +890,7 @@ function stopAll() {
 function onFinish() {
   if (!isPlaying) return
   isPlaying = false
+  updateTabScrollButton()
 
   if (loopEnabled && activeLoopIn !== null) {
     seekAllTo(activeLoopIn)
@@ -713,16 +901,20 @@ function onFinish() {
   }
 
   btnPlay.textContent = '▶'
+  if (tabMaster && alphaTabApi) alphaTabApi.stop()
   wavesurfers.forEach(w => { w.pause(); w.setTime(0) })
-  timecodeEl.textContent = formatTimecode(0)
-  seekFillEl.style.width = '0%'
+  updateTimeDisplay(0)
 }
 
 function seekAllTo(time) {
-  wavesurfers.forEach(ws => ws.setTime(time))
-  if (alphaTabApi && tabState !== 'collapsed') {
-    alphaTabApi.timePosition = audioTimeToSynthTime(time * 1000)
+  extSuppress = true
+  try { wavesurfers.forEach(ws => ws.setTime(time)) } finally { extSuppress = false }
+  if (tabExternal) {
+    pushExternalPosition(time)
+  } else if (alphaTabApi && (tabMaster || tabState !== 'collapsed')) {
+    alphaTabApi.tickPosition = audioSecToTick(time)
   }
+  if (tabMaster) updateTimeDisplay(time)
   ensurePlayheadVisible(time)  // 18.4 — la tête reste visible en mode zoomé
 }
 
@@ -732,9 +924,14 @@ function seekAllTo(time) {
 async function performSeek(time) {
   const myGen = ++seekGen
   const wasPlaying = isPlaying
-  if (wasPlaying) { isPlaying = false; wavesurfers.forEach(ws => ws.pause()) }
+  if (wasPlaying) {
+    isPlaying = false
+    if (tabMaster && alphaTabApi) alphaTabApi.pause()
+    wavesurfers.forEach(ws => ws.pause())
+  }
   seekAllTo(time)
   if (wasPlaying) {
+    if (tabMaster && alphaTabApi) alphaTabApi.play()
     try {
       await Promise.all(wavesurfers.map(ws => ws.play()))
       if (myGen === seekGen) { isPlaying = true; btnPlay.textContent = '⏸' }
@@ -743,19 +940,53 @@ async function performSeek(time) {
 }
 
 function nudge(delta) {
-  if (!wavesurfers.length) return
-  const current = wavesurfers[0].getCurrentTime()
+  if (!wavesurfers.length && !tabMaster) return
+  const current = currentTimeSec()
   const next = Math.max(0, Math.min(totalDuration, current + delta))
   performSeek(next)
 }
 
 function updateLoopFields() {
   const hasRegion = activeLoopIn !== null && activeLoopOut !== null
-  loopInEl.value = hasRegion ? formatLoopTime(activeLoopIn) : '—'
-  loopOutEl.value = hasRegion ? formatLoopTime(activeLoopOut) : '—'
+  loopInEl.value = hasRegion ? formatLoopPosition(activeLoopIn) : '—'
+  loopOutEl.value = hasRegion ? formatLoopPosition(activeLoopOut) : '—'
   loopInEl.disabled = !hasRegion
   loopOutEl.disabled = !hasRegion
   btnLoopClear.disabled = !hasRegion
+}
+
+// 35.6 — IN/OUT affichés en mesure:temps quand le mode BBT est actif
+function formatLoopPosition(sec) {
+  return bbtEnabled() ? formatBBT(sec) : formatLoopTime(sec)
+}
+
+function parseLoopPosition(str) {
+  if (!bbtEnabled()) return parseLoopTime(str)
+  const m = str.trim().match(/^(\d+):(\d+)$/)
+  if (!m) return parseLoopTime(str)
+  return barBeatToSec(parseInt(m[1], 10) - 1, parseInt(m[2], 10) - 1)
+}
+
+// Arrondit une position au temps (beat) le plus proche du score.
+function snapSecToBeat(sec) {
+  const bars = tabScore?.masterBars
+  if (!bars || bars.length === 0) return sec
+  const tick = audioSecToTick(sec)
+  const bb   = tickToBarBeat(tick)
+  if (!bb) return sec
+  const r = barTickRange(bb.bar)
+  if (!r) return sec
+  const num = r.masterBar.timeSignatureNumerator || 4
+  const ticksPerBeat = r.span / num
+  if (!(ticksPerBeat > 0)) return sec
+  let bar = bb.bar
+  let beat = bb.beat
+  if ((tick - r.start) / ticksPerBeat - beat > 0.5) {
+    beat += 1
+    if (beat >= num) { beat = 0; bar += 1 }
+  }
+  if (bar >= bars.length) return tickToAudioSec(scoreTotalTicks(tabScore))
+  return barBeatToSec(bar, beat)
 }
 
 function clearLoop() {
@@ -770,9 +1001,19 @@ function clearLoop() {
 // Attaches update-end listeners to each newly created region.
 // isSyncingRegion prevents re-entrancy: WaveSurfer v7 fires region-created
 // synchronously inside addRegion(), so this guard is essential.
-function syncRegionToAll(start, end) {
+// opts.snap : aligne les bornes sur le temps le plus proche (drag en mode BBT)
+function syncRegionToAll(start, end, opts = {}) {
   if (isSyncingRegion) return
   isSyncingRegion = true
+
+  if (opts.snap && bbtEnabled()) {
+    const snappedStart = snapSecToBeat(start)
+    const snappedEnd   = snapSecToBeat(end)
+    if (snappedEnd > snappedStart) {
+      start = snappedStart
+      end   = snappedEnd
+    }
+  }
 
   activeLoopIn = start
   activeLoopOut = end
@@ -787,7 +1028,7 @@ function syncRegionToAll(start, end) {
       drag: true,
       resize: true,
     })
-    region.on('update-end', () => syncRegionToAll(region.start, region.end))
+    region.on('update-end', () => syncRegionToAll(region.start, region.end, { snap: true }))
   })
 
   isSyncingRegion = false
@@ -827,6 +1068,12 @@ function buildTimelineRow() {
     performSeek(laneXToTime(e.clientX))
   })
 
+  // 35.5 — graduations de mesures, affichées à la place du TimelinePlugin
+  // quand le mode BBT est actif
+  bbtTimelineEl = document.createElement('div')
+  bbtTimelineEl.className = 'bbt-timeline'
+  bbtTimelineEl.hidden = true
+
   markerLaneEl = document.createElement('div')
   markerLaneEl.className = 'marker-lane'
   markerLaneEl.setAttribute('aria-label', 'Bande de marqueurs')
@@ -834,19 +1081,22 @@ function buildTimelineRow() {
   commentMarkersLaneEl = document.createElement('div')
   commentMarkersLaneEl.className = 'comment-markers-lane'
 
-  waveCol.append(timelineExtEl, markerLaneEl, commentMarkersLaneEl)
+  waveCol.append(timelineExtEl, bbtTimelineEl, markerLaneEl, commentMarkersLaneEl)
   timelineVpEl.appendChild(waveCol)
   row.append(sidebar, timelineVpEl)
   tracksContainer.appendChild(row)
 }
 
-function buildTrackRow(track, idx, cachedPeaks = null) {
-  const color         = TRACK_COLORS[idx % TRACK_COLORS.length]
+// opts.blob        : Blob audio à charger via loadBlob() au lieu de track.url
+// opts.insertBefore : ligne devant laquelle insérer (ordre MIDI → backing → audio)
+// opts.isBacking    : marque la ligne comme backing track embarqué
+function buildTrackRow(track, idx, cachedPeaks = null, opts = {}) {
+  const color         = TRACK_COLORS[(opts.colorIndex ?? idx) % TRACK_COLORS.length]
   const waveColor     = color + '55'  // dim = unplayed
   const progressColor = color         // bright = played
 
   const row = document.createElement('div')
-  row.className = 'track-row'
+  row.className = opts.isBacking ? 'track-row track-row--backing' : 'track-row'
 
   // ── Sidebar ──────────────────────────────────
   const sidebar = document.createElement('div')
@@ -861,16 +1111,21 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
   nameEl.textContent = track.displayName
   nameEl.title = track.displayName
 
-  const dlLink = document.createElement('a')
-  dlLink.href = track.url
-  dlLink.download = track.filename
-  dlLink.className = 'btn-track-download'
-  dlLink.title = `Télécharger ${track.filename}`
-  dlLink.textContent = '↓'
-
   const sidebarTop = document.createElement('div')
   sidebarTop.className = 'track-sidebar-top'
-  sidebarTop.append(dot, nameEl, dlLink)
+  sidebarTop.append(dot, nameEl)
+
+  // Le backing track est embarqué dans le fichier GP : pas de fichier à
+  // télécharger, donc pas de lien de téléchargement.
+  if (track.url) {
+    const dlLink = document.createElement('a')
+    dlLink.href = track.url
+    dlLink.download = track.filename
+    dlLink.className = 'btn-track-download'
+    dlLink.title = `Télécharger ${track.filename}`
+    dlLink.textContent = '↓'
+    sidebarTop.append(dlLink)
+  }
 
   const btnMute = document.createElement('button')
   btnMute.className = 'track-btn btn-mute'
@@ -915,7 +1170,8 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
   waveVp.appendChild(waveEl)
 
   row.append(sidebar, waveVp)
-  tracksContainer.appendChild(row)
+  if (opts.insertBefore) tracksContainer.insertBefore(row, opts.insertBefore)
+  else                   tracksContainer.appendChild(row)
   waveEls.push(waveEl)
   waveVpEls.push(waveVp)
 
@@ -951,7 +1207,6 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
     container: waveEl,
     waveColor,
     progressColor,
-    url: track.url,
     height: isMobile ? 48 : 64,
     barWidth: isMobile ? 1 : 2,
     barGap: 1,
@@ -960,8 +1215,22 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
     interact: true,
     plugins,
   }
+  if (track.url) wsOpts.url = track.url
   if (cachedPeaks?.length > 0) wsOpts.peaks = cachedPeaks
   const ws = WaveSurfer.create(wsOpts)
+  // Backing track : les octets viennent du fichier GP, pas d'une URL serveur.
+  // wsOpts.peaks n'est pris en compte que par le chargement d'URL : les peaks
+  // en cache doivent être passés explicitement à loadBlob().
+  if (opts.blob) {
+    ws.loadBlob(opts.blob, cachedPeaks?.length > 0 ? cachedPeaks : undefined)
+      .catch(err => {
+        console.warn('[backing] chargement impossible:', err)
+        // Format audio non lu par le navigateur : le dire sur la ligne plutôt
+        // que de laisser une piste muette et vide.
+        waveEl.classList.add('track-wave--error')
+        waveEl.textContent = 'Backing track illisible par le navigateur'
+      })
+  }
 
   // ── Web Audio routing ─────────────────────────
   // WaveSurfer v7 plays through an HTML5 audio element. Routing it through the
@@ -990,6 +1259,7 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
 
   const state = { volume: 1, muted: false, soloed: false }
   trackStates.push(state)
+  trackSourceUrls.push(track.url ?? (opts.blob ? URL.createObjectURL(opts.blob) : null))
   volSliders.push(volSlider)
   wavesurfers.push(ws)
   ws.setPlaybackRate(currentTempo / 100, true)
@@ -998,7 +1268,7 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
   // Creating a region on any track syncs to all other tracks.
   regionsPlugin.enableDragSelection({ color: 'rgba(255,255,255,0.2)' })
   regionsPlugin.on('region-created', (region) => {
-    syncRegionToAll(region.start, region.end)
+    syncRegionToAll(region.start, region.end, { snap: true })
   })
 
   // ── Seek sync ─────────────────────────────────
@@ -1010,13 +1280,17 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
     const wasPlaying = isPlaying
     if (wasPlaying) { isPlaying = false; wavesurfers.forEach(w => w.pause()) }
     wavesurfers.forEach((w, j) => { if (j !== idx) w.setTime(newTime) })
-    if (alphaTabApi && tabState !== 'collapsed') {
-      alphaTabApi.timePosition = audioTimeToSynthTime(newTime * 1000)
+    if (tabExternal) {
+      pushExternalPosition(newTime)
+    } else if (alphaTabApi && (tabMaster || tabState !== 'collapsed')) {
+      alphaTabApi.tickPosition = audioSecToTick(newTime)
     }
+    if (tabMaster) updateTimeDisplay(newTime)
     // 18.5 — repositionner la tête à la main rend la main à l'auto-défilement.
     // Pas de recentrage ici : l'endroit cliqué est déjà sous les yeux.
     zoomUserScrolled = false
     if (wasPlaying) {
+      if (tabMaster && alphaTabApi) alphaTabApi.play()
       try {
         await Promise.all(wavesurfers.map(w => w.play()))
         if (myGen === seekGen) { isPlaying = true; btnPlay.textContent = '⏸' }
@@ -1033,7 +1307,7 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
     }
     if (idx === 0) {
       totalDuration = ws.getDuration()
-      durationEl.textContent = formatTimecode(totalDuration)
+      updateDurationDisplay()
     }
     trackDurations[idx] = ws.getDuration()
     if (trackDurations.filter(d => d > 0).length === wavesurfers.length) {
@@ -1041,6 +1315,8 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
       if (pendingLoop) {
         syncRegionToAll(pendingLoop.in, pendingLoop.out)
         pendingLoop = null
+      } else if (activeLoopIn !== null && activeLoopOut !== null) {
+        syncRegionToAll(activeLoopIn, activeLoopOut)
       }
     }
   })
@@ -1053,26 +1329,22 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
   if (idx === 0) {
 
     ws.on('timeupdate', (t) => {
-      timecodeEl.textContent = formatTimecode(t)
+      // 35.1 — quand l'horloge AlphaTab tourne, c'est playerPositionChanged qui
+      // pilote l'affichage et le rebond de boucle. WaveSurfer reprend la main
+      // tant que le synthé n'a rien émis, et au-delà de la fin du score.
+      if (tabClockDrives() && t < scoreDurationSec - 0.05) return
+      updateTimeDisplay(t)
       // 18.5 — en mode zoomé, la vue suit la tête pendant la lecture, sauf si
       // l'utilisateur a repris la main sur le défilement.
       if (isPlaying && !zoomUserScrolled) zoomAutoScroll(t)
-      if (totalDuration > 0) {
-        seekFillEl.style.width = `${(t / totalDuration) * 100}%`
-        seekBarEl.setAttribute('aria-valuenow', Math.round((t / totalDuration) * 100))
-      }
-      // Loop rebounding: when playhead reaches loop out, jump to loop in.
-      // loopJumping flag prevents double-trigger when timeupdate fires again
-      // before setTime() has advanced the playhead past activeLoopOut.
-      if (loopEnabled && activeLoopOut !== null && t >= activeLoopOut && !loopJumping && isPlaying) {
-        loopJumping = true
-        seekAllTo(activeLoopIn ?? 0)
-        setTimeout(() => { loopJumping = false }, 50)
-      }
+      checkLoopRebound(t)
     })
   }
 
   ws.on('finish', () => {
+    // 35.1 — AlphaTab master : la fin est signalée par playerFinished, sauf si
+    // l'horloge du synthé ne tourne pas ou si l'audio dépasse le score.
+    if (tabClockDrives() && !audioOutlastsScore()) return
     // Ignore finish from tracks shorter than the longest track — a short track
     // (e.g. metronome) reaching its end must not stop the whole playback.
     const maxDur = Math.max(...trackDurations.filter(d => d > 0))
@@ -1085,14 +1357,14 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
     state.muted = !state.muted
     btnMute.classList.toggle('active', state.muted)
     btnMute.setAttribute('aria-pressed', String(state.muted))
-    applyVolumes()
+    applyMix()
   })
 
   btnSolo.addEventListener('click', () => {
     state.soloed = !state.soloed
     btnSolo.classList.toggle('active', state.soloed)
     btnSolo.setAttribute('aria-pressed', String(state.soloed))
-    applyVolumes()
+    applyMix()
   })
 
   volSlider.addEventListener('input', () => {
@@ -1109,13 +1381,21 @@ function buildTrackRow(track, idx, cachedPeaks = null) {
 // ── Proportional track widths ──────────────────────────────────────────────
 
 function adjustTrackWidths() {
-  const maxDur = Math.max(...trackDurations.filter(d => d > 0))
-  if (!maxDur) return
+  // 35.4 — la durée du score dépend de l'axe temps audio (sync points), donc de
+  // la durée des waveforms : elle doit être recalculée une fois celles-ci prêtes
+  // (le backing track embarqué arrive après scoreLoaded).
+  if (tabScore) scoreDurationSec = tickToAudioSec(scoreTotalTicks(tabScore))
+
+  const durs = trackDurations.filter(d => d > 0)
+  // 35.2 — en tab-only il n'y a aucune waveform : la durée vient du score.
+  let maxDur = durs.length > 0 ? Math.max(...durs) : 0
+  if (tabMaster && scoreDurationSec > maxDur) maxDur = scoreDurationSec
+  if (!(maxDur > 0)) return
 
   // Track 0 may be shorter than others (e.g. a metronome). Always sync
   // totalDuration and the timeline to the actual longest track.
   totalDuration = maxDur
-  durationEl.textContent = formatTimecode(maxDur)
+  updateDurationDisplay()
   if (timelinePluginRef) {
     timelinePluginRef.options.duration = maxDur
     wavesurfers[0]?.emit('redraw')
@@ -1124,48 +1404,278 @@ function adjustTrackWidths() {
   // Epic 18 — la largeur proportionnelle s'applique au viewport ; le contenu
   // (.track-wave) en dérive via applyZoomWidths().
   waveVpEls.forEach((el, i) => {
-    const ratio = (trackDurations[i] ?? maxDur) / maxDur
-    if (ratio < 1) {
-      el.style.flex = 'none'
-      // Measure the actual available width at runtime so the calc remains
-      // correct on all screen sizes (desktop sidebar = 176px fixed, but on
-      // tablet/mobile the sidebar becomes a full-width strip and must not be
-      // subtracted).  getBoundingClientRect() reflects the live CSS geometry
-      // after media-query reflows.
-      const row     = el.parentElement
-      const sidebar = row?.querySelector('.track-sidebar')
-      if (row && sidebar) {
-        // En layout colonne (tablet/mobile), la sidebar est empilée au-dessus
-        // de la waveform : sidebarW ≈ rowW donc availW ≈ 0. Laisser le CSS
-        // (flex: 1 / width: 100%) gérer la largeur dans ce cas.
-        const rowStyle = window.getComputedStyle(row)
-        if (rowStyle.flexDirection === 'column') {
-          el.style.width = ''
-          return
-        }
-        const rowW     = row.getBoundingClientRect().width
-        const sidebarW = sidebar.getBoundingClientRect().width
-        const availW   = rowW - sidebarW
-        if (availW > 0) {
-          el.style.width = `${(ratio * availW).toFixed(2)}px`
-        } else {
-          // DOM masqué ou onglet inactif : getBoundingClientRect() peut
-          // retourner 0. Fallback sur le calc CSS desktop.
-          el.style.width = `calc(${ratio.toFixed(6)} * (100% - 176px))`
-        }
-      } else {
-        // Fallback: CSS calc with desktop constant
-        el.style.width = `calc(${ratio.toFixed(6)} * (100% - 176px))`
-      }
-    }
+    setWaveWidth(el, (trackDurations[i] ?? maxDur) / maxDur)
   })
 
+  // 35.3 — les aires MIDI couvrent la durée du score, pas celle du groove :
+  // sans ce calage elles resteraient pleine largeur en mode mixte et ne
+  // s'aligneraient plus avec la timeline BBT ni avec les pistes audio.
+  if (scoreDurationSec > 0) {
+    midiTracks.forEach(t => setWaveWidth(t.waveEl, scoreDurationSec / maxDur))
+  }
+
+  renderBbtTimeline()
   applyZoomWidths()  // 18.1 — largeur effective = largeur viewport × zoomLevel
 
   renderMarkers()
   renderCommentMarkers()
   animateSeenComments()
   tryOpenDeepLinkComment()  // 37.4 — pistes prêtes, commentaires peut-être aussi
+}
+
+// Largeur d'une aire de piste proportionnelle à la durée totale du groove.
+function setWaveWidth(el, ratio) {
+  if (!el) return
+  if (!(ratio < 1)) {
+    // Piste la plus longue (ou durée inconnue) : largeur gérée par le CSS.
+    el.style.flex = ''
+    el.style.width = ''
+    return
+  }
+  el.style.flex = 'none'
+  // Measure the actual available width at runtime so the calc remains
+  // correct on all screen sizes (desktop sidebar = 176px fixed, but on
+  // tablet/mobile the sidebar becomes a full-width strip and must not be
+  // subtracted).  getBoundingClientRect() reflects the live CSS geometry
+  // after media-query reflows.
+  const row     = el.parentElement
+  const sidebar = row?.querySelector('.track-sidebar')
+  if (row && sidebar) {
+    // En layout colonne (tablet/mobile), la sidebar est empilée au-dessus
+    // de la waveform : sidebarW ≈ rowW donc availW ≈ 0. Laisser le CSS
+    // (flex: 1 / width: 100%) gérer la largeur dans ce cas.
+    const rowStyle = window.getComputedStyle(row)
+    if (rowStyle.flexDirection === 'column') {
+      el.style.width = ''
+      return
+    }
+    const rowW     = row.getBoundingClientRect().width
+    const sidebarW = sidebar.getBoundingClientRect().width
+    const availW   = rowW - sidebarW
+    if (availW > 0) {
+      el.style.width = `${(ratio * availW).toFixed(2)}px`
+    } else {
+      // DOM masqué ou onglet inactif : getBoundingClientRect() peut
+      // retourner 0. Fallback sur le calc CSS desktop.
+      el.style.width = `calc(${ratio.toFixed(6)} * (100% - 176px))`
+    }
+  } else {
+    // Fallback: CSS calc with desktop constant
+    el.style.width = `calc(${ratio.toFixed(6)} * (100% - 176px))`
+  }
+}
+
+// ── Epic 35 — Pistes MIDI (AlphaTab) ──────────────────────────────────────
+// Une ligne par piste du score GP, insérée au-dessus des pistes audio.
+// Sidebar identique aux pistes audio (nom, mute/solo/volume) + bouton
+// « afficher dans la tab » qui est le seul signe distinctif d'une piste MIDI.
+// Aucune instance WaveSurfer : la zone waveform est une aire vide colorée (v1).
+
+// Première ligne devant laquelle insérer les pistes MIDI (= première piste
+// audio ou backing), ou null pour ajouter à la fin du conteneur.
+function firstAudioRowEl() {
+  return tracksContainer.querySelector('.track-row:not(.track-row--midi)')
+}
+
+// Le solo est résolu ici pour toutes les pistes MIDI (et non délégué à
+// changeTrackSolo) afin qu'un solo posé sur une piste audio les coupe aussi.
+function applyMidiTracksAudio() {
+  if (!alphaTabApi) return
+  const anySolo = anySoloActive()
+  midiTracks.forEach(t => {
+    const muted = anySolo ? !t.soloed : t.muted
+    try {
+      alphaTabApi.changeTrackSolo([t.track], false)
+      alphaTabApi.changeTrackMute([t.track], muted)
+      alphaTabApi.changeTrackVolume([t.track], t.volume)
+    } catch (err) {
+      console.warn('[tab] contrôle de piste MIDI indisponible:', err)
+    }
+  })
+}
+
+// Sélection des portées rendues dans le drawer AlphaTab.
+function applyTabTrackSelection() {
+  if (!alphaTabApi || !tabScore) return
+  const selected = midiTracks.filter(t => t.visible).map(t => t.track)
+  alphaTabApi.renderTracks(selected.length > 0 ? selected : [tabScore.tracks[0]])
+}
+
+// Source unique de vérité partagée par le bouton « afficher dans la tab »
+// de la sidebar et les cases à cocher du header du drawer.
+function setTabTrackVisible(idx, visible) {
+  const t = midiTracks[idx]
+  if (!t) return
+  t.visible = visible
+  t.btnShow.classList.toggle('active', visible)
+  t.btnShow.setAttribute('aria-pressed', String(visible))
+  const cb = tabTrackListEl?.querySelectorAll('input[type=checkbox]')[idx]
+  if (cb && cb.checked !== visible) cb.checked = visible
+  applyTabTrackSelection()
+}
+
+function buildMidiTrackRow(track, idx, color) {
+  const row = document.createElement('div')
+  row.className = 'track-row track-row--midi'
+
+  const sidebar = document.createElement('div')
+  sidebar.className = 'track-sidebar'
+
+  const dot = document.createElement('span')
+  dot.className = 'track-color-dot'
+  dot.style.background = color
+
+  const nameEl = document.createElement('span')
+  nameEl.className = 'track-name'
+  const label = track.name || `Piste ${idx + 1}`
+  nameEl.textContent = label
+  nameEl.title = label
+
+  const btnShow = document.createElement('button')
+  btnShow.className = 'track-btn btn-tab-show active'
+  btnShow.textContent = '♪'
+  btnShow.title = 'Afficher dans la tablature'
+  btnShow.setAttribute('aria-pressed', 'true')
+
+  const sidebarTop = document.createElement('div')
+  sidebarTop.className = 'track-sidebar-top'
+  sidebarTop.append(dot, nameEl, btnShow)
+
+  const btnMute = document.createElement('button')
+  btnMute.className = 'track-btn btn-mute'
+  btnMute.textContent = 'M'
+  btnMute.title = 'Mute'
+  btnMute.setAttribute('aria-pressed', 'false')
+
+  const btnSolo = document.createElement('button')
+  btnSolo.className = 'track-btn btn-solo'
+  btnSolo.textContent = 'S'
+  btnSolo.title = 'Solo'
+  btnSolo.setAttribute('aria-pressed', 'false')
+
+  const volSlider = document.createElement('input')
+  volSlider.type = 'range'
+  volSlider.className = 'track-volume'
+  volSlider.min = '0'
+  volSlider.max = '100'
+  volSlider.value = '100'
+  volSlider.setAttribute('aria-label', 'Volume')
+
+  const sidebarCtrl = document.createElement('div')
+  sidebarCtrl.className = 'track-sidebar-ctrl'
+  sidebarCtrl.append(btnMute, btnSolo, volSlider)
+  sidebar.append(sidebarTop, sidebarCtrl)
+
+  // Le son des pistes MIDI vient du synthétiseur d'AlphaTab, qui ne tourne
+  // qu'en tab-only. Dès qu'il y a de l'audio, la tablature suit l'enregistrement
+  // et rien n'est synthétisé : mute/solo/volume n'auraient aucun effet, on les
+  // désactive plutôt que de laisser croire qu'ils agissent. Le bouton
+  // « afficher dans la tablature » reste actif, c'est de l'affichage.
+  // La piste est de fait muette : on l'affiche mute (bouton M allumé), sans
+  // possibilité de la démuter tant qu'il y a de l'audio.
+  if (tabExternal) {
+    const why = 'Son MIDI indisponible : la tablature suit les pistes audio'
+    for (const el of [btnMute, btnSolo, volSlider]) {
+      el.disabled = true
+      el.title = why
+    }
+    btnMute.classList.add('active')
+    btnMute.setAttribute('aria-pressed', 'true')
+    sidebarCtrl.classList.add('track-sidebar-ctrl--inert')
+  }
+
+  // Aire vide colorée (v1) — pas de piano-roll
+  const waveEl = document.createElement('div')
+  waveEl.className = 'track-wave track-wave--midi'
+  waveEl.style.setProperty('--midi-color', color)
+  waveEl.style.height = (isMobile ? 48 : 64) + 'px'
+
+  row.append(sidebar, waveEl)
+  tracksContainer.insertBefore(row, firstAudioRowEl())
+
+  const state = { track, muted: false, soloed: false, volume: 1, visible: true, btnShow, waveEl }
+  midiTracks.push(state)
+  const myIdx = midiTracks.length - 1
+
+  btnMute.addEventListener('click', () => {
+    state.muted = !state.muted
+    btnMute.classList.toggle('active', state.muted)
+    btnMute.setAttribute('aria-pressed', String(state.muted))
+    applyMix()
+  })
+
+  btnSolo.addEventListener('click', () => {
+    state.soloed = !state.soloed
+    btnSolo.classList.toggle('active', state.soloed)
+    btnSolo.setAttribute('aria-pressed', String(state.soloed))
+    applyMix()
+  })
+
+  volSlider.addEventListener('input', () => {
+    state.volume = Number(volSlider.value) / 100
+    applyMidiTracksAudio()
+  })
+
+  btnShow.addEventListener('click', () => setTabTrackVisible(myIdx, !state.visible))
+}
+
+function buildMidiTrackRows(score) {
+  tracksContainer.querySelectorAll('.track-row--midi').forEach(el => el.remove())
+  midiTracks = []
+  // Couleurs : palette existante, indices après les pistes audio
+  const colorOffset = currentTracks.length
+  score.tracks.forEach((track, i) => {
+    buildMidiTrackRow(track, i, TRACK_COLORS[(colorOffset + i) % TRACK_COLORS.length])
+  })
+  // Un solo posé sur une piste audio avant le chargement du score doit aussi
+  // couper les pistes MIDI qui viennent d'apparaître.
+  applyMidiTracksAudio()
+}
+
+// ── 35.4 — Backing track embarqué dans le fichier GP ──────────────────────
+
+// Nom de cache des peaks du backing track (pas de fichier sur disque).
+const BACKING_PEAKS_NAME = '_backing'
+
+// Les octets bruts n'ont pas de type MIME : sans lui certains navigateurs
+// refusent de lire le Blob. Déduction depuis les octets d'en-tête.
+function sniffAudioMime(bytes) {
+  const ascii = (off, len) => String.fromCharCode(...bytes.slice(off, off + len))
+  if (ascii(0, 3) === 'ID3')  return 'audio/mpeg'
+  if (ascii(0, 4) === 'OggS') return 'audio/ogg'
+  if (ascii(0, 4) === 'fLaC') return 'audio/flac'
+  if (ascii(0, 4) === 'RIFF') return 'audio/wav'
+  if (ascii(4, 4) === 'ftyp') return 'audio/mp4'
+  if (bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0) return 'audio/mpeg'
+  return 'audio/mpeg'
+}
+
+// Première ligne de piste audio « fichier » (ni MIDI, ni backing)
+function firstPlainAudioRowEl() {
+  return tracksContainer.querySelector('.track-row:not(.track-row--midi):not(.track-row--backing)')
+}
+
+async function buildBackingTrackRow(score) {
+  const raw = score?.backingTrack?.rawAudioFile
+  if (!raw || raw.length === 0) return
+  const blob = new Blob([raw], { type: sniffAudioMime(raw) })
+  const cachedPeaks = await fetchPeaks(grooveSlug, BACKING_PEAKS_NAME)
+  const idx = wavesurfers.length
+  buildTrackRow(
+    // Le format GP n'expose aucun libellé pour le backing track : nom par défaut.
+    { index: idx, filename: BACKING_PEAKS_NAME, displayName: 'Backing Track', url: null },
+    idx,
+    cachedPeaks,
+    {
+      blob, isBacking: true, insertBefore: firstPlainAudioRowEl(),
+      // Les pistes MIDI ont déjà consommé les couleurs suivant les pistes audio :
+      // sans décalage le backing aurait la même couleur que la 1re piste MIDI,
+      // dont il est voisin.
+      colorIndex: currentTracks.length + midiTracks.length,
+    },
+  )
+  // Tab-only : le backing track est la seule piste mixable du groove.
+  setMixDownloadsAvailable(true)
 }
 
 // ── Epic 18 — Zoom horizontal ──────────────────────────────────────────────
@@ -1536,10 +2046,24 @@ function initZoomScrollbar() {
 
 const TAB_HEIGHTS = { collapsed: 40, strip: 280 }
 
+// Marges internes AlphaTab [gauche-droite, haut-bas] : défaut en mode
+// horizontal, resserrées en mode page pour gagner de la surface utile.
+const TAB_PADDING_DEFAULT = [35, 35]
+const TAB_PADDING_PAGE    = [8, 6]
+
+// Hauteur « naturelle » du strip (partition entière), avant plafonnement.
+// Sur les morceaux à nombreuses pistes — Babooshka en compte dix — un système
+// dépasse largement l'écran : le tiroir doit rester borné et le reste défiler.
+let tabStripNaturalH = TAB_HEIGHTS.strip
+
+function tabStripMaxHeight() {
+  return Math.max(160, Math.min(tabFullscreenHeight(), Math.round(window.innerHeight * 0.6)))
+}
+
 function tabFullscreenHeight() {
   const headerH    = document.querySelector('.player-header')?.getBoundingClientRect().height || 60
   const transportH = document.getElementById('transport')?.getBoundingClientRect().height     || 100
-  return Math.max(300, window.innerHeight - headerH - transportH - 8)
+  return Math.max(300, window.innerHeight - headerH - transportH)
 }
 function getStateHeight(state) {
   if (state === 'fullscreen') return tabFullscreenHeight()
@@ -1559,11 +2083,13 @@ function setTabState(newState) {
   const h = getStateHeight(newState)
   tabDrawerEl.style.height = h + 'px'
   setDrawerCssHeight(h)
+  updateTabScrollButton()
 
   // En mode plein écran : contraindre player-main + bloquer scroll page
   if (newState === 'fullscreen') {
-    const headerH = document.querySelector('.player-header')?.getBoundingClientRect().height || 60
-    const playerH = window.innerHeight - headerH - h
+    const headerH    = document.querySelector('.player-header')?.getBoundingClientRect().height || 60
+    const transportH = drawerEl?.getBoundingClientRect().height || 0
+    const playerH    = window.innerHeight - headerH - h - transportH
     document.documentElement.style.setProperty('--player-main-h', playerH + 'px')
     document.documentElement.classList.add('tab-no-scroll')
     document.body.classList.add('tab-no-scroll')
@@ -1593,8 +2119,10 @@ function setTabState(newState) {
   stateMap[newState]?.classList.add('active')
   stateMap[newState]?.setAttribute('aria-pressed', 'true')
 
+  // En média externe la boucle continue même drawer replié : elle alimente
+  // AlphaTab en position audio (le défilement du curseur, lui, est déjà inhibé).
   if (newState === 'collapsed') {
-    stopTabSync()
+    if (!tabExternal) stopTabSync()
   } else {
     startTabSync()
     if (alphaTabApi) {
@@ -1602,8 +2130,13 @@ function setTabState(newState) {
       if (mod) {
         const usePageLayout = newState === 'fullscreen'
         const newMode = usePageLayout ? mod.LayoutMode.Page : mod.LayoutMode.Horizontal
-        if (alphaTabApi.settings.display.layoutMode !== newMode) {
+        // En mode page, la partition occupe toute la largeur : on rabote les
+        // marges internes d'AlphaTab (35 px par défaut de chaque côté).
+        const newPadding = usePageLayout ? TAB_PADDING_PAGE : TAB_PADDING_DEFAULT
+        const paddingChanged = String(alphaTabApi.settings.display.padding) !== String(newPadding)
+        if (alphaTabApi.settings.display.layoutMode !== newMode || paddingChanged) {
           alphaTabApi.settings.display.layoutMode = newMode
+          alphaTabApi.settings.display.padding = [...newPadding]
           alphaTabApi.updateSettings()
           alphaTabApi.render()
         }
@@ -1669,75 +2202,116 @@ function setupTabHandleDrag() {
   tabHandleEl.addEventListener('touchend', commit)
 }
 
-// 13.9 — Conversion audio↔synth time using GP sync markers.
-// BackingTrackSyncPoint: syncTime=ms in audio, synthTime=ms in score-tempo clock.
-// Piecewise-linear interpolation between anchor points.
-function audioTimeToSynthTime(audioMs) {
-  const sps = tabSyncPoints
-  if (!sps || sps.length === 0) return audioMs
+// ── Axe temps : ticks MIDI ↔ secondes audio ───────────────────────────────
+// Les points de synchro du fichier GP portent, chacun, un tick MIDI
+// (`synthTick`) et l'instant correspondant dans l'audio (`syncTime`, en ms).
+// La conversion est donc une interpolation linéaire par morceaux sur ces
+// couples. Au-delà du dernier point, on prolonge au tempo de synchro du
+// fichier (`syncBpm`) : la durée d'une waveform n'a aucun rapport avec la fin
+// du score et ne doit jamais servir d'ancre.
+//
+// Pendant la lecture ces fonctions ne servent pas : AlphaTab fait lui-même la
+// conversion (mode EnabledExternalMedia). Elles alimentent l'affichage hors
+// lecture — règle de mesures, bornes de boucle, durée du score.
 
-  let i = sps.length - 1
-  for (let j = 0; j < sps.length - 1; j++) {
-    if (audioMs < sps[j + 1].syncTime) { i = j; break }
-  }
-  const sp0 = sps[i]
-  const sp1 = (i + 1 < sps.length) ? sps[i + 1] : null
+const MIDI_QUARTER_TICKS = 960
 
-  if (!sp1) {
-    const totalAudioMs  = (wavesurfers[0]?.getDuration() ?? 0) * 1000 || sp0.syncTime
-    const totalSynthMs  = alphaTabApi?.endTime || sp0.synthTime
-    const dt = totalAudioMs - sp0.syncTime
-    if (dt <= 0) return sp0.synthTime
-    return sp0.synthTime + ((audioMs - sp0.syncTime) / dt) * (totalSynthMs - sp0.synthTime)
-  }
-
-  const dt = sp1.syncTime - sp0.syncTime
-  if (dt <= 0) return sp0.synthTime
-  return sp0.synthTime + ((audioMs - sp0.syncTime) / dt) * (sp1.synthTime - sp0.synthTime)
+function scoreTempoBpm() {
+  return alphaTabApi?.score?.tempo || tabScore?.tempo || 120
 }
 
-// Converts a MIDI tick position to audio seconds using sync points + synthBpm.
-function beatTickToAudioTimeSec(tick) {
+function ticksToSec(ticks, bpm) {
+  return ticks * 60 / ((bpm || scoreTempoBpm()) * MIDI_QUARTER_TICKS)
+}
+
+// Segment de la table de synchro contenant `tick` (ou le dernier).
+function syncSegmentForTick(tick) {
   const sps = tabSyncPoints
-  if (!sps || sps.length === 0) {
-    // No sync data: use score tempo directly
-    const tempo    = alphaTabApi?.score?.tempo || 120
-    const synthMs  = tick * 60000 / (tempo * 960)
-    return synthMs / 1000
-  }
   let i = sps.length - 1
   for (let j = 0; j < sps.length - 1; j++) {
     if (tick < sps[j + 1].synthTick) { i = j; break }
   }
-  const sp0      = sps[i]
-  const bpm      = sp0.synthBpm || alphaTabApi?.score?.tempo || 98.5
-  const deltaTick = tick - sp0.synthTick
-  const synthMs  = sp0.synthTime + deltaTick * 60000 / (bpm * 960)
-  return synthTimeToAudioTime(synthMs) / 1000
+  return [sps[i], (i + 1 < sps.length) ? sps[i + 1] : null]
 }
 
-function synthTimeToAudioTime(synthMs) {
+// Tick MIDI (axe de lecture, reprises dépliées) → seconde sur l'axe audio.
+function tickToAudioSec(tick) {
   const sps = tabSyncPoints
-  if (!sps || sps.length === 0) return synthMs
+  if (!sps || sps.length === 0) return ticksToSec(tick, scoreTempoBpm())
+  const [a, b] = syncSegmentForTick(tick)
+  if (!b) return a.syncTime / 1000 + ticksToSec(tick - a.synthTick, a.syncBpm || a.synthBpm)
+  const dTick = b.synthTick - a.synthTick
+  if (dTick <= 0) return a.syncTime / 1000
+  return (a.syncTime + (tick - a.synthTick) / dTick * (b.syncTime - a.syncTime)) / 1000
+}
 
+// Seconde sur l'axe audio → tick MIDI. Inverse exact de tickToAudioSec.
+function audioSecToTick(sec) {
+  const sps = tabSyncPoints
+  const ms  = sec * 1000
+  if (!sps || sps.length === 0) return ms * scoreTempoBpm() * MIDI_QUARTER_TICKS / 60000
   let i = sps.length - 1
   for (let j = 0; j < sps.length - 1; j++) {
-    if (synthMs < sps[j + 1].synthTime) { i = j; break }
+    if (ms < sps[j + 1].syncTime) { i = j; break }
   }
-  const sp0 = sps[i]
-  const sp1 = (i + 1 < sps.length) ? sps[i + 1] : null
-
-  if (!sp1) {
-    const totalAudioMs  = (wavesurfers[0]?.getDuration() ?? 0) * 1000 || sp0.syncTime
-    const totalSynthMs  = alphaTabApi?.endTime || sp0.synthTime
-    const dt = totalSynthMs - sp0.synthTime
-    if (dt <= 0) return sp0.syncTime
-    return sp0.syncTime + ((synthMs - sp0.synthTime) / dt) * (totalAudioMs - sp0.syncTime)
+  const a = sps[i]
+  const b = (i + 1 < sps.length) ? sps[i + 1] : null
+  if (!b) {
+    const bpm = a.syncBpm || a.synthBpm || scoreTempoBpm()
+    return a.synthTick + (ms - a.syncTime) * bpm * MIDI_QUARTER_TICKS / 60000
   }
+  const dMs = b.syncTime - a.syncTime
+  if (dMs <= 0) return a.synthTick
+  return a.synthTick + (ms - a.syncTime) / dMs * (b.synthTick - a.synthTick)
+}
 
-  const dt = sp1.synthTime - sp0.synthTime
-  if (dt <= 0) return sp0.syncTime
-  return sp0.syncTime + ((synthMs - sp0.synthTime) / dt) * (sp1.syncTime - sp0.syncTime)
+// Lissage du scroll téléprompter — amortissement critique (type SmoothDamp) :
+// la vitesse de défilement est un état persistant qu'on fait converger vers la
+// cible, et non un saut recalculé à chaque frame. Le mouvement reste donc
+// continu et régulier même quand la cible avance par paliers (changement de
+// beat en strip, changement de ligne en page), et un seek se rattrape sans
+// à-coup. Un état par axe : les deux modes ne défilent jamais ensemble.
+const TAB_SCROLL_SMOOTH_TIME = 0.30   // secondes pour rejoindre la cible
+const tabScrollH = { pos: 0, vel: 0 } // axe horizontal (strip)
+const tabScrollV = { pos: 0, vel: 0 } // axe vertical (page)
+let   tabScrollLastTs = 0
+
+// Secondes écoulées depuis la frame précédente, bornées pour absorber une
+// mise en veille de l'onglet.
+function tabScrollDelta() {
+  const now = performance.now()
+  const dt  = tabScrollLastTs ? (now - tabScrollLastTs) / 1000 : 0.0167
+  tabScrollLastTs = now
+  return Math.min(0.1, dt)
+}
+
+function smoothDamp(state, target, dt) {
+  const omega  = 2 / TAB_SCROLL_SMOOTH_TIME
+  const x      = omega * dt
+  const exp    = 1 / (1 + x + 0.48 * x * x + 0.235 * x * x * x)
+  const change = state.pos - target
+  const temp   = (state.vel + omega * change) * dt
+  state.vel = (state.vel - omega * temp) * exp
+  state.pos = target + (change + temp) * exp
+  if (Math.abs(target - state.pos) < 0.25) { state.pos = target; state.vel = 0 }
+  return state.pos
+}
+
+// Position *rendue* du curseur, en pixels de contenu : { x, y, h }.
+// AlphaTab n'écrit dans `style.transform` que la position du beat *suivant*,
+// et laisse une transition CSS linéaire faire le trajet : lire le style inline
+// donne donc une valeur en escalier, alors que le style calculé donne la
+// valeur interpolée par le navigateur — continue, exactement ce que suit l'œil.
+// `h` (facteur d'échelle vertical) est la hauteur du système courant, donc la
+// hauteur d'une ligne de partition.
+function renderedCursorBox(el) {
+  const t = getComputedStyle(el).transform
+  if (!t || t === 'none') return null
+  try {
+    const m = new DOMMatrixReadOnly(t)
+    if (!Number.isFinite(m.m41) || !Number.isFinite(m.m42)) return null
+    return { x: m.m41, y: m.m42, h: m.m22 }
+  } catch { return null }
 }
 
 // Scroll téléprompter — lit la position X/Y du curseur depuis son CSS transform
@@ -1751,39 +2325,129 @@ function enforceTabCursorVisible() {
   const t = cursor.style.transform  // "translate(Xpx, Ypx) scale(w, h)"
   if (!t) return
 
-  if (tabState === 'strip') {
-    const mx = /translate\((-?[\d.]+)px/.exec(t)
-    if (!mx) return
-    const contentX = parseFloat(mx[1])
-    const W = tabContentEl.clientWidth
-    // Curseur fixe à 35% — la partition défile en dessous (téléprompteur)
-    const target = Math.max(0, contentX - W * 0.35)
-    const diff = target - tabContentEl.scrollLeft
-    // Avance normale (≤ 5px/frame) → sync direct ; seek → ease 15%
-    tabContentEl.scrollLeft = Math.abs(diff) <= 5 ? target : tabContentEl.scrollLeft + diff * 0.15
-  } else if (tabState === 'fullscreen') {
-    const my = /translate\(-?[\d.]+px,\s*(-?[\d.]+)px/.exec(t)
-    if (!my) return
-    const contentY = parseFloat(my[1])
-    const H = tabContentEl.clientHeight
-    // OffScreen + ease : ne scroll que si curseur sort de la zone lisible (0–80% du viewport)
-    const visibleY = contentY - tabContentEl.scrollTop
-    if (visibleY > H * 0.8 || visibleY < 0) {
-      const target = Math.max(0, contentY - H * 0.25)
-      tabContentEl.scrollTop += (target - tabContentEl.scrollTop) * 0.15
-    }
+  // Défilement suspendu : l'utilisateur explore la partition à la main, le
+  // téléprompteur ne doit pas la lui reprendre. On suit quand même sa position
+  // pour repartir de là sans saut quand il rendra la main.
+  if (!tabAutoScroll) {
+    tabScrollH.pos = tabContentEl.scrollLeft; tabScrollH.vel = 0
+    tabScrollV.pos = tabContentEl.scrollTop;  tabScrollV.vel = 0
+    tabScrollLastTs = 0
+    return
   }
+
+  const box = renderedCursorBox(cursor)
+  const dt  = tabScrollDelta()
+
+  if (tabState === 'strip') {
+    // Cible : ce qui est joué au centre de la fenêtre. Tant que le curseur n'a
+    // pas atteint le centre (début du morceau), le clamp à 0 laisse la
+    // partition immobile et c'est le curseur qui avance ; ensuite le scroll
+    // prend le relais et le curseur reste au milieu.
+    const W   = tabContentEl.clientWidth
+    const max = Math.max(0, tabContentEl.scrollWidth - W)
+
+    let cursorX = box?.x
+    if (cursorX === undefined) {
+      const mx = /translate\((-?[\d.]+)px/.exec(t)
+      if (!mx) return
+      cursorX = parseFloat(mx[1])
+    }
+    const target = Math.min(max, Math.max(0, cursorX - W / 2))
+
+    // Resync si le scroll a bougé hors de notre contrôle (rendu, scroll manuel)
+    if (Math.abs(tabScrollH.pos - tabContentEl.scrollLeft) > 2) tabScrollH.pos = tabContentEl.scrollLeft
+
+    tabContentEl.scrollLeft = smoothDamp(tabScrollH, target, dt)
+  } else if (tabState === 'fullscreen') {
+    // Cible : la ligne en cours de lecture en *deuxième* position dans la page,
+    // de sorte que tout ce qui reste sous elle soit déjà lisible en avance.
+    // On ne scrolle donc plus seulement quand le curseur déborde : la cible
+    // suit la ligne courante en permanence, et l'amortissement transforme le
+    // passage d'une ligne à l'autre en glissé plutôt qu'en saut.
+    const H   = tabContentEl.clientHeight
+    const max = Math.max(0, tabContentEl.scrollHeight - H)
+
+    let contentY, lineH
+    if (box) {
+      contentY = box.y
+      lineH    = box.h
+    } else {
+      const my = /translate\(-?[\d.]+px,\s*(-?[\d.]+)px\)\s*scale\([^,]+,\s*(-?[\d.]+)/.exec(t)
+      if (!my) return
+      contentY = parseFloat(my[1])
+      lineH    = parseFloat(my[2])
+    }
+    if (!(lineH > 0)) lineH = H * 0.2
+
+    // Une ligne complète laissée au-dessus : la ligne active est la deuxième
+    // visible. Bornée à un tiers de la page pour rester en haut sur les
+    // partitions à systèmes très hauts.
+    const headroom = Math.min(lineH, H / 3)
+    const target   = Math.min(max, Math.max(0, contentY - headroom))
+
+    if (Math.abs(tabScrollV.pos - tabContentEl.scrollTop) > 2) tabScrollV.pos = tabContentEl.scrollTop
+
+    tabContentEl.scrollTop = smoothDamp(tabScrollV, target, dt)
+  }
+}
+
+// Scroll manuel à la molette. En strip la tablature ne défile
+// qu'horizontalement : sans conversion, la molette verticale — la seule que
+// la plupart des souris possèdent — n'y ferait rien. En page le défilement
+// vertical natif convient, on se contente de noter la reprise en main.
+// Le bouton de reprise n'a de sens que pendant la lecture : à l'arrêt rien ne
+// défile, la tablature est libre et il n'y a rien à reprendre.
+function updateTabScrollButton() {
+  if (!btnTabScrollResume) return
+  const show = !tabAutoScroll && isPlaying && tabState !== 'collapsed'
+  if (show) btnTabScrollResume.removeAttribute('hidden')
+  else      btnTabScrollResume.setAttribute('hidden', '')
+}
+
+// Suspend ou reprend le défilement automatique.
+function setTabAutoScroll(on) {
+  tabAutoScroll = on
+  updateTabScrollButton()
+}
+
+function setupTabManualScroll() {
+  if (!tabContentEl) return
+  btnTabScrollResume?.addEventListener('click', () => setTabAutoScroll(true))
+  tabContentEl.addEventListener('wheel', (e) => {
+    if (tabState === 'collapsed') return
+    setTabAutoScroll(false)
+    if (tabState !== 'strip') return
+    // Partition plus haute que le tiroir (beaucoup de pistes) : la molette
+    // verticale sert à descendre dans les portées, seul le défilement
+    // horizontal du trackpad reste horizontal. Sinon — cas courant — la
+    // molette verticale est convertie en défilement horizontal, sans quoi la
+    // plupart des souris ne pourraient pas parcourir le morceau.
+    const overflowsY = tabContentEl.scrollHeight - tabContentEl.clientHeight > 2
+    if (overflowsY && Math.abs(e.deltaY) >= Math.abs(e.deltaX)) {
+      if (!e.deltaY) return
+      e.preventDefault()
+      tabContentEl.scrollTop += e.deltaY
+      tabScrollV.pos = tabContentEl.scrollTop
+      tabScrollV.vel = 0
+      return
+    }
+    const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY
+    if (!delta) return
+    e.preventDefault()
+    tabContentEl.scrollLeft += delta
+    tabScrollH.pos = tabContentEl.scrollLeft
+    tabScrollH.vel = 0
+  }, { passive: false })
 }
 
 function startTabSync() {
   if (tabSyncRafId !== null) return
   const loop = () => {
+    // Mode média externe : le RAF pousse la position audio dans AlphaTab, qui
+    // en déduit la mesure et le temps courants. Une fois par frame, soit bien
+    // plus fin que les 50 ms recommandés par AlphaTab.
+    pushExternalPosition()
     if (alphaTabApi && tabState !== 'collapsed') {
-      // window.__tabTestMode = true suspend la sync audio pour les tests Playwright
-      if (!window.__tabTestMode && wavesurfers.length > 0) {
-        const audioMs = wavesurfers[0].getCurrentTime() * 1000
-        alphaTabApi.timePosition = audioTimeToSynthTime(audioMs)
-      }
       enforceTabCursorVisible()
     }
     tabSyncRafId = requestAnimationFrame(loop)
@@ -1798,6 +2462,185 @@ function stopTabSync() {
   }
 }
 
+// 35.1 / 35.5 — Repères musicaux du score
+// AlphaTab publie sa propre table de lecture (`api.tickCache.masterBars`) :
+// une entrée par mesure *jouée*, reprises dépliées, avec ses bornes en ticks.
+// C'est elle qui fait autorité — la liste `score.masterBars` est l'écriture,
+// pas la lecture, et ignore les reprises.
+function barLookups() {
+  const lut = alphaTabApi?.tickCache?.masterBars
+  return (lut && lut.length > 0) ? lut : null
+}
+
+// Durée totale du score en ticks MIDI (fin de la dernière mesure jouée).
+function scoreTotalTicks(score) {
+  const lut = barLookups()
+  if (lut) return lut[lut.length - 1].end
+  const bars = score?.masterBars
+  if (!bars || bars.length === 0) return 0
+  const last = bars[bars.length - 1]
+  return last.start + last.calculateDuration()
+}
+
+// Tick MIDI → { bar, beat } 0-indexés. `bar` est l'index d'écriture de la
+// mesure : une mesure jouée deux fois (reprise) porte le même numéro les
+// deux fois, ce qui est bien ce qu'attend un musicien qui lit la partition.
+function tickToBarBeat(tick) {
+  const lut = barLookups()
+  if (lut) {
+    let lo = 0, hi = lut.length - 1, idx = 0
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1
+      if (lut[mid].start <= tick) { idx = mid; lo = mid + 1 } else { hi = mid - 1 }
+    }
+    const entry = lut[idx]
+    const mb    = entry.masterBar
+    const num   = mb?.timeSignatureNumerator || 4
+    const span  = entry.end - entry.start
+    const ticksPerBeat = span / num
+    const beat = ticksPerBeat > 0
+      ? Math.max(0, Math.min(num - 1, Math.floor((tick - entry.start) / ticksPerBeat)))
+      : 0
+    return { bar: mb?.index ?? idx, beat }
+  }
+  const bars = tabScore?.masterBars
+  if (!bars || bars.length === 0) return null
+  let lo = 0, hi = bars.length - 1, idx = 0
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (bars[mid].start <= tick) { idx = mid; lo = mid + 1 } else { hi = mid - 1 }
+  }
+  const mb  = bars[idx]
+  const num = mb.timeSignatureNumerator || 4
+  const ticksPerBeat = mb.calculateDuration() / num
+  const beat = ticksPerBeat > 0
+    ? Math.max(0, Math.min(num - 1, Math.floor((tick - mb.start) / ticksPerBeat)))
+    : 0
+  return { bar: idx, beat }
+}
+
+// Bornes en ticks de la mesure d'index `i`, à sa première lecture.
+function barTickRange(i) {
+  const bars = tabScore?.masterBars
+  if (!bars || bars.length === 0) return null
+  const mb = bars[Math.max(0, Math.min(bars.length - 1, i))]
+  const cache = alphaTabApi?.tickCache
+  if (cache) {
+    try {
+      const entry = cache.getMasterBar(mb)
+      if (entry && entry.end > entry.start) {
+        return { start: entry.start, span: entry.end - entry.start, masterBar: mb }
+      }
+    } catch { /* mesure hors lecture : repli sur l'écriture */ }
+  }
+  return { start: mb.start, span: mb.calculateDuration(), masterBar: mb }
+}
+
+// { bar, beat } 0-indexés → tick MIDI
+function barBeatToTick(bar, beat) {
+  const r = barTickRange(bar)
+  if (!r) return 0
+  const num = r.masterBar.timeSignatureNumerator || 4
+  return r.start + Math.max(0, Math.min(num - 1, beat)) * (r.span / num)
+}
+
+function barBeatToSec(bar, beat) {
+  return tickToAudioSec(barBeatToTick(bar, beat))
+}
+
+// Le mode BBT n'a de sens qu'avec un score chargé.
+function bbtEnabled() {
+  return timeMode === 'bbt' && tabMaster && !!tabScore?.masterBars?.length
+}
+
+// Position en secondes → « mesure:temps » 1-indexé (ex. 5:3)
+function formatBBT(sec) {
+  const bb = tickToBarBeat(audioSecToTick(Math.max(0, sec)))
+  if (!bb) return formatTimecode(sec)
+  return `${bb.bar + 1}:${bb.beat + 1}`
+}
+
+// Formatage du timecode selon le mode actif
+function formatPosition(sec) {
+  return bbtEnabled() ? formatBBT(sec) : formatTimecode(sec)
+}
+
+function updateDurationDisplay() {
+  if (bbtEnabled()) {
+    // Nombre de mesures *jouées* : cohérent avec la règle de mesures, qui
+    // déroule les reprises.
+    durationEl.textContent = `${barLookups()?.length ?? tabScore.masterBars.length} mes.`
+  } else {
+    durationEl.textContent = totalDuration > 0 ? formatTimecode(totalDuration) : '—'
+  }
+}
+
+// 35.5 — Graduations de mesures, reconstruites depuis score.masterBars.
+// Positions converties en % de la durée totale : insensibles au redimensionnement.
+function renderBbtTimeline() {
+  if (!bbtTimelineEl) return
+  const on = bbtEnabled()
+  bbtTimelineEl.hidden = !on
+  if (timelineExtEl) timelineExtEl.hidden = on
+  if (!on || !(totalDuration > 0)) return
+
+  bbtTimelineEl.innerHTML = ''
+  // Une graduation par mesure *jouée* : sur un morceau à reprises, la même
+  // mesure apparaît autant de fois qu'elle est jouée, au bon endroit.
+  const lut  = barLookups()
+  const bars = lut
+    ? lut.map(e => ({ start: e.start, label: (e.masterBar?.index ?? 0) + 1 }))
+    : tabScore.masterBars.map((mb, i) => ({ start: mb.start, label: i + 1 }))
+  const width   = bbtTimelineEl.getBoundingClientRect().width || 800
+  const pxPerBar = width / bars.length
+  // Une étiquette tous les N marqueurs pour garder ~36 px entre deux libellés
+  const labelStep = Math.max(1, Math.ceil(36 / Math.max(pxPerBar, 1)))
+
+  for (let i = 0; i < bars.length; i++) {
+    const sec = tickToAudioSec(bars[i].start)
+    if (sec > totalDuration) break
+    const tick = document.createElement('div')
+    tick.className = 'bbt-tick'
+    tick.style.left = `${(sec / totalDuration) * 100}%`
+    if (i % labelStep === 0) {
+      tick.classList.add('bbt-tick--labeled')
+      const label = document.createElement('span')
+      label.className = 'bbt-tick-label'
+      label.textContent = String(bars[i].label)
+      tick.appendChild(label)
+    }
+    bbtTimelineEl.appendChild(tick)
+  }
+}
+
+function setTimeMode(mode) {
+  timeMode = mode === 'bbt' ? 'bbt' : 'time'
+  try { localStorage.setItem(TIME_MODE_KEY, timeMode) } catch { /* ignore */ }
+  if (btnTimeModeEl) {
+    btnTimeModeEl.textContent = timeMode === 'bbt' ? 'BBT' : 'm:s'
+    btnTimeModeEl.setAttribute('aria-pressed', String(timeMode === 'bbt'))
+    btnTimeModeEl.classList.toggle('active', timeMode === 'bbt')
+  }
+  updateTimeDisplay(currentTimeSec())
+  updateDurationDisplay()
+  updateLoopFields()
+  renderBbtTimeline()
+}
+
+function initTimeMode() {
+  let saved = 'time'
+  try { saved = localStorage.getItem(TIME_MODE_KEY) || 'time' } catch { /* ignore */ }
+  timeMode = saved === 'bbt' ? 'bbt' : 'time'
+  if (btnTimeModeEl) {
+    btnTimeModeEl.textContent = timeMode === 'bbt' ? 'BBT' : 'm:s'
+    btnTimeModeEl.setAttribute('aria-pressed', String(timeMode === 'bbt'))
+    btnTimeModeEl.classList.toggle('active', timeMode === 'bbt')
+    btnTimeModeEl.addEventListener('click', () => {
+      setTimeMode(timeMode === 'bbt' ? 'time' : 'bbt')
+    })
+  }
+}
+
 function buildTrackSelector(score) {
   if (!tabTrackListEl) return
   tabTrackListEl.innerHTML = ''
@@ -1808,34 +2651,44 @@ function buildTrackSelector(score) {
     cb.type = 'checkbox'
     cb.checked = true
     cb.dataset.trackIdx = String(i)
-    cb.addEventListener('change', () => {
-      if (!alphaTabApi) return
-      const cbs = tabTrackListEl.querySelectorAll('input[type=checkbox]')
-      const selected = score.tracks.filter((_, j) => cbs[j]?.checked)
-      alphaTabApi.renderTracks(selected.length > 0 ? selected : [score.tracks[0]])
-    })
+    cb.addEventListener('change', () => setTabTrackVisible(i, cb.checked))
     label.append(cb, document.createTextNode(track.name || `Piste ${i + 1}`))
     tabTrackListEl.appendChild(label)
   })
 }
 
+// 35.2 — Échec du chargement de la tablature. En tab-only, aucune waveform ne
+// viendra terminer le chargement : la page resterait indéfiniment en « loading ».
+let tabLoadErrorShown = false
+function tabLoadFailed(msg) {
+  console.warn('[tab]', msg)
+  // Sans score, une boucle enregistrée en mesure:temps reste inconvertible.
+  tabWillLoad = false
+  warnBbtLoopUnavailable()
+  if (tabContentEl && !tabLoadErrorShown) {
+    tabContentEl.textContent = msg
+    tabContentEl.classList.remove('tab-content--loading')
+  }
+  if (currentTracks.length === 0 && !tabLoadErrorShown) showFatalError(msg)
+  tabLoadErrorShown = true
+}
+
 async function initTabDrawer(tabFile) {
-  if (!IS_DESKTOP || !tabDrawerEl) return
+  if (!IS_DESKTOP) return
+  if (!tabDrawerEl) {
+    tabLoadFailed('Tablature indisponible : interface non initialisée.')
+    return
+  }
 
   tabContentEl.classList.add('tab-content--loading')
   tabDrawerEl.removeAttribute('hidden')
   setTabState('strip')
   setupTabHandleDrag()
+  setupTabManualScroll()
 
   btnTabFullscreen?.addEventListener('click', () => setTabState('fullscreen'))
   btnTabStrip?.addEventListener('click',     () => setTabState('strip'))
   btnTabCollapse?.addEventListener('click',  () => setTabState('collapsed'))
-
-  btnTabLoopClear?.addEventListener('click', () => {
-    clearLoop()
-    tabDragBeat = null
-    tabLoopControlsEl?.setAttribute('hidden', '')
-  })
 
   // Note: le package alphaTab utilise un T majuscule dans les noms de fichiers dist
   const AT_BASE = '/vendor/alphatab'
@@ -1845,13 +2698,38 @@ async function initTabDrawer(tabFile) {
     alphaTabMod = await import(`${AT_BASE}/alphaTab.mjs`)
     window.__alphaTabModule = alphaTabMod
   } catch (err) {
-    tabContentEl.textContent = 'AlphaTab non disponible (erreur de chargement).'
-    tabContentEl.classList.remove('tab-content--loading')
     console.warn('[tab] Échec chargement AlphaTab:', err)
+    tabLoadFailed('AlphaTab non disponible (erreur de chargement).')
     return
   }
 
+  // Le mode du player dépend de ce que le fichier contient : un `.gp` porteur
+  // d'un backing track a du son même sans piste audio sur le disque. Le savoir
+  // impose de lire le fichier ici, avant d'instancier l'API — le mode ne peut
+  // plus être changé ensuite, et il conditionne l'UI des pistes MIDI
+  // (construite dès scoreLoaded) autant que le transport.
+  // Le score parsé est passé tel quel à `load()` : AlphaTab l'accepte et ne le
+  // ré-analyse pas, le fichier n'est donc lu qu'une fois.
+  let preloadedScore = null
+  const tabUrl = `/tab/${encodePath(grooveSlug)}/${encodeURIComponent(tabFile)}`
+  try {
+    const bytes = new Uint8Array(await (await fetch(tabUrl)).arrayBuffer())
+    preloadedScore = alphaTabMod.importer.ScoreLoader.loadScoreFromBytes(bytes)
+  } catch (err) {
+    // Lecture impossible ici : on laisse AlphaTab charger l'URL lui-même et
+    // signaler l'erreur par son propre événement.
+    console.warn('[tab] pré-lecture du fichier impossible:', err)
+  }
+
   tabContentEl.classList.remove('tab-content--loading')
+
+  // Média externe dès qu'il y a du son à suivre, qu'il vienne des pistes du
+  // groove ou du backing track embarqué dans le `.gp`. Sans cela AlphaTab
+  // démarre son synthétiseur : celui-ci sonne par-dessus l'enregistrement et,
+  // pire, son horloge devient maîtresse et recale l'audio plusieurs fois par
+  // seconde dès que les points de synchro écartent la partition du temps réel.
+  tabExternal = currentTracks.length > 0
+    || (preloadedScore?.backingTrack?.rawAudioFile?.length ?? 0) > 0
 
   alphaTabApi = new alphaTabMod.AlphaTabApi(tabContentEl, {
     core: {
@@ -1860,7 +2738,14 @@ async function initTabDrawer(tabFile) {
       logLevel:      alphaTabMod.LogLevel.Warning,
     },
     player: {
-      enablePlayer:         true,
+      // Dès qu'il y a de l'audio, ce sont nos instances WaveSurfer qui portent
+      // le temps : AlphaTab les traite comme un « média externe » et convertit
+      // lui-même temps audio ↔ position dans la partition, à partir des points
+      // de synchro du fichier GP. Sans aucun audio (tab-only), le synthétiseur
+      // MIDI joue et porte sa propre horloge.
+      playerMode:           tabExternal
+        ? alphaTabMod.PlayerMode.EnabledExternalMedia
+        : alphaTabMod.PlayerMode.EnabledSynthesizer,
       enableCursor:         true,
       enableUserInteraction: true,
       soundFont:            `${AT_BASE}/soundfont/sonivox.sf2`,
@@ -1874,13 +2759,32 @@ async function initTabDrawer(tabFile) {
   })
 
   window.__alphaTabApi = alphaTabApi
-  alphaTabApi.error.on(err => console.error('[AlphaTab]', err))
+  // Surface de test : le temps se pilote désormais par l'axe audio, pas par
+  // l'horloge du synthé — les tests doivent passer par le transport du player.
+  window.__playerSeek     = (sec) => seekAllTo(sec)
+  window.__playerPosition = () => currentTimeSec()
+
+  // Le player interne est prêt : en média externe, c'est le moment de lui
+  // brancher nos waveforms ; en synthétiseur, son horloge devient utilisable.
+  alphaTabApi.playerReady.on(() => {
+    tabClockLive = true
+    if (tabExternal) attachExternalMedia()
+  })
+
+  alphaTabApi.error.on(err => {
+    console.error('[AlphaTab]', err)
+    // Fichier GP illisible : le score ne sera jamais chargé.
+    if (!tabScore) tabLoadFailed('Tablature illisible (fichier Guitar Pro invalide).')
+  })
 
   // Auto-fit strip height once rendering is complete (postRenderFinished = once, not per partial)
   alphaTabApi.postRenderFinished.on(() => {
     // Reset scroll à chaque nouveau rendu (changement de layout ou de pistes)
     tabContentEl.scrollLeft = 0
     tabContentEl.scrollTop  = 0
+    tabScrollH.pos = 0; tabScrollH.vel = 0
+    tabScrollV.pos = 0; tabScrollV.vel = 0
+    setTabAutoScroll(true)
 
     if (tabState !== 'strip') return
     const atSurface = tabContentEl.querySelector('.at-surface')
@@ -1888,7 +2792,10 @@ async function initTabDrawer(tabFile) {
     const surfaceH = parseInt(atSurface.style.height || '0', 10)
     if (surfaceH <= 0) return
     const handleH = tabHandleEl?.getBoundingClientRect().height || 50
-    const newH = surfaceH + handleH + 8
+    tabStripNaturalH = surfaceH + handleH + 8
+    // Plafond : au-delà, le tiroir mangerait l'écran entier et masquerait les
+    // waveforms. Le débord se lit alors au scroll vertical du contenu.
+    const newH = Math.min(tabStripNaturalH, tabStripMaxHeight())
     if (newH === TAB_HEIGHTS.strip) return   // no change → no action
     TAB_HEIGHTS.strip = newH
     document.documentElement.style.setProperty('--tab-strip-height', newH + 'px')
@@ -1899,20 +2806,89 @@ async function initTabDrawer(tabFile) {
 
   // Track selector + sync points after score load
   alphaTabApi.scoreLoaded.on(score => {
+    // 35.1 — dès qu'un score est chargé, AlphaTab devient l'horloge maître
+    tabScore   = score
+    tabMaster  = true
+    try { alphaTabApi.playbackSpeed = currentTempo / 100 } catch { /* player pas prêt */ }
+    buildMidiTrackRows(score)
+    buildBackingTrackRow(score).catch(err => console.warn('[tab] backing track:', err))
     buildTrackSelector(score)
-    // Generate sync points from embedded GP markers (mod.midi.MidiFileGenerator)
+    // 35.3 — les boutons « afficher dans la tab » et les cases du drawer sont
+    // tous actifs au départ : AlphaTab, lui, ne rend que sa piste par défaut.
+    // Sans cet appel l'UI annoncerait des portées absentes de la tablature.
+    applyTabTrackSelection()
+    // Table de synchro du fichier, pour les conversions hors lecture.
+    // AlphaTab la charge déjà lui-même dans son player ; on en garde une copie
+    // pour placer la règle de mesures et les bornes de boucle.
     try {
       const mod = window.__alphaTabModule
       const sps = mod?.midi?.MidiFileGenerator?.generateSyncPoints(score)
       if (sps?.length > 0) {
         tabSyncPoints = sps
-        alphaTabApi.updateSyncPoints()
-        console.info('[tab] sync points:', sps.length,
-          sps.map(p => `bar${p.masterBarIndex}@${(p.syncTime/1000).toFixed(2)}s→${(p.synthTime/1000).toFixed(2)}s`).join(' '))
+        console.info('[tab] points de synchro :', sps.length,
+          sps.map(p => `mes.${p.masterBarIndex + 1}@${(p.syncTime / 1000).toFixed(2)}s`).join(' '))
       }
     } catch (e) {
-      console.warn('[tab] sync points extraction failed:', e)
+      console.warn('[tab] lecture des points de synchro impossible :', e)
     }
+
+    // Durée du score sur l'axe audio (dépend des points de synchro)
+    scoreDurationSec = tickToAudioSec(scoreTotalTicks(score))
+    if (scoreDurationSec > totalDuration) {
+      totalDuration = scoreDurationSec
+      updateDurationDisplay()
+    }
+
+    // 35.6 — boucle lue en BBT : convertible maintenant que le score est là
+    applyPendingBbtLoop()
+
+    // 35.5 — le score est là : la bascule BBT ↔ mm:ss devient disponible
+    btnTimeModeEl?.removeAttribute('hidden')
+    updateTimeDisplay(currentTimeSec())
+    updateDurationDisplay()
+    updateLoopFields()
+    renderBbtTimeline()
+
+    // 35.2 — tab-only : aucune waveform ne viendra terminer le chargement
+    if (currentTracks.length === 0) {
+      finishLoading()
+      if (pendingLoop) {
+        syncRegionToAll(pendingLoop.in, pendingLoop.out)
+        pendingLoop = null
+      }
+      adjustTrackWidths()
+    }
+  })
+
+  // Mode synthétiseur (tab-only) : l'horloge MIDI pilote l'affichage, la boucle
+  // et le recalage des waveforms — il n'y a pas d'autre source de temps.
+  // Mode média externe : c'est l'audio qui mène, cet événement n'est plus que
+  // l'accusé de réception d'AlphaTab et ne doit rien recaler.
+  alphaTabApi.playerPositionChanged.on(args => {
+    if (!tabMaster || tabExternal) return
+    tabClockLive = true
+    const audioSec = tickToAudioSec(args.currentTick)
+    updateTimeDisplay(audioSec)
+    for (const ws of wavesurfers) {
+      if (args.isSeek || Math.abs(ws.getCurrentTime() - audioSec) > WS_DRIFT_TOL) {
+        ws.setTime(audioSec)
+      }
+    }
+    // 18.5 — l'horloge AlphaTab pilote aussi le suivi de la vue zoomée,
+    // puisque le timeupdate de WaveSurfer ne fait plus rien dans ce mode.
+    if (isPlaying && !zoomUserScrolled) zoomAutoScroll(audioSec)
+    checkLoopRebound(audioSec)
+  })
+
+  alphaTabApi.playerFinished.on(() => {
+    if (!tabMaster) return
+    // En média externe la fin du morceau est celle de l'audio : la dernière
+    // mesure de la tablature peut tomber bien avant (transcription partielle).
+    if (tabExternal) return
+    // Mixte avec un score plus court que l'audio : la fin du synthé n'est pas la
+    // fin du morceau, c'est la piste audio la plus longue qui la signalera.
+    if (audioOutlastsScore()) return
+    onFinish()
   })
 
   // 13.6 — Drag-to-select loop: mousedown → drag → mouseup
@@ -1937,17 +2913,33 @@ async function initTabDrawer(tabFile) {
     const [startBeat, lastBeat] = tabDragBeat.absolutePlaybackStart <= endBeat.absolutePlaybackStart
       ? [tabDragBeat, endBeat] : [endBeat, tabDragBeat]
 
-    const loopStart = beatTickToAudioTimeSec(startBeat.absolutePlaybackStart)
-    const loopEnd   = beatTickToAudioTimeSec(lastBeat.absolutePlaybackStart + lastBeat.playbackDuration)
+    const loopStart = tickToAudioSec(startBeat.absolutePlaybackStart)
+    const loopEnd   = tickToAudioSec(lastBeat.absolutePlaybackStart + lastBeat.playbackDuration)
+    const singleBeat = startBeat === lastBeat
     tabDragBeat = null
+
+    // AlphaTab transforme tout glisser sur la partition en « plage de lecture »
+    // et arrête le morceau à son terme — en média externe il met nos waveforms
+    // en pause et rien ne les relance. La boucle est portée par le transport,
+    // pour l'audio comme pour la tablature : on lui retire sa plage.
+    alphaTabApi.playbackRange = null
+
+    // Clic simple sur une note : on place la tête de lecture à son attaque.
+    // Boucler sur une seule note n'a aucun usage musical, alors que reprendre
+    // la lecture depuis un endroit précis de la partition en a un constamment.
+    // La boucle éventuellement en place n'est pas touchée : seul le glisser,
+    // qui désigne une plage, la redéfinit.
+    if (singleBeat) {
+      performSeek(loopStart)
+      return
+    }
 
     if (loopEnd - loopStart < 0.05) return
     syncRegionToAll(loopStart, loopEnd)
     setLoopEnabled(true)
-    tabLoopControlsEl?.removeAttribute('hidden')
   })
 
-  alphaTabApi.load(`/tab/${encodePath(grooveSlug)}/${encodeURIComponent(tabFile)}`)
+  alphaTabApi.load(preloadedScore ?? tabUrl)
   startTabSync()
 }
 
@@ -2026,6 +3018,14 @@ async function loadLoop() {
     const res = await fetch(`/api/loop/${encodePath(grooveSlug)}`)
     if (!res.ok) return
     const loop = await res.json()
+    // 35.6 — bornes musicales : conversion différée (score pas encore chargé)
+    if (loop && typeof loop.in === 'object' && loop.in !== null &&
+        typeof loop.out === 'object' && loop.out !== null) {
+      pendingBbtLoop = { in: loop.in, out: loop.out }
+      if (tabScore) applyPendingBbtLoop()
+      else warnBbtLoopUnavailable()
+      return
+    }
     if (loop && typeof loop.in === 'number' && typeof loop.out === 'number') {
       pendingLoop = { in: loop.in, out: loop.out }
       // Si toutes les waveforms sont déjà prêtes avant que le fetch revienne
@@ -2035,6 +3035,30 @@ async function loadLoop() {
       }
     }
   } catch { /* chargement silencieux */ }
+}
+
+// 35.6 — Une boucle en mesure:temps n'a de sens qu'avec le score : sans
+// tablature (mobile, fichier GP absent ou illisible) elle est ignorée — le dire
+// plutôt que de la faire disparaître en silence.
+function warnBbtLoopUnavailable() {
+  if (!pendingBbtLoop || tabWillLoad) return
+  console.warn('[loop] boucle enregistrée en mesure:temps ignorée : tablature indisponible')
+  loopInEl.title = loopOutEl.title =
+    'Boucle enregistrée en mesure:temps — indisponible sans la tablature'
+}
+
+// 35.6 — Convertit la boucle BBT de loop.json en secondes, une fois le score là
+function applyPendingBbtLoop() {
+  if (!pendingBbtLoop || !tabScore) return
+  const { in: bIn, out: bOut } = pendingBbtLoop
+  pendingBbtLoop = null
+  const inSec  = barBeatToSec((bIn.bar | 0) - 1, (bIn.beat | 0) - 1)
+  const outSec = barBeatToSec((bOut.bar | 0) - 1, (bOut.beat | 0) - 1)
+  if (!(outSec > inSec)) return
+  const allReady = wavesurfers.length > 0 &&
+    trackDurations.filter(d => d > 0).length === wavesurfers.length
+  if (allReady || wavesurfers.length === 0) syncRegionToAll(inSec, outSec)
+  else pendingLoop = { in: inSec, out: outSec }
 }
 
 // 30.3 — Chargement des marqueurs (groove-level uniquement)
@@ -2071,8 +3095,21 @@ let downloadBusy = false
 let downloadStatusTimer = null
 
 // 38.1 — Menu déroulant : ouverture/fermeture, clic extérieur, Échap
+// Le zip serveur contient toujours quelque chose (les pistes audio, le fichier
+// Guitar Pro, ou les deux). Les exports de mix, eux, demandent de l'audio
+// décodable : en tab-only sans backing track, audibleTracks() est vide et tout
+// rendu échouerait — les entrées correspondantes restent masquées.
+function setMixDownloadsAvailable(available) {
+  downloadMenu.querySelectorAll('.download-menu-item:not([data-format="zip"])')
+    .forEach(el => el.closest('li')?.toggleAttribute('hidden', !available))
+}
+
+let downloadMenuReady = false
 function initDownloadMenu() {
+  if (downloadMenuReady) return
+  downloadMenuReady = true
   downloadWrap.removeAttribute('hidden')
+  setMixDownloadsAvailable(currentTracks.length > 0)
 
   btnDownloadAll.addEventListener('click', (e) => {
     e.stopPropagation()
@@ -2096,8 +3133,9 @@ function initDownloadMenu() {
     if (!downloadWrap.contains(e.target)) closeDownloadMenu()
   })
 
-  // Navigation clavier du menu. Le handler global (espace, Échap, flèches) se retire
+  // Navigation clavier du menu. Le handler global (Échap, flèches) se retire
   // dès que le menu est ouvert : voir isDownloadMenuOpen() dans les raccourcis.
+  // La barre d'espace, elle, reste toujours le play/pause (voir plus bas).
   downloadWrap.addEventListener('keydown', (e) => {
     if (!isDownloadMenuOpen()) return
     if (e.key === 'Escape') {
@@ -2189,17 +3227,19 @@ function downloadTracksZip() {
 
 // 38.2 — Pistes audibles avec leurs réglages courants (mémoire, pas mix.json).
 // Même règle que applyVolumes() : le solo l'emporte sur le mute.
+// Toutes les lignes audio sont prises, backing track embarqué compris (il est
+// audible, il doit être dans l'export). Les pistes MIDI, elles, sont rendues par
+// le synthétiseur d'AlphaTab et restent hors de l'export.
 function audibleTracks() {
-  const anySolo = trackStates.some(s => s.soloed)
-  return currentTracks.map((track, i) => {
-    const s = trackStates[i]
+  const anySolo = anySoloActive()
+  return trackStates.map((s, i) => {
     const volume = anySolo ? (s.soloed ? s.volume : 0) : (s.muted ? 0 : s.volume)
     // Le pan n'est audible que si le routage Web Audio a abouti ; sinon le player
     // se rabat sur ws.setVolume() et n'applique aucun pan. L'export doit rendre ce
     // que l'on entend, donc pan neutre dans ce cas.
     const pan = webAudioRouted[i] ? (panNodes[i]?.pan.value ?? 0) : 0
-    return { url: track.url, volume, pan }
-  }).filter(t => t.volume > 0)
+    return { url: trackSourceUrls[i], volume, pan }
+  }).filter(t => t.url && t.volume > 0)
 }
 
 // 38.2 à 38.6 — Rendu du mix, encodage et téléchargement
@@ -2278,9 +3318,15 @@ async function saveMixTracks() {
 // 30.3 — Sauvegarde du loop courant
 // Si le loop est absent (null), envoie {} pour effacer le loop.json existant
 async function saveLoop() {
+  // 35.6 — boucle définie en mode BBT : stockée en { bar, beat } 1-indexés
+  const toBound = (sec) => {
+    if (!bbtEnabled()) return sec
+    const bb = tickToBarBeat(audioSecToTick(sec))
+    return bb ? { bar: bb.bar + 1, beat: bb.beat + 1 } : sec
+  }
   const body = (activeLoopIn === null || activeLoopOut === null)
     ? {}
-    : { in: activeLoopIn, out: activeLoopOut }
+    : { in: toBound(activeLoopIn), out: toBound(activeLoopOut) }
   try {
     const res = await fetch(`/api/loop/${encodePath(grooveSlug)}`, {
       method: 'POST',
@@ -2718,23 +3764,33 @@ function initMarkerLane() {
   setupLaneDragCreate()
 }
 
-// Navigate to the previous/next marker from current playhead (17.6)
+// Points d'ancrage du transport : début, marqueurs, et bornes de la boucle
+// quand elle est active. Trie croissant, doublons écartés.
+function transportAnchors() {
+  const pts = [0, totalDuration]
+  markers.forEach(m => pts.push(m.start))
+  if (loopEnabled && activeLoopIn !== null && activeLoopOut !== null) {
+    pts.push(activeLoopIn, activeLoopOut)
+  }
+  return [...new Set(pts.filter(p => Number.isFinite(p) && p >= 0))]
+    .sort((a, b) => a - b)
+}
+
+// Navigate to the previous/next anchor from current playhead (17.6)
+// Toujours un repli sur 0 / fin : le transport ne doit jamais rester coincé
+// sur une boucle, même désactivée ou supprimée.
 function navigatePrevMarker() {
-  if (!markers.length || !wavesurfers.length) return false
-  const cur    = wavesurfers[0].getCurrentTime()
-  const sorted = [...markers].sort((a, b) => a.start - b.start)
-  const prev   = sorted.filter(m => m.start < cur - 0.05).pop()
-  if (prev) { performSeek(prev.start); return true }
-  return false
+  const cur  = currentTimeSec()
+  const prev = transportAnchors().filter(p => p < cur - 0.05).pop()
+  performSeek(prev ?? 0)
+  return true
 }
 
 function navigateNextMarker() {
-  if (!markers.length || !wavesurfers.length) return false
-  const cur    = wavesurfers[0].getCurrentTime()
-  const sorted = [...markers].sort((a, b) => a.start - b.start)
-  const next   = sorted.find(m => m.start > cur + 0.05)
-  if (next) { performSeek(next.start); return true }
-  return false
+  const cur  = currentTimeSec()
+  const next = transportAnchors().find(p => p > cur + 0.05)
+  performSeek(next ?? totalDuration)
+  return true
 }
 
 // ── Epic 22 — Comments implementation ────────────────────────────────────
@@ -3097,7 +4153,7 @@ function initCommentPopover() {
 
 // ── Modal de création ────────────────────────────────────────────────────
 function openCommentModal() {
-  const pos = wavesurfers[0]?.getCurrentTime() ?? 0
+  const pos = currentTimeSec()
 
   // Si un commentaire existe déjà à ce timestamp, passer en modification
   const TOLERANCE = 0.5
@@ -3490,25 +4546,39 @@ async function init() {
     initNotePanel()
     initTags()
 
-    if (!groove.tracks?.length) {
-      showFatalError('Aucune piste audio dans ce groove.', false)
-      return
+    // 35.2 — groove « tab-only » : un dossier ne contenant qu'un fichier GP
+    // s'ouvre comme un groove à part entière, piloté par AlphaTab.
+    const tabOnly = !groove.tracks?.length
+    tabWillLoad = !!groove.tabFile && IS_DESKTOP
+    if (tabOnly) {
+      if (!groove.tabFile) {
+        showFatalError('Aucune piste audio dans ce groove.', false)
+        return
+      }
+      if (!IS_DESKTOP) {
+        showFatalError('Ce groove ne contient qu\'une tablature — ouvrez-le sur desktop pour la voir.', false)
+        return
+      }
+    } else {
+      initLoadBar(groove.tracks.length)
     }
-
-    initLoadBar(groove.tracks.length)
     tracksContainer.removeAttribute('hidden')
     drawerEl.removeAttribute('hidden')
+    observeTransportHeight()
     initDrawer()
-    initDownloadMenu()
+    initTimeMode()
 
     // 6.3 — Fetch all cached peaks in parallel before building tracks
     const cachedPeaksArr = await Promise.all(
-      groove.tracks.map(track => fetchPeaks(grooveSlug, track.filename))
+      (groove.tracks ?? []).map(track => fetchPeaks(grooveSlug, track.filename))
     )
 
-    currentTracks = groove.tracks
+    currentTracks = groove.tracks ?? []
+    // Après l'affectation de currentTracks, dont initDownloadMenu() a besoin
+    // pour savoir s'il y a de l'audio à mixer.
+    initDownloadMenu()
     buildTimelineRow()
-    groove.tracks.forEach((track, i) => {
+    currentTracks.forEach((track, i) => {
       buildTrackRow(track, track.index, cachedPeaksArr[i])
     })
 
@@ -3518,7 +4588,7 @@ async function init() {
     // Epic 22 — init comment controls (UI wiring, always active)
     initCommentControls()
 
-    await loadMix(groove.tracks)
+    await loadMix(currentTracks)
 
     // Epic 22 — charger les commentaires après le mix (rendu différé dans adjustTrackWidths)
     loadComments()
@@ -3570,20 +4640,8 @@ async function init() {
     // ── Loop button + navigation ───────────────
     btnLoop.addEventListener('click', () => setLoopEnabled(!loopEnabled))
     // Epic 17 — |<< and >>| navigate markers when present, else go to IN/OUT
-    btnLoopGoIn.addEventListener('click', () => {
-      if (markers.length > 0) {
-        if (!navigatePrevMarker()) performSeek(0)
-      } else {
-        if (activeLoopIn !== null) performSeek(activeLoopIn)
-      }
-    })
-    btnLoopGoOut.addEventListener('click', () => {
-      if (markers.length > 0) {
-        if (!navigateNextMarker()) performSeek(totalDuration)
-      } else {
-        if (activeLoopOut !== null) performSeek(activeLoopOut)
-      }
-    })
+    btnLoopGoIn.addEventListener('click', navigatePrevMarker)
+    btnLoopGoOut.addEventListener('click', navigateNextMarker)
     btnLoopClear.addEventListener('click', clearLoop)
 
     // ── Zoom horizontal (epic 18) ──────────────
@@ -3603,7 +4661,7 @@ async function init() {
     // after a programmatic .blur() call) from double-invoking commit when
     // the user presses Enter.
     function commitLoopIn() {
-      const val = parseLoopTime(loopInEl.value)
+      const val = parseLoopPosition(loopInEl.value)
       if (val !== null && activeLoopOut !== null && val < activeLoopOut) {
         syncRegionToAll(val, activeLoopOut)
       } else {
@@ -3611,7 +4669,7 @@ async function init() {
       }
     }
     function commitLoopOut() {
-      const val = parseLoopTime(loopOutEl.value)
+      const val = parseLoopPosition(loopOutEl.value)
       if (val !== null && activeLoopIn !== null && val > activeLoopIn) {
         syncRegionToAll(activeLoopIn, val)
       } else {
@@ -3643,14 +4701,10 @@ async function init() {
     document.addEventListener('keydown', (e) => {
       // Skip when user is interacting with any input or textarea element
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
-      // 38.1 — Menu de téléchargement ouvert : il gère lui-même Échap et les flèches,
-      // et Espace doit activer nativement l'entrée focalisée.
+      // 38.1 — Menu de téléchargement ouvert : il gère lui-même Échap et les flèches.
       if (isDownloadMenuOpen()) return
 
-      if (e.key === ' ') {
-        e.preventDefault()
-        isPlaying ? pauseAll() : playAll()
-      } else if (e.key === 'Escape') {
+      if (e.key === 'Escape') {
         e.preventDefault()
         stopAll()
       } else if (e.key === 'l' || e.key === 'L') {
@@ -3670,6 +4724,46 @@ async function init() {
   }
 }
 
+// ── Barre d'espace : play/pause, et rien d'autre ──────────────────────────
+// En capture sur window, donc avant l'activation native du bouton qui a le
+// focus, le défilement de la page et les raccourcis d'AlphaTab. Seule
+// exception : la saisie de texte, où Espace reste un espace.
+;(function initSpacebarShortcut() {
+  // Seuls les champs où Espace produit vraiment un espace. Une case à cocher
+  // ou un bouton radio est un `input` lui aussi : l'y inclure rendrait la barre
+  // d'espace au navigateur dès qu'une piste vient d'être (dé)sélectionnée, qui
+  // la rebasculerait au lieu de lancer la lecture.
+  const TEXT_INPUT_TYPES = new Set([
+    'text', 'search', 'email', 'url', 'tel', 'password', 'number',
+    'date', 'time', 'datetime-local', 'month', 'week',
+  ])
+
+  const isTypingTarget = (el) =>
+    (el instanceof HTMLInputElement && TEXT_INPUT_TYPES.has(el.type)) ||
+    el instanceof HTMLTextAreaElement ||
+    el instanceof HTMLSelectElement ||
+    (el instanceof HTMLElement && el.isContentEditable)
+
+  const isSpace = (e) => e.code === 'Space' || e.key === ' ' || e.key === 'Spacebar'
+
+  window.addEventListener('keydown', (e) => {
+    if (!isSpace(e) || e.ctrlKey || e.metaKey || e.altKey) return
+    if (isTypingTarget(e.target)) return
+    e.preventDefault()
+    e.stopImmediatePropagation()
+    if (e.repeat) return          // maintien enfoncé : un seul basculement
+    isPlaying ? pauseAll() : playAll()
+  }, true)
+
+  // Un bouton focalisé s'active au relâchement : sans ça, Espace rejouerait
+  // le dernier bouton cliqué en plus du play/pause.
+  window.addEventListener('keyup', (e) => {
+    if (!isSpace(e) || isTypingTarget(e.target)) return
+    e.preventDefault()
+    e.stopImmediatePropagation()
+  }, true)
+})()
+
 // ── Responsive track widths on resize ─────────────────────────────────────
 // adjustTrackWidths() now measures pixel geometry at runtime, so it must be
 // called again whenever the layout changes (window resize, orientation change).
@@ -3680,6 +4774,17 @@ async function init() {
     resizeTimer = setTimeout(() => {
       // 18.4 — le décalage est en pixels : il doit être repris après un
       // changement de largeur.
+      // Le plafond du strip dépend de la hauteur de fenêtre : le reprendre
+      // sans attendre un nouveau rendu de la partition.
+      if (tabState === 'strip' && tabDrawerEl) {
+        const h = Math.min(tabStripNaturalH, tabStripMaxHeight())
+        if (h !== TAB_HEIGHTS.strip) {
+          TAB_HEIGHTS.strip = h
+          document.documentElement.style.setProperty('--tab-strip-height', h + 'px')
+          tabDrawerEl.style.height = h + 'px'
+          setDrawerCssHeight(h)
+        }
+      }
       const maxBefore = zoomMaxScrollX()
       const ratio     = maxBefore > 0 ? zoomScrollX / maxBefore : 0
       adjustTrackWidths()
