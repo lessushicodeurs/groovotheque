@@ -111,6 +111,7 @@ const btnTabFullscreen   = document.getElementById('btn-tab-fullscreen')
 const btnTabStrip        = document.getElementById('btn-tab-strip')
 const btnTabCollapse     = document.getElementById('btn-tab-collapse')
 const btnTabLoopClear    = document.getElementById('btn-tab-loop-clear')
+const btnTabScrollResume = document.getElementById('btn-tab-scroll-resume')
 
 let prevSlug = null
 let nextSlug = null
@@ -323,7 +324,6 @@ function isMarkerInSelection(marker) {
 
 function nextMarkerId() { return 'mk_' + (++markerIdCounter) }
 
-// ── Drawer (mobile bottom sheet) ──────────────────────────────────────────
 // Hauteur réelle de la barre de transport, ferrée en bas de la fenêtre.
 // La tablature s'adosse dessus et player-main réserve la place des deux :
 // on la mesure plutôt que de la coder en dur, la barre passant sur deux
@@ -339,6 +339,7 @@ function observeTransportHeight() {
   window.addEventListener('resize', publish)
 }
 
+// ── Drawer (mobile bottom sheet) ──────────────────────────────────────────
 
 function setDrawerOpen(open) {
   drawerOpen = open
@@ -369,6 +370,11 @@ function initDrawer() {
 // 13.3–13.6 — Tablature state
 let alphaTabApi    = null  // AlphaTabApi instance
 let tabState       = 'strip'  // 'collapsed' | 'strip' | 'fullscreen'
+// L'utilisateur a pris la main sur le scroll de la tablature : le défilement
+// automatique est suspendu. À l'arrêt c'est sans conséquence (rien ne défile) ;
+// en lecture le bouton « ⤓ défilement » permet de rendre la main, et toute
+// nouvelle lecture repart en défilement automatique.
+let tabAutoScroll = true
 let tabSyncRafId   = null
 let tabDragBeat    = null  // Beat object — start of drag selection
 // Points de synchro natifs du fichier GP (MidiFileGenerator.generateSyncPoints).
@@ -815,6 +821,7 @@ async function playAll() {
     if (cur < activeLoopIn || cur >= activeLoopOut) seekAllTo(activeLoopIn)
   }
   isPlaying = true
+  setTabAutoScroll(true)   // une nouvelle lecture recale toujours la tablature
   btnPlay.textContent = '⏸'
   if (tabMaster && alphaTabApi) alphaTabApi.play()
   try {
@@ -834,6 +841,7 @@ function pauseAll() {
   wavesurfers.forEach(ws => ws.pause())
   isPlaying = false
   btnPlay.textContent = '▶'
+  updateTabScrollButton()
 }
 
 function stopAll() {
@@ -842,6 +850,7 @@ function stopAll() {
   isPlaying = false
   btnPlay.textContent = '▶'
   updateTimeDisplay(0)
+  updateTabScrollButton()
 }
 
 // Called when any track fires 'finish'. Stops and rewinds all tracks, or loops.
@@ -851,6 +860,7 @@ function onFinish() {
   if (!isPlaying) return
   isPlaying = false
 
+  updateTabScrollButton()
   if (loopEnabled && activeLoopIn !== null) {
     seekAllTo(activeLoopIn)
     // Defer playAll() so all other tracks' finish events drain and are blocked
@@ -1506,26 +1516,26 @@ function buildMidiTrackRow(track, idx, color) {
   // désactive plutôt que de laisser croire qu'ils agissent. Le bouton
   // « afficher dans la tablature » reste actif, c'est de l'affichage.
   if (tabExternal) {
+  // La piste est de fait muette : on l'affiche mute (bouton M allumé), sans
+  // possibilité de la démuter tant qu'il y a de l'audio.
     const why = 'Son MIDI indisponible : la tablature suit les pistes audio'
     for (const el of [btnMute, btnSolo, volSlider]) {
       el.disabled = true
       el.title = why
     }
     sidebarCtrl.classList.add('track-sidebar-ctrl--inert')
+    btnMute.classList.add('active')
+    btnMute.setAttribute('aria-pressed', 'true')
   }
 
   // Aire vide colorée (v1) — pas de piano-roll
   const waveEl = document.createElement('div')
-  // La piste est de fait muette : on l'affiche mute (bouton M allumé), sans
-  // possibilité de la démuter tant qu'il y a de l'audio.
   waveEl.className = 'track-wave track-wave--midi'
   waveEl.style.setProperty('--midi-color', color)
   waveEl.style.height = (isMobile ? 48 : 64) + 'px'
 
   row.append(sidebar, waveEl)
   tracksContainer.insertBefore(row, firstAudioRowEl())
-    btnMute.classList.add('active')
-    btnMute.setAttribute('aria-pressed', 'true')
 
   const state = { track, muted: false, soloed: false, volume: 1, visible: true, btnShow, waveEl }
   midiTracks.push(state)
@@ -1640,6 +1650,7 @@ function setTabState(newState) {
   tabDrawerEl.style.height = h + 'px'
   setDrawerCssHeight(h)
 
+  updateTabScrollButton()
   // En mode plein écran : contraindre player-main + bloquer scroll page
   if (newState === 'fullscreen') {
     const headerH    = document.querySelector('.player-header')?.getBoundingClientRect().height || 60
@@ -1813,6 +1824,55 @@ function audioSecToTick(sec) {
 }
 
 // Scroll téléprompter — lit la position X/Y du curseur depuis son CSS transform
+// Lissage du scroll téléprompter — amortissement critique (type SmoothDamp) :
+// la vitesse de défilement est un état persistant qu'on fait converger vers la
+// cible, et non un saut recalculé à chaque frame. Le mouvement reste donc
+// continu et régulier même quand la cible avance par paliers (changement de
+// beat en strip, changement de ligne en page), et un seek se rattrape sans
+// à-coup. Un état par axe : les deux modes ne défilent jamais ensemble.
+const TAB_SCROLL_SMOOTH_TIME = 0.30   // secondes pour rejoindre la cible
+const tabScrollH = { pos: 0, vel: 0 } // axe horizontal (strip)
+const tabScrollV = { pos: 0, vel: 0 } // axe vertical (page)
+let   tabScrollLastTs = 0
+
+// Secondes écoulées depuis la frame précédente, bornées pour absorber une
+// mise en veille de l'onglet.
+function tabScrollDelta() {
+  const now = performance.now()
+  const dt  = tabScrollLastTs ? (now - tabScrollLastTs) / 1000 : 0.0167
+  tabScrollLastTs = now
+  return Math.min(0.1, dt)
+}
+
+function smoothDamp(state, target, dt) {
+  const omega  = 2 / TAB_SCROLL_SMOOTH_TIME
+  const x      = omega * dt
+  const exp    = 1 / (1 + x + 0.48 * x * x + 0.235 * x * x * x)
+  const change = state.pos - target
+  const temp   = (state.vel + omega * change) * dt
+  state.vel = (state.vel - omega * temp) * exp
+  state.pos = target + (change + temp) * exp
+  if (Math.abs(target - state.pos) < 0.25) { state.pos = target; state.vel = 0 }
+  return state.pos
+}
+
+// Position *rendue* du curseur, en pixels de contenu : { x, y, h }.
+// AlphaTab n'écrit dans `style.transform` que la position du beat *suivant*,
+// et laisse une transition CSS linéaire faire le trajet : lire le style inline
+// donne donc une valeur en escalier, alors que le style calculé donne la
+// valeur interpolée par le navigateur — continue, exactement ce que suit l'œil.
+// `h` (facteur d'échelle vertical) est la hauteur du système courant, donc la
+// hauteur d'une ligne de partition.
+function renderedCursorBox(el) {
+  const t = getComputedStyle(el).transform
+  if (!t || t === 'none') return null
+  try {
+    const m = new DOMMatrixReadOnly(t)
+    if (!Number.isFinite(m.m41) || !Number.isFinite(m.m42)) return null
+    return { x: m.m41, y: m.m42, h: m.m22 }
+  } catch { return null }
+}
+
 // (coordonnées contenu, non affectées par scrollLeft/scrollTop), puis cible le scroll
 // pour maintenir le curseur fixe à une position relative dans le viewport.
 // Appelé chaque frame RAF depuis startTabSync.
@@ -1824,30 +1884,107 @@ function enforceTabCursorVisible() {
   if (!t) return
 
   if (tabState === 'strip') {
-    const mx = /translate\((-?[\d.]+)px/.exec(t)
-    if (!mx) return
-    const contentX = parseFloat(mx[1])
-    const W = tabContentEl.clientWidth
-    // Curseur fixe à 35% — la partition défile en dessous (téléprompteur)
-    const target = Math.max(0, contentX - W * 0.35)
-    const diff = target - tabContentEl.scrollLeft
-    // Avance normale (≤ 5px/frame) → sync direct ; seek → ease 15%
-    tabContentEl.scrollLeft = Math.abs(diff) <= 5 ? target : tabContentEl.scrollLeft + diff * 0.15
+  // Défilement suspendu : l'utilisateur explore la partition à la main, le
+  // téléprompteur ne doit pas la lui reprendre. On suit quand même sa position
+  // pour repartir de là sans saut quand il rendra la main.
+  if (!tabAutoScroll) {
+    tabScrollH.pos = tabContentEl.scrollLeft; tabScrollH.vel = 0
+    tabScrollV.pos = tabContentEl.scrollTop;  tabScrollV.vel = 0
+    tabScrollLastTs = 0
+    return
+  }
+
+  const box = renderedCursorBox(cursor)
+  const dt  = tabScrollDelta()
+
+    // Cible : ce qui est joué au centre de la fenêtre. Tant que le curseur n'a
+    // pas atteint le centre (début du morceau), le clamp à 0 laisse la
+    // partition immobile et c'est le curseur qui avance ; ensuite le scroll
+    // prend le relais et le curseur reste au milieu.
+    const W   = tabContentEl.clientWidth
+    const max = Math.max(0, tabContentEl.scrollWidth - W)
+
+    let cursorX = box?.x
+    if (cursorX === undefined) {
+      const mx = /translate\((-?[\d.]+)px/.exec(t)
+      if (!mx) return
+      cursorX = parseFloat(mx[1])
+    }
+    const target = Math.min(max, Math.max(0, cursorX - W / 2))
+
+    // Resync si le scroll a bougé hors de notre contrôle (rendu, scroll manuel)
+    if (Math.abs(tabScrollH.pos - tabContentEl.scrollLeft) > 2) tabScrollH.pos = tabContentEl.scrollLeft
+
+    tabContentEl.scrollLeft = smoothDamp(tabScrollH, target, dt)
   } else if (tabState === 'fullscreen') {
-    const my = /translate\(-?[\d.]+px,\s*(-?[\d.]+)px/.exec(t)
-    if (!my) return
-    const contentY = parseFloat(my[1])
-    const H = tabContentEl.clientHeight
-    // OffScreen + ease : ne scroll que si curseur sort de la zone lisible (0–80% du viewport)
-    const visibleY = contentY - tabContentEl.scrollTop
-    if (visibleY > H * 0.8 || visibleY < 0) {
-      const target = Math.max(0, contentY - H * 0.25)
-      tabContentEl.scrollTop += (target - tabContentEl.scrollTop) * 0.15
+    // Cible : la ligne en cours de lecture en *deuxième* position dans la page,
+    // de sorte que tout ce qui reste sous elle soit déjà lisible en avance.
+    // On ne scrolle donc plus seulement quand le curseur déborde : la cible
+    // suit la ligne courante en permanence, et l'amortissement transforme le
+    // passage d'une ligne à l'autre en glissé plutôt qu'en saut.
+    const H   = tabContentEl.clientHeight
+    const max = Math.max(0, tabContentEl.scrollHeight - H)
+
+    let contentY, lineH
+    if (box) {
+      contentY = box.y
+      lineH    = box.h
+    } else {
+      const my = /translate\(-?[\d.]+px,\s*(-?[\d.]+)px\)\s*scale\([^,]+,\s*(-?[\d.]+)/.exec(t)
+      if (!my) return
+      contentY = parseFloat(my[1])
+      lineH    = parseFloat(my[2])
     }
   }
+    if (!(lineH > 0)) lineH = H * 0.2
+
+    // Une ligne complète laissée au-dessus : la ligne active est la deuxième
+    // visible. Bornée à un tiers de la page pour rester en haut sur les
+    // partitions à systèmes très hauts.
+    const headroom = Math.min(lineH, H / 3)
+    const target   = Math.min(max, Math.max(0, contentY - headroom))
+
+    if (Math.abs(tabScrollV.pos - tabContentEl.scrollTop) > 2) tabScrollV.pos = tabContentEl.scrollTop
+
+    tabContentEl.scrollTop = smoothDamp(tabScrollV, target, dt)
 }
 
 function startTabSync() {
+// Scroll manuel à la molette. En strip la tablature ne défile
+// qu'horizontalement : sans conversion, la molette verticale — la seule que
+// la plupart des souris possèdent — n'y ferait rien. En page le défilement
+// vertical natif convient, on se contente de noter la reprise en main.
+// Le bouton de reprise n'a de sens que pendant la lecture : à l'arrêt rien ne
+// défile, la tablature est libre et il n'y a rien à reprendre.
+function updateTabScrollButton() {
+  if (!btnTabScrollResume) return
+  const show = !tabAutoScroll && isPlaying && tabState !== 'collapsed'
+  if (show) btnTabScrollResume.removeAttribute('hidden')
+  else      btnTabScrollResume.setAttribute('hidden', '')
+}
+
+// Suspend ou reprend le défilement automatique.
+function setTabAutoScroll(on) {
+  tabAutoScroll = on
+  updateTabScrollButton()
+}
+
+function setupTabManualScroll() {
+  if (!tabContentEl) return
+  btnTabScrollResume?.addEventListener('click', () => setTabAutoScroll(true))
+  tabContentEl.addEventListener('wheel', (e) => {
+    if (tabState === 'collapsed') return
+    setTabAutoScroll(false)
+    if (tabState !== 'strip') return
+    const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY
+    if (!delta) return
+    e.preventDefault()
+    tabContentEl.scrollLeft += delta
+    tabScrollH.pos = tabContentEl.scrollLeft
+    tabScrollH.vel = 0
+  }, { passive: false })
+}
+
   if (tabSyncRafId !== null) return
   const loop = () => {
     // Mode média externe : le RAF pousse la position audio dans AlphaTab, qui
@@ -2092,6 +2229,7 @@ async function initTabDrawer(tabFile) {
   setTabState('strip')
   setupTabHandleDrag()
 
+  setupTabManualScroll()
   btnTabFullscreen?.addEventListener('click', () => setTabState('fullscreen'))
   btnTabStrip?.addEventListener('click',     () => setTabState('strip'))
   btnTabCollapse?.addEventListener('click',  () => setTabState('collapsed'))
@@ -2173,6 +2311,9 @@ async function initTabDrawer(tabFile) {
     tabContentEl.scrollLeft = 0
     tabContentEl.scrollTop  = 0
 
+    tabScrollH.pos = 0; tabScrollH.vel = 0
+    tabScrollV.pos = 0; tabScrollV.vel = 0
+    setTabAutoScroll(true)
     if (tabState !== 'strip') return
     const atSurface = tabContentEl.querySelector('.at-surface')
     if (!atSurface) return
@@ -3908,6 +4049,7 @@ async function init() {
     currentTracks = groove.tracks ?? []
     // Après l'affectation de currentTracks, dont initDownloadMenu() a besoin
     // pour savoir s'il y a de l'audio à mixer.
+    observeTransportHeight()
     initDownloadMenu()
     buildTimelineRow()
     currentTracks.forEach((track, i) => {
@@ -4049,7 +4191,6 @@ async function init() {
         isPlaying ? pauseAll() : playAll()
       } else if (e.key === 'Escape') {
         e.preventDefault()
-    observeTransportHeight()
         stopAll()
       } else if (e.key === 'l' || e.key === 'L') {
         e.preventDefault()

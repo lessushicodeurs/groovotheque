@@ -1144,6 +1144,19 @@ body.tab-no-scroll { overflow: hidden; }
   transition: background 0.1s, color 0.1s, border-color 0.1s;
 }
 
+/* Défilement automatique suspendu : le bouton qui le reprend doit se voir. */
+.tab-btn--resume {
+  background: #2a2118;
+  border-color: #6b4f22;
+  color: #e0a244;
+}
+
+.tab-btn--resume:hover {
+  background: #3a2d1f;
+  border-color: #8a6629;
+  color: #f2b95c;
+}
+
 .tab-btn:hover {
   background: #242424;
   border-color: #3a3a3a;

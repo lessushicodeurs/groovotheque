@@ -158,8 +158,22 @@ async function setTimeAndGetScroll(page, synthMs, minCursorX = 0) {
     // Si timeout, continuer quand même (cursor peut être déjà à la bonne position)
   })
 
-  // Laisser le RAF processer l'enforceTabCursorVisible
-  await page.waitForTimeout(150)
+  // Laisser le scroll converger. Le défilement est amorti (la vitesse est un
+  // état persistant, cf. smoothDamp dans player.js) : après un seek il rejoint
+  // sa cible en ~0,3 s et non en une frame. On attend donc la stabilisation
+  // plutôt qu'un délai fixe.
+  await page.waitForFunction(
+    () => {
+      const el = document.querySelector('#tab-content')
+      if (!el) return false
+      const prev = window.__testLastScrollLeft
+      window.__testLastScrollLeft = el.scrollLeft
+      return prev !== undefined && Math.abs(prev - el.scrollLeft) < 0.5
+    },
+    null,
+    { timeout: 3000, polling: 100 }
+  ).catch(() => { /* pas stabilisé : on mesure quand même */ })
+  await page.evaluate(() => { delete window.__testLastScrollLeft })
 
   const result = await page.evaluate(() => {
     const el  = document.querySelector('#tab-content')
