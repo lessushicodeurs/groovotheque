@@ -191,6 +191,11 @@ const waveVpEls      = []   // .track-wave-vp div per track (viewport, largeur p
 // Source décodable de chaque piste pour l'export (URL serveur, ou URL d'objet
 // pour le backing track embarqué dans le fichier GP), null si non exportable.
 const trackSourceUrls = []
+// 30.3 / 39.4 — clé sous laquelle chaque piste est enregistrée dans mix.json.
+// Le nom de fichier pour les pistes audio, une clé stable « midi:<n> » pour
+// les pistes MIDI rendues et « _backing » pour le backing track embarqué :
+// ces deux-là n'ont pas de fichier dans le dossier du groove.
+const trackMixKeys = []
 const trackDurations = []   // duration in seconds per track, set on 'ready'
 let timelinePluginRef = null  // TimelinePlugin instance (track 0), for duration correction
 let timelineExtEl     = null  // container DOM element for TimelinePlugin (in .timeline-row)
@@ -1280,6 +1285,7 @@ function buildTrackRow(track, idx, cachedPeaks = null, opts = {}) {
   const state = { volume: 1, muted: false, soloed: false }
   trackStates.push(state)
   trackSourceUrls.push(track.url ?? (opts.blob ? URL.createObjectURL(opts.blob) : null))
+  trackMixKeys.push(opts.mixKey ?? track.filename)
   volSliders.push(volSlider)
   wavesurfers.push(ws)
   ws.setPlaybackRate(currentTempo / 100, true)
@@ -1779,11 +1785,15 @@ function promoteMidiTrackToAudio(state, blob, cachedPeaks = null) {
       blob,
       insertBefore: before,
       rowClass: 'track-row track-row--midi-rendered',
+      mixKey: midiMixKey(state.index),
       // Même couleur que l'aire vide qu'elle remplace.
       colorIndex: currentTracks.length + state.index,
       extraTopEls: [state.btnShow],
     },
   )
+  // Réglages déjà enregistrés pour cette piste : la ligne n'existait pas quand
+  // mix.json a été lu, c'est ici qu'ils s'appliquent.
+  applyMixEntry(idx, savedMixTracks[midiMixKey(state.index)])
   // Une piste rendue est du son mixable : les exports de mix deviennent utiles
   // même sur un groove tab-only devenu audio.
   setMixDownloadsAvailable(true)
@@ -1928,6 +1938,10 @@ async function buildBackingTrackRow(score) {
       colorIndex: currentTracks.length + midiTracks.length,
     },
   )
+  // Comme une piste MIDI rendue, la ligne n'existait pas quand mix.json a été
+  // lu : ses réglages enregistrés s'appliquent ici (clé « _backing »).
+  applyMixEntry(idx, savedMixTracks[BACKING_PEAKS_NAME])
+  applyVolumes()
   // Tab-only : le backing track est la seule piste mixable du groove.
   setMixDownloadsAvailable(true)
 }
@@ -3242,33 +3256,48 @@ function renderPlayerBreadcrumb() {
   })
 }
 
+// 30.3 — Réglages enregistrés dans mix.json, indexés par clé de piste. Gardés
+// en mémoire : une piste MIDI rendue (39.4) n'existe pas encore au chargement,
+// elle vient chercher les siens au moment de sa promotion.
+let savedMixTracks = {}
+
+// Applique à la piste `i` l'entrée mix.json correspondante, si elle existe.
+function applyMixEntry(i, entry) {
+  let vol = null, pan = null
+  if (entry && typeof entry === 'object') {
+    // New format: { volume: 80, pan: -0.4 }
+    if (typeof entry.volume === 'number') vol = entry.volume
+    if (typeof entry.pan    === 'number') pan = entry.pan
+  } else if (typeof entry === 'number') {
+    // Legacy format: plain volume number
+    vol = entry
+  }
+  if (vol !== null && trackStates[i]) {
+    trackStates[i].volume = vol / 100
+    if (volSliders[i]) volSliders[i].value = String(vol)
+  }
+  if (pan !== null) setPan(i, pan)
+}
+
+// 39.4 — clé stable d'une piste MIDI rendue dans mix.json. Indépendante de la
+// place de la piste dans le player, qui dépend de l'ordre de chargement.
+function midiMixKey(trackIndex) {
+  return `midi:${trackIndex}`
+}
+
 // 30.3 — Chargement du mix (tracks uniquement) avec indicateur de source
-async function loadMixTracks(tracks) {
+async function loadMixTracks() {
   try {
     const res = await fetch(`/api/mix/${encodePath(grooveSlug)}`)
     if (!res.ok) return
     const mix = await res.json()
 
     if (mix.tracks && typeof mix.tracks === 'object') {
-      tracks.forEach((track, i) => {
-        const entry = mix.tracks[track.filename]
-        let vol = null, pan = null
-        if (entry && typeof entry === 'object') {
-          // New format: { volume: 80, pan: -0.4 }
-          if (typeof entry.volume === 'number') vol = entry.volume
-          if (typeof entry.pan    === 'number') pan = entry.pan
-        } else if (typeof entry === 'number') {
-          // Legacy format: plain volume number
-          vol = entry
-        }
-        if (vol !== null) {
-          trackStates[i].volume = vol / 100
-          volSliders[i].value = String(vol)
-        }
-        if (pan !== null) {
-          setPan(i, pan)
-        }
-      })
+      savedMixTracks = mix.tracks
+      // Parcours par clé et non par `currentTracks` : les lignes sans fichier
+      // (backing, rendus MIDI) sont servies comme les autres, quel que soit
+      // l'ordre dans lequel elles ont été bâties.
+      trackMixKeys.forEach((key, i) => applyMixEntry(i, savedMixTracks[key]))
       applyVolumes()
     }
   } catch { /* chargement silencieux */ }
@@ -3548,9 +3577,9 @@ async function downloadMixFile(format, item) {
   }
 }
 
-async function loadMix(tracks) {
+async function loadMix() {
   await Promise.all([
-    loadMixTracks(tracks),
+    loadMixTracks(),
     loadLoop(),
     loadMarkers(),
   ])
@@ -3559,8 +3588,12 @@ async function loadMix(tracks) {
 // 30.3 — Sauvegarde du mix courant (tracks uniquement) — ne touche jamais au parent
 async function saveMixTracks() {
   const mixData = { tracks: {} }
-  currentTracks.forEach((track, i) => {
-    mixData.tracks[track.filename] = {
+  // 39.4 — toutes les lignes audio du player, pistes MIDI rendues et backing
+  // track compris : sans cela leurs volume et pan étaient perdus au
+  // rechargement, alors qu'elles sont des pistes du mix comme les autres.
+  trackMixKeys.forEach((key, i) => {
+    if (!key || !trackStates[i]) return
+    mixData.tracks[key] = {
       volume: Math.round(trackStates[i].volume * 100),
       pan:    Math.round((panKnobs[i]?.getValue() ?? 0) * 100) / 100,
     }
@@ -4850,7 +4883,7 @@ async function init() {
     // Epic 22 — init comment controls (UI wiring, always active)
     initCommentControls()
 
-    await loadMix(currentTracks)
+    await loadMix()
 
     // Epic 22 — charger les commentaires après le mix (rendu différé dans adjustTrackWidths)
     loadComments()
