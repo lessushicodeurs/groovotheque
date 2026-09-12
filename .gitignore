@@ -15,6 +15,7 @@ scripts/.env.deploy
 scripts/.env.deploy.example
 scripts/deploy.sh
 scripts/deploy-grooves.sh
+scripts/deploy-notes.sh
 .worktrees
 test-results/
 # ne pas commit :
