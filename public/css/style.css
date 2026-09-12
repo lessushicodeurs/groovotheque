@@ -1371,6 +1371,10 @@ body.tab-no-scroll { overflow: hidden; }
 }
 .tab-content::-webkit-scrollbar { display: none; } /* Chrome/Safari */
 
+/* Mode page : en-tête du tiroir resserré pour laisser la place à la partition */
+.tab-drawer--fullscreen .tab-drawer-header { padding-bottom: 0.2rem; }
+.tab-drawer--fullscreen .tab-handle-grip   { height: 6px; }
+
 /* Strip → scroll horizontal ; Fullscreen → scroll vertical */
 .tab-drawer--strip      .tab-content { overflow-x: auto; overflow-y: hidden; }
 .tab-drawer--fullscreen .tab-content { overflow-y: auto; overflow-x: hidden; }

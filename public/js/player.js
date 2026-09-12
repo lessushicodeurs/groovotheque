@@ -2046,10 +2046,15 @@ function initZoomScrollbar() {
 
 const TAB_HEIGHTS = { collapsed: 40, strip: 280 }
 
+// Marges internes AlphaTab [gauche-droite, haut-bas] : défaut en mode
+// horizontal, resserrées en mode page pour gagner de la surface utile.
+const TAB_PADDING_DEFAULT = [35, 35]
+const TAB_PADDING_PAGE    = [8, 6]
+
 function tabFullscreenHeight() {
   const headerH    = document.querySelector('.player-header')?.getBoundingClientRect().height || 60
   const transportH = document.getElementById('transport')?.getBoundingClientRect().height     || 100
-  return Math.max(300, window.innerHeight - headerH - transportH - 8)
+  return Math.max(300, window.innerHeight - headerH - transportH)
 }
 function getStateHeight(state) {
   if (state === 'fullscreen') return tabFullscreenHeight()
@@ -2116,8 +2121,13 @@ function setTabState(newState) {
       if (mod) {
         const usePageLayout = newState === 'fullscreen'
         const newMode = usePageLayout ? mod.LayoutMode.Page : mod.LayoutMode.Horizontal
-        if (alphaTabApi.settings.display.layoutMode !== newMode) {
+        // En mode page, la partition occupe toute la largeur : on rabote les
+        // marges internes d'AlphaTab (35 px par défaut de chaque côté).
+        const newPadding = usePageLayout ? TAB_PADDING_PAGE : TAB_PADDING_DEFAULT
+        const paddingChanged = String(alphaTabApi.settings.display.padding) !== String(newPadding)
+        if (alphaTabApi.settings.display.layoutMode !== newMode || paddingChanged) {
           alphaTabApi.settings.display.layoutMode = newMode
+          alphaTabApi.settings.display.padding = [...newPadding]
           alphaTabApi.updateSettings()
           alphaTabApi.render()
         }
