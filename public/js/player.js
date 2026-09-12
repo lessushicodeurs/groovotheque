@@ -846,11 +846,12 @@ function pauseAll() {
 
 function stopAll() {
   if (tabMaster && alphaTabApi) alphaTabApi.stop()
-  wavesurfers.forEach(ws => { ws.pause(); ws.setTime(0) })
+  wavesurfers.forEach(ws => ws.pause())
+  seekAllTo(0)
   isPlaying = false
   btnPlay.textContent = '▶'
-  updateTimeDisplay(0)
   updateTabScrollButton()
+  updateTimeDisplay(0)
 }
 
 // Called when any track fires 'finish'. Stops and rewinds all tracks, or loops.
@@ -859,8 +860,8 @@ function stopAll() {
 function onFinish() {
   if (!isPlaying) return
   isPlaying = false
-
   updateTabScrollButton()
+
   if (loopEnabled && activeLoopIn !== null) {
     seekAllTo(activeLoopIn)
     // Defer playAll() so all other tracks' finish events drain and are blocked
@@ -1515,17 +1516,17 @@ function buildMidiTrackRow(track, idx, color) {
   // et rien n'est synthétisé : mute/solo/volume n'auraient aucun effet, on les
   // désactive plutôt que de laisser croire qu'ils agissent. Le bouton
   // « afficher dans la tablature » reste actif, c'est de l'affichage.
-  if (tabExternal) {
   // La piste est de fait muette : on l'affiche mute (bouton M allumé), sans
   // possibilité de la démuter tant qu'il y a de l'audio.
+  if (tabExternal) {
     const why = 'Son MIDI indisponible : la tablature suit les pistes audio'
     for (const el of [btnMute, btnSolo, volSlider]) {
       el.disabled = true
       el.title = why
     }
-    sidebarCtrl.classList.add('track-sidebar-ctrl--inert')
     btnMute.classList.add('active')
     btnMute.setAttribute('aria-pressed', 'true')
+    sidebarCtrl.classList.add('track-sidebar-ctrl--inert')
   }
 
   // Aire vide colorée (v1) — pas de piano-roll
@@ -1649,8 +1650,8 @@ function setTabState(newState) {
   const h = getStateHeight(newState)
   tabDrawerEl.style.height = h + 'px'
   setDrawerCssHeight(h)
-
   updateTabScrollButton()
+
   // En mode plein écran : contraindre player-main + bloquer scroll page
   if (newState === 'fullscreen') {
     const headerH    = document.querySelector('.player-header')?.getBoundingClientRect().height || 60
@@ -1823,7 +1824,6 @@ function audioSecToTick(sec) {
   return a.synthTick + (ms - a.syncTime) / dMs * (b.synthTick - a.synthTick)
 }
 
-// Scroll téléprompter — lit la position X/Y du curseur depuis son CSS transform
 // Lissage du scroll téléprompter — amortissement critique (type SmoothDamp) :
 // la vitesse de défilement est un état persistant qu'on fait converger vers la
 // cible, et non un saut recalculé à chaque frame. Le mouvement reste donc
@@ -1873,6 +1873,7 @@ function renderedCursorBox(el) {
   } catch { return null }
 }
 
+// Scroll téléprompter — lit la position X/Y du curseur depuis son CSS transform
 // (coordonnées contenu, non affectées par scrollLeft/scrollTop), puis cible le scroll
 // pour maintenir le curseur fixe à une position relative dans le viewport.
 // Appelé chaque frame RAF depuis startTabSync.
@@ -1883,7 +1884,6 @@ function enforceTabCursorVisible() {
   const t = cursor.style.transform  // "translate(Xpx, Ypx) scale(w, h)"
   if (!t) return
 
-  if (tabState === 'strip') {
   // Défilement suspendu : l'utilisateur explore la partition à la main, le
   // téléprompteur ne doit pas la lui reprendre. On suit quand même sa position
   // pour repartir de là sans saut quand il rendra la main.
@@ -1897,6 +1897,7 @@ function enforceTabCursorVisible() {
   const box = renderedCursorBox(cursor)
   const dt  = tabScrollDelta()
 
+  if (tabState === 'strip') {
     // Cible : ce qui est joué au centre de la fenêtre. Tant que le curseur n'a
     // pas atteint le centre (début du morceau), le clamp à 0 laisse la
     // partition immobile et c'est le curseur qui avance ; ensuite le scroll
@@ -1935,7 +1936,6 @@ function enforceTabCursorVisible() {
       contentY = parseFloat(my[1])
       lineH    = parseFloat(my[2])
     }
-  }
     if (!(lineH > 0)) lineH = H * 0.2
 
     // Une ligne complète laissée au-dessus : la ligne active est la deuxième
@@ -1947,9 +1947,9 @@ function enforceTabCursorVisible() {
     if (Math.abs(tabScrollV.pos - tabContentEl.scrollTop) > 2) tabScrollV.pos = tabContentEl.scrollTop
 
     tabContentEl.scrollTop = smoothDamp(tabScrollV, target, dt)
+  }
 }
 
-function startTabSync() {
 // Scroll manuel à la molette. En strip la tablature ne défile
 // qu'horizontalement : sans conversion, la molette verticale — la seule que
 // la plupart des souris possèdent — n'y ferait rien. En page le défilement
@@ -1985,6 +1985,7 @@ function setupTabManualScroll() {
   }, { passive: false })
 }
 
+function startTabSync() {
   if (tabSyncRafId !== null) return
   const loop = () => {
     // Mode média externe : le RAF pousse la position audio dans AlphaTab, qui
@@ -2228,8 +2229,8 @@ async function initTabDrawer(tabFile) {
   tabDrawerEl.removeAttribute('hidden')
   setTabState('strip')
   setupTabHandleDrag()
-
   setupTabManualScroll()
+
   btnTabFullscreen?.addEventListener('click', () => setTabState('fullscreen'))
   btnTabStrip?.addEventListener('click',     () => setTabState('strip'))
   btnTabCollapse?.addEventListener('click',  () => setTabState('collapsed'))
@@ -2310,10 +2311,10 @@ async function initTabDrawer(tabFile) {
     // Reset scroll à chaque nouveau rendu (changement de layout ou de pistes)
     tabContentEl.scrollLeft = 0
     tabContentEl.scrollTop  = 0
-
     tabScrollH.pos = 0; tabScrollH.vel = 0
     tabScrollV.pos = 0; tabScrollV.vel = 0
     setTabAutoScroll(true)
+
     if (tabState !== 'strip') return
     const atSurface = tabContentEl.querySelector('.at-surface')
     if (!atSurface) return
@@ -3249,23 +3250,33 @@ function initMarkerLane() {
   setupLaneDragCreate()
 }
 
-// Navigate to the previous/next marker from current playhead (17.6)
+// Points d'ancrage du transport : début, marqueurs, et bornes de la boucle
+// quand elle est active. Trie croissant, doublons écartés.
+function transportAnchors() {
+  const pts = [0, totalDuration]
+  markers.forEach(m => pts.push(m.start))
+  if (loopEnabled && activeLoopIn !== null && activeLoopOut !== null) {
+    pts.push(activeLoopIn, activeLoopOut)
+  }
+  return [...new Set(pts.filter(p => Number.isFinite(p) && p >= 0))]
+    .sort((a, b) => a - b)
+}
+
+// Navigate to the previous/next anchor from current playhead (17.6)
+// Toujours un repli sur 0 / fin : le transport ne doit jamais rester coincé
+// sur une boucle, même désactivée ou supprimée.
 function navigatePrevMarker() {
-  if (!markers.length) return false
-  const cur    = currentTimeSec()
-  const sorted = [...markers].sort((a, b) => a.start - b.start)
-  const prev   = sorted.filter(m => m.start < cur - 0.05).pop()
-  if (prev) { performSeek(prev.start); return true }
-  return false
+  const cur  = currentTimeSec()
+  const prev = transportAnchors().filter(p => p < cur - 0.05).pop()
+  performSeek(prev ?? 0)
+  return true
 }
 
 function navigateNextMarker() {
-  if (!markers.length) return false
-  const cur    = currentTimeSec()
-  const sorted = [...markers].sort((a, b) => a.start - b.start)
-  const next   = sorted.find(m => m.start > cur + 0.05)
-  if (next) { performSeek(next.start); return true }
-  return false
+  const cur  = currentTimeSec()
+  const next = transportAnchors().find(p => p > cur + 0.05)
+  performSeek(next ?? totalDuration)
+  return true
 }
 
 // ── Epic 22 — Comments implementation ────────────────────────────────────
@@ -4038,6 +4049,7 @@ async function init() {
     }
     tracksContainer.removeAttribute('hidden')
     drawerEl.removeAttribute('hidden')
+    observeTransportHeight()
     initDrawer()
     initTimeMode()
 
@@ -4049,7 +4061,6 @@ async function init() {
     currentTracks = groove.tracks ?? []
     // Après l'affectation de currentTracks, dont initDownloadMenu() a besoin
     // pour savoir s'il y a de l'audio à mixer.
-    observeTransportHeight()
     initDownloadMenu()
     buildTimelineRow()
     currentTracks.forEach((track, i) => {
@@ -4114,20 +4125,8 @@ async function init() {
     // ── Loop button + navigation ───────────────
     btnLoop.addEventListener('click', () => setLoopEnabled(!loopEnabled))
     // Epic 17 — |<< and >>| navigate markers when present, else go to IN/OUT
-    btnLoopGoIn.addEventListener('click', () => {
-      if (markers.length > 0) {
-        if (!navigatePrevMarker()) performSeek(0)
-      } else {
-        if (activeLoopIn !== null) performSeek(activeLoopIn)
-      }
-    })
-    btnLoopGoOut.addEventListener('click', () => {
-      if (markers.length > 0) {
-        if (!navigateNextMarker()) performSeek(totalDuration)
-      } else {
-        if (activeLoopOut !== null) performSeek(activeLoopOut)
-      }
-    })
+    btnLoopGoIn.addEventListener('click', navigatePrevMarker)
+    btnLoopGoOut.addEventListener('click', navigateNextMarker)
     btnLoopClear.addEventListener('click', clearLoop)
 
     // ── Tempo control ──────────────────────────
