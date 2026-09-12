@@ -38,6 +38,9 @@ cp config.example.json config.json
 Le serveur relit `config.json` à chaque requête : modifier la valeur et recharger la page
 suffit, pas besoin de redémarrer.
 
+La variable d'environnement `GROOVOTHEQUE_CONFIG` déplace ce fichier, pour faire tourner
+une instance sur une autre configuration sans toucher à celle du dépôt.
+
 ### Soundfont
 
 Le soundfont est la banque de sons qui donne leur timbre aux pistes MIDI. Il sert à la fois

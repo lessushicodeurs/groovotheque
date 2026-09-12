@@ -14,7 +14,11 @@ const CACHE_DIR = path.resolve(__dirname, 'cache');
 // par git, doublé d'un `config.example.json` suivi et documenté. Absent, le
 // projet tourne quand même sur ses valeurs par défaut — un clone frais n'a
 // aucune étape manuelle obligatoire.
-const CONFIG_FILE = path.join(__dirname, 'config.json');
+// `GROOVOTHEQUE_CONFIG` déplace ce fichier : de quoi faire tourner une instance
+// sur une autre configuration sans toucher à celle du dépôt (tests, déploiement).
+const CONFIG_FILE = process.env.GROOVOTHEQUE_CONFIG
+  ? path.resolve(process.env.GROOVOTHEQUE_CONFIG)
+  : path.join(__dirname, 'config.json');
 
 function readConfig() {
   try {
