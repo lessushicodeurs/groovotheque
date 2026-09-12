@@ -94,15 +94,24 @@ scripts/fetch-soundfont.sh musescore-hq   # MuseScore_General.sf2 (206 Mo)
 > Le serveur détecte le cas au démarrage et le signale dans ses logs
 > (« contient N sample(s) stéréo »).
 
-> **Fuite du métronome (défaut connu d'AlphaTab).** `AlphaSynthAudioExporter` initialise
-> son canal de métronome sur le canal 16, puis relit le volume voulu par
-> `channelGetMixVolume(16)`. Sur un score assez fourni pour que le canal 16 appartienne à
-> une vraie piste, c'est le volume de cette piste qui est relu : isoler cette piste
-> rallume le métronome malgré `metronomeVolume: 0`, et son rendu porte un clic sur chaque
-> temps. Aucun contournement côté appelant : en navigateur l'exporteur vit dans un worker
-> dont l'interface n'expose que `initialize`, `render` et `destroy`, et les volumes passés
-> en options sont indexés par piste, pas par canal. Détails dans
-> `public/js/midi-render.js`.
+> **Une piste est isolée par son canal MIDI, pas par son index.** `AudioExportOptions.trackVolume`
+> est indexé par piste, mais AlphaTab le retraduit en canaux juste avant l'export. Deux
+> pistes sur le même canal écrivent donc dans la même case, et la dernière gagne — or
+> **toutes les pistes de percussion d'un fichier Guitar Pro sont sur le canal 10**, que la
+> norme General MIDI réserve à la batterie. Sans précaution, isoler une percussion donne
+> soit un rendu muet (une piste suivante remet le canal à zéro), soit un rendu contenant
+> toutes les percussions mélangées. Le rendu déplace donc, le temps de l'export, les pistes
+> qui partagent le canal de la piste visée vers des canaux libres : elles sont à volume nul,
+> le timbre qu'elles y prennent est sans effet. La piste visée, elle, ne bouge pas — le
+> canal 10 porte le kit de batterie du soundfont.
+>
+> **Fuite du métronome.** Même mécanisme, autre symptôme : `AlphaSynthAudioExporter`
+> initialise son canal de métronome sur le canal 17 (indice 16) puis relit le volume voulu
+> par `channelGetMixVolume(16)`. Sur un score assez fourni pour que ce canal appartienne à
+> une vraie piste, l'isoler y posait 1,0 et rallumait le clic malgré `metronomeVolume: 0`.
+> La piste visée est donc écartée de ce canal avant l'export : un canal MIDI ordinaire ne
+> porte aucun timbre en propre, banque et programme étant réémis pour chaque canal.
+> Détails dans `public/js/midi-render.js`.
 
 > **Un seul soundfont à la fois.** AlphaTab sait empiler plusieurs banques (la dernière
 > chargée l'emporte en cas de collision banque/preset), mais `config.json` n'expose qu'une
@@ -119,7 +128,8 @@ scripts/fetch-soundfont.sh musescore-hq   # MuseScore_General.sf2 (206 Mo)
 > faire dès qu'un changement modifie le son produit à `.gp` et soundfont identiques.
 > C'est le cas du niveau de sortie : le rendu applique `masterVolume: 0.5` et non 1,0,
 > qui écrêtait (la piste Drums de *Babooshka* sortait à +2,1 dBFS ; elle est à −3,9 dBFS
-> maintenant, et le volume de piste du player rattrape la différence).
+> maintenant, et le volume de piste du player rattrape la différence). C'est le cas aussi
+> de l'isolation par canal (version 3).
 
 ## Scripts
 

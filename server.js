@@ -851,7 +851,10 @@ app.post('/api/peaks/*', async (req, res) => {
 // existants, qui repartent en synthèse à l'ouverture du groove.
 //   1 — rendu initial (epic 39)
 //   2 — conversion mono du soundfont + masterVolume ramené à 0,5 (plus d'écrêtage)
-const MIDI_RENDER_VERSION = 2;
+//   3 — isolation par canal MIDI : les pistes qui partageaient un canal (toutes
+//       les percussions d'un .gp sont sur le canal 10) sortaient muettes ou
+//       mélangées, et la piste portant le canal du métronome sortait avec un clic
+const MIDI_RENDER_VERSION = 3;
 
 // Empreinte du fichier Guitar Pro source : taille + mtime. Un `.gp` modifié rend
 // tous les rendus du groove obsolètes.
