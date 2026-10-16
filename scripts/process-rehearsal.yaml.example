@@ -45,6 +45,18 @@ tracks:
         - type: gain
           db: -14
 
+    "06 RHODES L":
+      effects:
+        - type: normalize
+        - type: gain
+          db: -14
+
+    "07 RHODES R":
+      effects:
+        - type: normalize
+        - type: gain
+          db: -14
+
     "10 SAMPLER":
       effects:
         - type: normalize
@@ -105,6 +117,12 @@ tracks:
           pan: -100
         - file: "05 KEYS R"
           pan: 100
+    - output: "06 RHODES MIX"
+      sources:
+        - file: "06 RHODES L"
+          pan: -100
+        - file: "07 RHODES R"
+          pan: 100
     - output: "11 DRUMS MIX"
       sources:
         - file: "11 DR KICK"
@@ -123,6 +141,7 @@ blabla_mix:
     "01 BASS": 0
     "02 GUIT MIX": 0
     "04 KEYS MIX": 0
+    "06 RHODES MIX": 0
     "18 BACK VOCALS": 0
     "19 LEAD VOCALS": 0
     "11 DRUMS MIX": 0
