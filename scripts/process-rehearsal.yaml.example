@@ -45,7 +45,14 @@ tracks:
         - type: gain
           db: -14
 
-    "09 BACKING VOC":
+    "10 SAMPLER":
+      effects:
+        - type: normalize
+        - type: gain
+          db: -6
+          label: "En retrait dans le mix batterie — peu utilisé par le batteur"
+
+    "18 BACK VOCALS":
       effects:
         - type: normalize
         - type: compress
@@ -57,7 +64,7 @@ tracks:
           preset: "Lead Vocals"
         - type: normalize
 
-    "10 LEAD VOC":
+    "19 LEAD VOCALS":
       effects:
         - type: normalize
         - type: compress
@@ -104,6 +111,8 @@ tracks:
           pan: 20
         - file: "12 DR HH SD"
           pan: -20
+        - file: "10 SAMPLER"
+          pan: 0
 
   exclude:
 
@@ -114,6 +123,6 @@ blabla_mix:
     "01 BASS": 0
     "02 GUIT MIX": 0
     "04 KEYS MIX": 0
-    "09 BACKING VOC": 0
-    "10 LEAD VOC": 0
+    "18 BACK VOCALS": 0
+    "19 LEAD VOCALS": 0
     "11 DRUMS MIX": 0
